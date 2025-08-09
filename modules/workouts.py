@@ -29,7 +29,7 @@ def register_tools(app):
             return f"Error retrieving workouts: {str(e)}"
     
     @app.tool()
-    async def get_workout_by_id(workout_id: str) -> str:
+    async def get_workout_by_id(workout_id: int) -> str:
         """Get details for a specific workout
         
         Args:
@@ -44,7 +44,7 @@ def register_tools(app):
             return f"Error retrieving workout: {str(e)}"
     
     @app.tool()
-    async def download_workout(workout_id: str) -> str:
+    async def download_workout(workout_id: int) -> str:
         """Download a workout as a FIT file (this will return a message about how to access the file)
         
         Args:
