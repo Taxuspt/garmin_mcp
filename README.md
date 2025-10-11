@@ -38,8 +38,10 @@ Add this server configuration:
     "garmin": {
       "command": "uvx",
       "args": [
-        "--python", "3.12",
-        "--from", "git+https://github.com/Taxuspt/garmin_mcp",
+        "--python",
+        "3.12",
+        "--from",
+        "git+https://github.com/Taxuspt/garmin_mcp",
         "garmin-mcp"
       ],
       "env": {
@@ -57,10 +59,10 @@ Replace the path with the absolute path to your server file.
 
 ### With MCP Inspector
 
-For testing, you can use the MCP Inspector:
+For testing, you can use the MCP Inspector from the project root:
 
 ```bash
-npx @modelcontextprotocol/inspector python /Users/adomingues/Documents/claude_filesystem/garmin_mcp/garmin_mcp_server.py
+npx @modelcontextprotocol/inspector uv run garmin-mcp
 ```
 
 ## Usage Examples
@@ -83,5 +85,6 @@ If you encounter login issues:
 3. Ensure the garminconnect package is up to date
 
 For other issues, check the Claude Desktop logs at:
+
 - macOS: `~/Library/Logs/Claude/mcp-server-garmin.log`
 - Windows: `%APPDATA%\Claude\logs\mcp-server-garmin.log`
