@@ -21,6 +21,17 @@ uv sync
 
 ## Running the Server
 
+### Configuration
+
+Your Garmin Connect credentials are read from environment variables:
+
+- `GARMIN_EMAIL`: Your Garmin Connect email address
+- `GARMIN_EMAIL_FILE`: Path to a file containing your Garmin Connect email address
+- `GARMIN_PASSWORD`: Your Garmin Connect password
+- `GARMIN_PASSWORD_FILE`: Path to a file containing your Garmin Connect password
+
+File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
+
 ### With Claude Desktop
 
 1. Create a configuration in Claude Desktop:
