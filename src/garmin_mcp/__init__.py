@@ -23,14 +23,34 @@ from garmin_mcp import workouts
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
 
+
 def get_mfa() -> str:
     """Get MFA code from user input"""
     print("\nGarmin Connect MFA required. Please check your email/phone for the code.")
     return input("Enter MFA code: ")
 
+
 # Get credentials from environment
 email = os.environ.get("GARMIN_EMAIL")
+email_file = os.environ.get("GARMIN_EMAIL_FILE")
+if email and email_file:
+    raise ValueError(
+        "Must only provide one of GARMIN_EMAIL and GARMIN_EMAIL_FILE, got both"
+    )
+elif email_file:
+    with open(email_file, "r") as email_file:
+        email = email_file.read().rstrip()
+
 password = os.environ.get("GARMIN_PASSWORD")
+password_file = os.environ.get("GARMIN_PASSWORD_FILE")
+if password and password_file:
+    raise ValueError(
+        "Must only provide one of GARMIN_PASSWORD and GARMIN_PASSWORD_FILE, got both"
+    )
+elif password_file:
+    with open(password_file, "r") as password_file:
+        password = password_file.read().rstrip()
+
 tokenstore = os.getenv("GARMINTOKENS") or "~/.garminconnect"
 tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
 
