@@ -3,6 +3,7 @@ Modular MCP Server for Garmin Connect Data
 """
 
 import os
+import sys
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -26,7 +27,7 @@ from garmin_mcp import womens_health
 
 def get_mfa() -> str:
     """Get MFA code from user input"""
-    print("\nGarmin Connect MFA required. Please check your email/phone for the code.")
+    print("\nGarmin Connect MFA required. Please check your email/phone for the code.", file=sys.stderr)
     return input("Enter MFA code: ")
 
 
@@ -62,7 +63,7 @@ def init_api(email, password):
         # Using Oauth1 and OAuth2 token files from directory
         print(
             f"Trying to login to Garmin Connect using token data from directory '{tokenstore}'...\n"
-        )
+        , file=sys.stderr)
 
         # Using Oauth1 and Oauth2 tokens from base64 encoded string
         # print(
@@ -80,7 +81,7 @@ def init_api(email, password):
         print(
             "Login tokens not present, login with your Garmin Connect credentials to generate them.\n"
             f"They will be stored in '{tokenstore}' for future use.\n"
-        )
+        , file=sys.stderr)
         try:
             garmin = Garmin(
                 email=email, password=password, is_cn=False, prompt_mfa=get_mfa
@@ -90,7 +91,7 @@ def init_api(email, password):
             garmin.garth.dump(tokenstore)
             print(
                 f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n"
-            )
+            , file=sys.stderr)
             # Encode Oauth1 and Oauth2 tokens to base64 string and safe to file for next login (alternative way)
             token_base64 = garmin.garth.dumps()
             dir_path = os.path.expanduser(tokenstore_base64)
@@ -98,14 +99,14 @@ def init_api(email, password):
                 token_file.write(token_base64)
             print(
                 f"Oauth tokens encoded as base64 string and saved to '{dir_path}' file for future use. (second method)\n"
-            )
+            , file=sys.stderr)
         except (
             FileNotFoundError,
             GarthHTTPError,
             GarminConnectAuthenticationError,
             requests.exceptions.HTTPError,
         ) as err:
-            print(err)
+            print(err, file=sys.stderr)
             return None
 
     return garmin
@@ -117,10 +118,10 @@ def main():
     # Initialize Garmin client
     garmin_client = init_api(email, password)
     if not garmin_client:
-        print("Failed to initialize Garmin Connect client. Exiting.")
+        print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
         return
 
-    print("Garmin Connect client initialized successfully.")
+    print("Garmin Connect client initialized successfully.", file=sys.stderr)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)
