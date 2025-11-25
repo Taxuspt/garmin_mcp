@@ -99,3 +99,46 @@ For other issues, check the Claude Desktop logs at:
 
 - macOS: `~/Library/Logs/Claude/mcp-server-garmin.log`
 - Windows: `%APPDATA%\Claude\logs\mcp-server-garmin.log`
+
+### Garming Connect one-time code
+
+If you have one-time codes enabled in your account, you need to login at the command line first to set the token in the interactive cli.
+
+The app expects either the env var GARMIN_EMAIL or GARMIN_EMAIL_FILE. You can store these in files with the following command.
+
+```bash
+echo "your_email@example.com" > ~/.garmin_email
+echo "your_password" > ~/.garmin_password
+chmod 600 ~/.garmin_email ~/.garmin_password
+```
+
+Then you can manually run the login script.
+
+```bash
+GARMIN_EMAIL_FILE=~/.garmin_email GARMIN_PASSWORD_FILE=~/.garmin_password uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp
+```
+
+You will likely see
+
+```bash
+Garmin Connect MFA required. Please check your email/phone for the code.
+Enter MFA code: XXXXXX
+Oauth tokens stored in '~/.garminconnect' directory for future use. (first method)
+
+Oauth tokens encoded as base64 string and saved to '~/.garminconnect_base64' file for future use. (second method)
+```
+
+After setting the token at the cli, you can use the following in Claude, without the env vars because the Oauth tokens have been set.
+
+```bash
+"garmin": {
+  "command": "uvx",
+  "args": [
+    "--python",
+    "3.12",
+    "--from",
+    "git+https://github.com/Taxuspt/garmin_mcp",
+    "garmin-mcp"
+  ]
+}
+```
