@@ -76,7 +76,7 @@ def register_tools(app):
     @app.tool()
     async def upload_activity(file_path: str) -> str:
         """Upload an activity from a file (this is just a placeholder - file operations would need special handling)
-        
+
         Args:
             file_path: Path to the activity file (.fit, .gpx, .tcx)
         """
@@ -85,5 +85,64 @@ def register_tools(app):
             return f"Activity upload from file path {file_path} is not supported in this MCP server implementation."
         except Exception as e:
             return f"Error uploading activity: {str(e)}"
+
+    @app.tool()
+    async def get_scheduled_workouts(start_date: str, end_date: str) -> str:
+        """Get scheduled workouts between two dates.
+
+        Returns workouts that have been scheduled on the Garmin Connect calendar,
+        including their scheduled dates.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        try:
+            # Query for scheduled workouts using GraphQL
+            query = {
+                "query": f'query{{workoutScheduleSummariesScalar(startDate:"{start_date}", endDate:"{end_date}")}}'
+            }
+            result = garmin_client.query_garmin_graphql(query)
+
+            if not result or "data" not in result:
+                return "No scheduled workouts found or error querying data."
+
+            scheduled = result.get("data", {}).get("workoutScheduleSummariesScalar", [])
+
+            if not scheduled:
+                return f"No workouts scheduled between {start_date} and {end_date}."
+
+            return scheduled
+        except Exception as e:
+            return f"Error retrieving scheduled workouts: {str(e)}"
+
+    @app.tool()
+    async def get_training_plan_workouts(calendar_date: str) -> str:
+        """Get training plan workouts for a specific date.
+
+        Returns workouts from your active training plan scheduled for the given date.
+
+        Args:
+            calendar_date: Date in YYYY-MM-DD format
+        """
+        try:
+            # Query for training plan workouts using GraphQL
+            query = {
+                "query": f'query{{trainingPlanScalar(calendarDate:"{calendar_date}", lang:"en-US", firstDayOfWeek:"monday")}}'
+            }
+            result = garmin_client.query_garmin_graphql(query)
+
+            if not result or "data" not in result:
+                return "No training plan data found or error querying data."
+
+            plan_data = result.get("data", {}).get("trainingPlanScalar", {})
+            workouts = plan_data.get("trainingPlanWorkoutScheduleDTOS", [])
+
+            if not workouts:
+                return f"No training plan workouts scheduled for {calendar_date}."
+
+            return plan_data
+        except Exception as e:
+            return f"Error retrieving training plan workouts: {str(e)}"
 
     return app
