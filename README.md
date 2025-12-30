@@ -4,6 +4,8 @@
 
 This Model Context Protocol (MCP) server connects to Garmin Connect and exposes your fitness and health data to Claude and other MCP-compatible clients.
 
+Garmin's API is accessed via the awesome [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library. 
+
 ## Features
 
 - List recent activities
@@ -142,3 +144,29 @@ After setting the token at the cli, you can use the following in Claude, without
   ]
 }
 ```
+
+## Testing
+
+This project includes comprehensive tests for all 81 MCP tools. **All 96 tests are currently passing (100%)**.
+
+### Running Tests
+
+```bash
+# Run all integration tests (default - uses mocked Garmin API)
+uv run pytest tests/integration/
+
+# Run tests with verbose output
+uv run pytest tests/integration/ -v
+
+# Run a specific test module
+uv run pytest tests/integration/test_health_wellness_tools.py -v
+
+# Run end-to-end tests (requires real Garmin credentials)
+uv run pytest tests/e2e/ -m e2e -v
+```
+
+### Test Structure
+
+- **Integration tests** (96 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
+- **End-to-end tests** (4 tests): Test with real MCP server and Garmin API (requires valid credentials)
+

@@ -19,5 +19,13 @@ dependencies = [
 [project.scripts]
 garmin-mcp = "garmin_mcp:main"
 
+[tool.uv]
+dev-dependencies = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=0.25.2",
+    "pytest-mock>=3.14.0",
+    "pytest-timeout>=2.3.1",
+]
+
 [tool.uv.sources]
 garmin-mcp = { workspace = true }

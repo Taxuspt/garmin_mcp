@@ -61,13 +61,15 @@ def register_tools(app):
             return f"Error downloading workout: {str(e)}"
     
     @app.tool()
-    async def upload_workout(workout_json: str) -> str:
+    async def upload_workout(workout_data: dict) -> str:
         """Upload a workout from JSON data
-        
+
         Args:
-            workout_json: JSON string containing workout data
+            workout_data: Dictionary containing workout data (will be converted to JSON)
         """
         try:
+            import json
+            workout_json = json.dumps(workout_data)
             result = garmin_client.upload_workout(workout_json)
             return result
         except Exception as e:
