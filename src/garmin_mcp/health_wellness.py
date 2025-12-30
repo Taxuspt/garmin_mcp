@@ -269,7 +269,7 @@ def register_tools(app):
     @app.tool()
     async def get_sleep_data(date: str) -> str:
         """Get sleep data
-        
+
         Args:
             date: Date in YYYY-MM-DD format
         """
@@ -277,10 +277,82 @@ def register_tools(app):
             sleep_data = garmin_client.get_sleep_data(date)
             if not sleep_data:
                 return f"No sleep data found for {date}"
-            
+
             return sleep_data
         except Exception as e:
             return f"Error retrieving sleep data: {str(e)}"
+
+    @app.tool()
+    async def get_sleep_summary(date: str) -> str:
+        """Get sleep summary with only essential metrics (lightweight version)
+
+        This endpoint returns a compact summary of sleep data (~350 bytes) instead of
+        the full granular data (~50KB). Ideal for daily health checkups and LLM integrations
+        where the full time-series data would overwhelm the context window.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            sleep_data = garmin_client.get_sleep_data(date)
+            if not sleep_data:
+                return f"No sleep summary found for {date}"
+
+            # Extract only essential summary metrics
+            summary = {}
+
+            # Extract data from dailySleepDTO if available
+            daily_sleep = sleep_data.get('dailySleepDTO', {})
+            if daily_sleep:
+                # Sleep duration and timing
+                summary['sleepTimeSeconds'] = daily_sleep.get('sleepTimeSeconds')
+                summary['napTimeSeconds'] = daily_sleep.get('napTimeSeconds')
+                summary['sleepStartTimestampGMT'] = daily_sleep.get('sleepStartTimestampGMT')
+                summary['sleepEndTimestampGMT'] = daily_sleep.get('sleepEndTimestampGMT')
+
+                # Sleep score and quality
+                summary['overallSleepScore'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('value')
+                summary['sleepScoreQualifier'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('qualifierKey')
+                summary['sleepScoreFeedback'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('optimalStart')
+
+                # Sleep phases (in seconds)
+                summary['deepSleepSeconds'] = daily_sleep.get('deepSleepSeconds')
+                summary['lightSleepSeconds'] = daily_sleep.get('lightSleepSeconds')
+                summary['remSleepSeconds'] = daily_sleep.get('remSleepSeconds')
+                summary['awakeSleepSeconds'] = daily_sleep.get('awakeSleepSeconds')
+
+                # Sleep disruptions
+                summary['awakeCount'] = daily_sleep.get('awakeCount')
+                summary['restlessMomentsCount'] = daily_sleep.get('restlessMomentsCount')
+
+                # Average physiological metrics
+                summary['avgSleepStress'] = daily_sleep.get('avgSleepStress')
+                summary['restingHeartRate'] = daily_sleep.get('restingHeartRate')
+
+            # Extract SpO2 summary if available
+            spo2_summary = sleep_data.get('wellnessSpO2SleepSummaryDTO', {})
+            if spo2_summary:
+                summary['avgSpO2'] = spo2_summary.get('averageSpo2')
+                summary['lowestSpO2'] = spo2_summary.get('lowestSpo2')
+
+            # Add HRV data if available at top level
+            if 'avgOvernightHrv' in sleep_data:
+                summary['avgOvernightHrv'] = sleep_data.get('avgOvernightHrv')
+
+            # Calculate sleep phase percentages if total sleep time is available
+            total_sleep = summary.get('sleepTimeSeconds', 0)
+            if total_sleep and total_sleep > 0:
+                summary['deepSleepPercentage'] = round((summary.get('deepSleepSeconds', 0) / total_sleep) * 100, 1)
+                summary['lightSleepPercentage'] = round((summary.get('lightSleepSeconds', 0) / total_sleep) * 100, 1)
+                summary['remSleepPercentage'] = round((summary.get('remSleepSeconds', 0) / total_sleep) * 100, 1)
+
+            # Convert sleep duration to hours for convenience
+            if total_sleep:
+                summary['sleepDurationHours'] = round(total_sleep / 3600, 2)
+
+            return summary
+        except Exception as e:
+            return f"Error retrieving sleep summary: {str(e)}"
 
     @app.tool()
     async def get_stress_data(date: str) -> str:
