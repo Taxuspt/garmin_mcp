@@ -87,8 +87,6 @@ Once connected in Claude, you can ask questions like:
 - "How many steps did I take yesterday?"
 - "Show me the details of my latest run"
 
-## Security Note
-
 ## Troubleshooting
 
 If you encounter login issues:

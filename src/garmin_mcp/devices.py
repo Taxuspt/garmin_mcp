@@ -1,6 +1,7 @@
 """
 Device-related functions for Garmin Connect MCP Server
 """
+
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -16,7 +17,7 @@ def configure(client):
 
 def register_tools(app):
     """Register all device-related tools with the MCP server app"""
-    
+
     @app.tool()
     async def get_devices() -> str:
         """Get all Garmin devices associated with the user account"""
@@ -38,15 +39,16 @@ def register_tools(app):
             return device
         except Exception as e:
             return f"Error retrieving last used device: {str(e)}"
-    
+
     @app.tool()
-    async def get_device_settings(device_id: str) -> str:
+    async def get_device_settings(device_id: Union[int, str]) -> str:
         """Get settings for a specific Garmin device
-        
+
         Args:
             device_id: Device ID
         """
         try:
+            device_id = str(device_id)
             settings = garmin_client.get_device_settings(device_id)
             if not settings:
                 return f"No settings found for device ID {device_id}."
@@ -64,11 +66,11 @@ def register_tools(app):
             return device
         except Exception as e:
             return f"Error retrieving primary training device: {str(e)}"
-    
+
     @app.tool()
     async def get_device_solar_data(device_id: str, date: str) -> str:
         """Get solar data for a specific device
-        
+
         Args:
             device_id: Device ID
             date: Date in YYYY-MM-DD format
@@ -80,7 +82,7 @@ def register_tools(app):
             return solar_data
         except Exception as e:
             return f"Error retrieving solar data: {str(e)}"
-    
+
     @app.tool()
     async def get_device_alarms() -> str:
         """Get alarms from all Garmin devices"""
