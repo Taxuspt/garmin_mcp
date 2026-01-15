@@ -1,6 +1,7 @@
 """
 User Profile functions for Garmin Connect MCP Server
 """
+import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -22,7 +23,7 @@ def register_tools(app):
         """Get user's full name from profile"""
         try:
             full_name = garmin_client.get_full_name()
-            return full_name
+            return json.dumps(full_name, indent=2)
         except Exception as e:
             return f"Error retrieving user's full name: {str(e)}"
 
@@ -31,7 +32,7 @@ def register_tools(app):
         """Get user's preferred unit system from profile"""
         try:
             unit_system = garmin_client.get_unit_system()
-            return unit_system
+            return json.dumps(unit_system, indent=2)
         except Exception as e:
             return f"Error retrieving unit system: {str(e)}"
     
@@ -42,7 +43,7 @@ def register_tools(app):
             profile = garmin_client.get_user_profile()
             if not profile:
                 return "No user profile information found."
-            return profile
+            return json.dumps(profile, indent=2)
         except Exception as e:
             return f"Error retrieving user profile: {str(e)}"
 
@@ -53,7 +54,7 @@ def register_tools(app):
             settings = garmin_client.get_userprofile_settings()
             if not settings:
                 return "No user profile settings found."
-            return settings
+            return json.dumps(settings, indent=2)
         except Exception as e:
             return f"Error retrieving user profile settings: {str(e)}"
 

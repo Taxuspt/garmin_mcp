@@ -1,6 +1,7 @@
 """
 Data management functions for Garmin Connect MCP Server
 """
+import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -66,7 +67,7 @@ def register_tools(app):
                 visceral_fat_rating=visceral_fat_rating,
                 bmi=bmi
             )
-            return result
+            return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error adding body composition data: {str(e)}"
     
@@ -89,7 +90,7 @@ def register_tools(app):
             result = garmin_client.set_blood_pressure(
                 systolic, diastolic, pulse, notes=notes
             )
-            return result
+            return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error setting blood pressure values: {str(e)}"
     
@@ -112,7 +113,7 @@ def register_tools(app):
                 cdate=cdate,
                 timestamp=timestamp
             )
-            return result
+            return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error adding hydration data: {str(e)}"
 

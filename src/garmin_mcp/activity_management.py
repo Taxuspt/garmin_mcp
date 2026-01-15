@@ -1,6 +1,7 @@
 """
 Activity Management functions for Garmin Connect MCP Server
 """
+import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -32,7 +33,7 @@ def register_tools(app):
                 return f"No activities found between {start_date} and {end_date}" + \
                        (f" for activity type '{activity_type}'" if activity_type else "")
             
-            return activities
+            return json.dumps(activities, indent=2)
         except Exception as e:
             return f"Error retrieving activities by date: {str(e)}"
 
@@ -48,7 +49,7 @@ def register_tools(app):
             if not activities:
                 return f"No activities found for {date}"
             
-            return activities
+            return json.dumps(activities, indent=2)
         except Exception as e:
             return f"Error retrieving activities for date: {str(e)}"
 
@@ -64,7 +65,7 @@ def register_tools(app):
             if not activity:
                 return f"No activity found with ID {activity_id}"
             
-            return activity
+            return json.dumps(activity, indent=2)
         except Exception as e:
             return f"Error retrieving activity: {str(e)}"
 
@@ -80,7 +81,7 @@ def register_tools(app):
             if not splits:
                 return f"No splits found for activity with ID {activity_id}"
             
-            return splits
+            return json.dumps(splits, indent=2)
         except Exception as e:
             return f"Error retrieving activity splits: {str(e)}"
 
@@ -96,7 +97,7 @@ def register_tools(app):
             if not typed_splits:
                 return f"No typed splits found for activity with ID {activity_id}"
             
-            return typed_splits
+            return json.dumps(typed_splits, indent=2)
         except Exception as e:
             return f"Error retrieving activity typed splits: {str(e)}"
 
@@ -112,7 +113,7 @@ def register_tools(app):
             if not split_summaries:
                 return f"No split summaries found for activity with ID {activity_id}"
             
-            return split_summaries
+            return json.dumps(split_summaries, indent=2)
         except Exception as e:
             return f"Error retrieving activity split summaries: {str(e)}"
 
@@ -128,7 +129,7 @@ def register_tools(app):
             if not weather:
                 return f"No weather data found for activity with ID {activity_id}"
             
-            return weather
+            return json.dumps(weather, indent=2)
         except Exception as e:
             return f"Error retrieving activity weather data: {str(e)}"
 
@@ -144,7 +145,7 @@ def register_tools(app):
             if not hr_zones:
                 return f"No heart rate time zone data found for activity with ID {activity_id}"
             
-            return hr_zones
+            return json.dumps(hr_zones, indent=2)
         except Exception as e:
             return f"Error retrieving activity heart rate time zone data: {str(e)}"
 
@@ -160,7 +161,7 @@ def register_tools(app):
             if not gear:
                 return f"No gear data found for activity with ID {activity_id}"
             
-            return gear
+            return json.dumps(gear, indent=2)
         except Exception as e:
             return f"Error retrieving activity gear data: {str(e)}"
 
@@ -176,7 +177,7 @@ def register_tools(app):
             if not exercise_sets:
                 return f"No exercise sets found for activity with ID {activity_id}"
             
-            return exercise_sets
+            return json.dumps(exercise_sets, indent=2)
         except Exception as e:
             return f"Error retrieving activity exercise sets: {str(e)}"
 

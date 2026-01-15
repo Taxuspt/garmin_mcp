@@ -24,7 +24,7 @@ def register_tools(app):
             workouts = garmin_client.get_workouts()
             if not workouts:
                 return "No workouts found."
-            return workouts
+            return json.dumps(workouts, indent=2)
         except Exception as e:
             return f"Error retrieving workouts: {str(e)}"
     
@@ -39,7 +39,7 @@ def register_tools(app):
             workout = garmin_client.get_workout_by_id(workout_id)
             if not workout:
                 return f"No workout found with ID {workout_id}."
-            return workout
+            return json.dumps(workout, indent=2)
         except Exception as e:
             return f"Error retrieving workout: {str(e)}"
     
@@ -71,7 +71,7 @@ def register_tools(app):
             import json
             workout_json = json.dumps(workout_data)
             result = garmin_client.upload_workout(workout_json)
-            return result
+            return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error uploading workout: {str(e)}"
             
@@ -114,7 +114,7 @@ def register_tools(app):
             if not scheduled:
                 return f"No workouts scheduled between {start_date} and {end_date}."
 
-            return scheduled
+            return json.dumps(scheduled, indent=2)
         except Exception as e:
             return f"Error retrieving scheduled workouts: {str(e)}"
 
@@ -143,7 +143,7 @@ def register_tools(app):
             if not workouts:
                 return f"No training plan workouts scheduled for {calendar_date}."
 
-            return plan_data
+            return json.dumps(plan_data, indent=2)
         except Exception as e:
             return f"Error retrieving training plan workouts: {str(e)}"
 

@@ -25,7 +25,7 @@ def register_tools(app):
             devices = garmin_client.get_devices()
             if not devices:
                 return "No devices found."
-            return devices
+            return json.dumps(devices, indent=2)
         except Exception as e:
             return f"Error retrieving devices: {str(e)}"
 
@@ -36,7 +36,7 @@ def register_tools(app):
             device = garmin_client.get_device_last_used()
             if not device:
                 return "No last used device found."
-            return device
+            return json.dumps(device, indent=2)
         except Exception as e:
             return f"Error retrieving last used device: {str(e)}"
 
@@ -52,7 +52,7 @@ def register_tools(app):
             settings = garmin_client.get_device_settings(device_id)
             if not settings:
                 return f"No settings found for device ID {device_id}."
-            return settings
+            return json.dumps(settings, indent=2)
         except Exception as e:
             return f"Error retrieving device settings: {str(e)}"
 
@@ -63,7 +63,7 @@ def register_tools(app):
             device = garmin_client.get_primary_training_device()
             if not device:
                 return "No primary training device found."
-            return device
+            return json.dumps(device, indent=2)
         except Exception as e:
             return f"Error retrieving primary training device: {str(e)}"
 
@@ -79,7 +79,7 @@ def register_tools(app):
             solar_data = garmin_client.get_device_solar_data(device_id, date)
             if not solar_data:
                 return f"No solar data found for device ID {device_id} on {date}."
-            return solar_data
+            return json.dumps(solar_data, indent=2)
         except Exception as e:
             return f"Error retrieving solar data: {str(e)}"
 
@@ -90,7 +90,7 @@ def register_tools(app):
             alarms = garmin_client.get_device_alarms()
             if not alarms:
                 return "No device alarms found."
-            return alarms
+            return json.dumps(alarms, indent=2)
         except Exception as e:
             return f"Error retrieving device alarms: {str(e)}"
 
