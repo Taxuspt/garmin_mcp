@@ -86,13 +86,13 @@ echo "GARMIN_PASSWORD=your_password" >> .env
 2. Start the container:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 3. View logs to monitor the server:
 
 ```bash
-docker-compose logs -f garmin-mcp
+docker compose logs -f garmin-mcp
 ```
 
 #### Using Docker Directly
@@ -144,7 +144,7 @@ secrets:
 3. Start the container:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 #### Handling MFA with Docker
@@ -154,7 +154,7 @@ If you have multi-factor authentication (MFA) enabled on your Garmin account:
 1. Run the container in interactive mode:
 
 ```bash
-docker-compose run --rm garmin-mcp
+docker compose run --rm garmin-mcp
 ```
 
 2. When prompted, enter your MFA code:
@@ -169,7 +169,7 @@ Enter MFA code: 123456
 4. After MFA setup, you can run the container normally:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 #### Docker Volume Management

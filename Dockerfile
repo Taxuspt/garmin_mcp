@@ -37,7 +37,7 @@ RUN mkdir -p /root/.garminconnect && \
 # EXPOSE 8000
 
 # Set the entrypoint to run the MCP server
-ENTRYPOINT ["python", "-m", "garmin_mcp"]
+ENTRYPOINT ["garmin-mcp"]
 
 # Health check (optional - adjust based on your needs)
 # HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
