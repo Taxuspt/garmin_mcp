@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  garmin-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: garmin-mcp-server
+
+    # Option 1: Use environment variables directly
+    environment:
+      - GARMIN_EMAIL=${GARMIN_EMAIL}
+      - GARMIN_PASSWORD=${GARMIN_PASSWORD}
+
+    # Option 2: Use file-based secrets (uncomment to use)
+    # environment:
+    #   - GARMIN_EMAIL_FILE=/run/secrets/garmin_email
+    #   - GARMIN_PASSWORD_FILE=/run/secrets/garmin_password
+    # secrets:
+    #   - garmin_email
+    #   - garmin_password
+
+    # Mount volume to persist Garmin OAuth tokens
+    volumes:
+      - garmin-tokens:/root/.garminconnect
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Optional: Set stdin_open and tty for interactive MFA input
+    stdin_open: true
+    tty: true
+
+volumes:
+  garmin-tokens:
+    driver: local
+
+# Uncomment if using file-based secrets
+# secrets:
+#   garmin_email:
+#     file: ./secrets/garmin_email.txt
+#   garmin_password:
+#     file: ./secrets/garmin_password.txt
