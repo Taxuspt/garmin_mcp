@@ -15,14 +15,16 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_SYSTEM_PYTHON=1
 
-# Copy dependency files first for better layer caching
-COPY pyproject.toml ./
+# Copy dependency files and README first for better layer caching
+COPY pyproject.toml README.md ./
+
+# Copy the application source code (needed for editable install)
+COPY src/ ./src/
 
 # Install dependencies using uv
 RUN uv pip install -e .
 
-# Copy the application source code
-COPY src/ ./src/
+# Copy test files (optional, for testing in container)
 COPY tests/ ./tests/
 COPY pytest.ini ./
 
