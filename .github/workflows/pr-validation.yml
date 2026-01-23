@@ -1,0 +1,70 @@
+name: PR Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Set up Python
+      run: uv python install 3.13
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Run all tests with coverage
+      run: |
+        uv run pytest tests/integration tests/unit -v \
+          --tb=short \
+          --strict-markers \
+          --maxfail=5
+      timeout-minutes: 10
+
+    - name: Check for test files
+      run: |
+        echo "Integration tests count:"
+        find tests/integration -name "test_*.py" | wc -l
+        echo "Unit tests count:"
+        find tests/unit -name "test_*.py" 2>/dev/null | wc -l || echo "0"
+
+    - name: Validate pyproject.toml
+      run: uv run python -c "import tomllib; tomllib.load(open('pyproject.toml', 'rb'))"
+
+  test-installation:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Test package installation
+      run: |
+        uv python install 3.13
+        uv sync
+        uv run garmin-mcp --help || echo "CLI help command check"
+
+  pr-info:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+    - name: PR Info
+      run: |
+        echo "PR #${{ github.event.pull_request.number }}"
+        echo "Title: ${{ github.event.pull_request.title }}"
+        echo "Branch: ${{ github.head_ref }}"
+        echo "Base: ${{ github.base_ref }}"

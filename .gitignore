@@ -13,3 +13,6 @@ build/
 .env
 .venv/
 *.log
+.DS_Store
+.claude.md
+.mcp.json

@@ -11,6 +11,7 @@ from garmin_mcp import training
 from tests.fixtures.garmin_responses import (
     MOCK_PROGRESS_SUMMARY,
     MOCK_HRV_DATA,
+    MOCK_TRAINING_STATUS,
 )
 
 
@@ -189,6 +190,23 @@ async def test_request_reload_tool(app_with_training, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.request_reload.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_tool(app_with_training, mock_garmin_client):
+    """Test get_training_status tool returns training status"""
+    # Setup mock
+    mock_garmin_client.get_training_status.return_value = MOCK_TRAINING_STATUS
+
+    # Call tool
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2024-01-15"}
+    )
+
+    # Verify
+    assert result is not None
+    mock_garmin_client.get_training_status.assert_called_once_with("2024-01-15")
 
 
 # Error handling tests
