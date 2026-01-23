@@ -23,7 +23,9 @@ def register_tools(app):
         """Get user's full name from profile"""
         try:
             full_name = garmin_client.get_full_name()
-            return json.dumps(full_name, indent=2)
+            if isinstance(full_name, (dict, list)):
+                return json.dumps(full_name, indent=2)
+            return str(full_name)
         except Exception as e:
             return f"Error retrieving user's full name: {str(e)}"
 

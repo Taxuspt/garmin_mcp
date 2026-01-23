@@ -1,0 +1,37 @@
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Initializing server 'Test User Profile'
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListToolsRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for CallToolRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourcesRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ReadResourceRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for PromptListRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for GetPromptRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourceTemplatesRequest
+2026-01-23 20:50:41 [   DEBUG] asyncio: Using selector: EpollSelector
+2026-01-23 20:50:41 [   DEBUG] asyncio: Using selector: EpollSelector
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Initializing server 'Test User Profile'
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListToolsRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for CallToolRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourcesRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ReadResourceRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for PromptListRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for GetPromptRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourceTemplatesRequest
+2026-01-23 20:50:41 [   DEBUG] asyncio: Using selector: EpollSelector
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Initializing server 'Test User Profile'
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListToolsRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for CallToolRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourcesRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ReadResourceRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for PromptListRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for GetPromptRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourceTemplatesRequest
+2026-01-23 20:50:41 [   DEBUG] asyncio: Using selector: EpollSelector
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Initializing server 'Test User Profile'
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListToolsRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for CallToolRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourcesRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ReadResourceRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for PromptListRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for GetPromptRequest
+2026-01-23 20:50:41 [   DEBUG] mcp.server.lowlevel.server: Registering handler for ListResourceTemplatesRequest
+2026-01-23 20:50:41 [   DEBUG] asyncio: Using selector: EpollSelector
