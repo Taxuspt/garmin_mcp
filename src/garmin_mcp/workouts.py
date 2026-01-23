@@ -147,4 +147,26 @@ def register_tools(app):
         except Exception as e:
             return f"Error retrieving training plan workouts: {str(e)}"
 
+    @app.tool()
+    async def schedule_workout(workout_id: int, calendar_date: str) -> str:
+        """Schedule a workout to a specific calendar date.
+
+        This adds an existing workout from your Garmin workout library
+        to your Garmin Connect calendar on the specified date.
+
+        Args:
+            workout_id: ID of the workout to schedule (get IDs from get_workouts)
+            calendar_date: Date to schedule the workout in YYYY-MM-DD format
+        """
+        try:
+            url = f"workout-service/schedule/{workout_id}"
+            response = garmin_client.garth.post("connectapi", url, json={"date": calendar_date})
+
+            if response.status_code == 200:
+                return f"Successfully scheduled workout {workout_id} for {calendar_date}"
+            else:
+                return f"Failed to schedule workout: HTTP {response.status_code}"
+        except Exception as e:
+            return f"Error scheduling workout: {str(e)}"
+
     return app
