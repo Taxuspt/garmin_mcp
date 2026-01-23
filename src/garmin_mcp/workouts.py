@@ -1,6 +1,7 @@
 """
 Workout-related functions for Garmin Connect MCP Server
 """
+import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -68,7 +69,6 @@ def register_tools(app):
             workout_data: Dictionary containing workout data (will be converted to JSON)
         """
         try:
-            import json
             workout_json = json.dumps(workout_data)
             result = garmin_client.upload_workout(workout_json)
             return json.dumps(result, indent=2)
