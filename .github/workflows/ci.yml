@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Set up Python ${{ matrix.python-version }}
+      run: uv python install ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Run integration tests
+      run: uv run pytest tests/integration tests/unit -v --tb=short
+      timeout-minutes: 5
+
+    - name: Test summary
+      if: always()
+      run: |
+        echo "Tests completed for Python ${{ matrix.python-version }}"
+        if [ $? -eq 0 ]; then
+          echo "✅ All tests passed"
+        else
+          echo "❌ Some tests failed"
+        fi

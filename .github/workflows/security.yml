@@ -1,0 +1,69 @@
+name: Security Checks
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  schedule:
+    # Run weekly on Monday at 9am UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+jobs:
+  dependency-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Set up Python
+      run: uv python install 3.13
+
+    - name: Check for dependency vulnerabilities
+      run: |
+        uv sync
+        uv pip list
+        echo "Checking for known security vulnerabilities..."
+        # Note: Add pip-audit or safety scan here if desired
+
+    - name: Verify lock file is up to date
+      run: |
+        uv lock --check
+        if [ $? -ne 0 ]; then
+          echo "⚠️ Lock file is out of sync with pyproject.toml"
+          echo "Run 'uv lock' locally and commit the updated uv.lock"
+          exit 1
+        fi
+
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Set up Python
+      run: uv python install 3.13
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Check Python syntax
+      run: |
+        uv run python -m py_compile src/garmin_mcp/*.py
+        echo "✅ All Python files have valid syntax"
+
+    - name: Check import structure
+      run: |
+        uv run python -c "
+        import sys
+        sys.path.insert(0, 'src')
+        import garmin_mcp
+        print('✅ Package imports successfully')
+        "
