@@ -15,24 +15,158 @@ def configure(client):
     garmin_client = client
 
 
+def _curate_workout_summary(workout: dict) -> dict:
+    """Extract essential workout metadata for list views"""
+    sport_type = workout.get('sportType', {})
+
+    summary = {
+        "id": workout.get('workoutId'),
+        "name": workout.get('workoutName'),
+        "sport": sport_type.get('sportTypeKey'),
+        "provider": workout.get('workoutProvider'),
+        "created_date": workout.get('createdDate'),
+        "updated_date": workout.get('updatedDate'),
+    }
+
+    # Add optional fields if present
+    if workout.get('description'):
+        summary['description'] = workout.get('description')
+
+    if workout.get('estimatedDuration'):
+        summary['estimated_duration_seconds'] = workout.get('estimatedDuration')
+
+    if workout.get('estimatedDistance'):
+        summary['estimated_distance_meters'] = workout.get('estimatedDistance')
+
+    # Remove None values
+    return {k: v for k, v in summary.items() if v is not None}
+
+
+def _curate_workout_segment(segment: dict) -> dict:
+    """Extract essential segment information"""
+    curated = {
+        "order": segment.get('segmentOrder'),
+        "type": segment.get('type'),
+    }
+
+    # Duration
+    if segment.get('duration'):
+        curated['duration_seconds'] = segment.get('duration')
+    elif segment.get('durationType'):
+        curated['duration_type'] = segment.get('durationType')
+
+    # Target/Intensity
+    if segment.get('targetType'):
+        curated['target_type'] = segment.get('targetType')
+    if segment.get('targetValue'):
+        curated['target_value'] = segment.get('targetValue')
+    if segment.get('intensityType'):
+        curated['intensity'] = segment.get('intensityType')
+
+    # Distance if applicable
+    if segment.get('distance'):
+        curated['distance_meters'] = segment.get('distance')
+
+    # Repeat count for intervals
+    if segment.get('repeatCount'):
+        curated['repeat_count'] = segment.get('repeatCount')
+
+    return {k: v for k, v in curated.items() if v is not None}
+
+
+def _curate_workout_details(workout: dict) -> dict:
+    """Extract detailed workout information with segments but without verbose step data"""
+    sport_type = workout.get('sportType', {})
+
+    details = {
+        "id": workout.get('workoutId'),
+        "name": workout.get('workoutName'),
+        "sport": sport_type.get('sportTypeKey'),
+        "provider": workout.get('workoutProvider'),
+        "created_date": workout.get('createdDate'),
+        "updated_date": workout.get('updatedDate'),
+    }
+
+    # Optional fields
+    if workout.get('description'):
+        details['description'] = workout.get('description')
+
+    if workout.get('estimatedDuration'):
+        details['estimated_duration_seconds'] = workout.get('estimatedDuration')
+
+    if workout.get('estimatedDistance'):
+        details['estimated_distance_meters'] = workout.get('estimatedDistance')
+
+    if workout.get('avgTrainingSpeed'):
+        details['avg_training_speed_mps'] = workout.get('avgTrainingSpeed')
+
+    # Curate segments (remove verbose step details)
+    segments = workout.get('workoutSegments', [])
+    if segments:
+        details['segments'] = [_curate_workout_segment(seg) for seg in segments]
+        details['segment_count'] = len(segments)
+
+    # Remove None values
+    return {k: v for k, v in details.items() if v is not None}
+
+
+def _curate_scheduled_workout(scheduled: dict) -> dict:
+    """Extract essential scheduled workout information"""
+    workout = scheduled.get('workout', {})
+    sport_type = workout.get('sportType', {})
+
+    summary = {
+        "date": scheduled.get('date'),
+        "workout_id": workout.get('workoutId'),
+        "name": workout.get('workoutName'),
+        "sport": sport_type.get('sportTypeKey'),
+        "provider": workout.get('workoutProvider'),
+        "completed": scheduled.get('completed', False),
+    }
+
+    # Optional fields
+    if workout.get('estimatedDuration'):
+        summary['estimated_duration_seconds'] = workout.get('estimatedDuration')
+
+    if workout.get('estimatedDistance'):
+        summary['estimated_distance_meters'] = workout.get('estimatedDistance')
+
+    # Remove None values
+    return {k: v for k, v in summary.items() if v is not None}
+
+
 def register_tools(app):
     """Register all workout-related tools with the MCP server app"""
-    
+
     @app.tool()
     async def get_workouts() -> str:
-        """Get all workouts"""
+        """Get all workouts with curated summary list
+
+        Returns a count and list of workout summaries with essential metadata only.
+        For detailed workout information including segments, use get_workout_by_id.
+        """
         try:
             workouts = garmin_client.get_workouts()
             if not workouts:
                 return "No workouts found."
-            return json.dumps(workouts, indent=2)
+
+            # Curate the workout list
+            curated = {
+                "count": len(workouts),
+                "workouts": [_curate_workout_summary(w) for w in workouts]
+            }
+
+            return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving workouts: {str(e)}"
-    
+
     @app.tool()
     async def get_workout_by_id(workout_id: int) -> str:
-        """Get details for a specific workout
-        
+        """Get detailed information for a specific workout
+
+        Returns workout details including segments and structure.
+        Use get_workouts to get a list of available workout IDs.
+
         Args:
             workout_id: ID of the workout to retrieve
         """
@@ -40,14 +174,20 @@ def register_tools(app):
             workout = garmin_client.get_workout_by_id(workout_id)
             if not workout:
                 return f"No workout found with ID {workout_id}."
-            return json.dumps(workout, indent=2)
+
+            # Return curated details with segments but without verbose step data
+            curated = _curate_workout_details(workout)
+            return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving workout: {str(e)}"
-    
+
     @app.tool()
     async def download_workout(workout_id: int) -> str:
-        """Download a workout as a FIT file (this will return a message about how to access the file)
-        
+        """Download a workout as a FIT file
+
+        Downloads the workout in FIT format. The binary data cannot be returned
+        directly through the MCP interface, but this confirms the workout is available.
+
         Args:
             workout_id: ID of the workout to download
         """
@@ -55,45 +195,76 @@ def register_tools(app):
             workout_data = garmin_client.download_workout(workout_id)
             if not workout_data:
                 return f"No workout data found for workout with ID {workout_id}."
-            
-            # Since we can't return binary data directly, we'll inform the user
-            return f"Workout data for ID {workout_id} is available. The data is in FIT format and would need to be saved to a file."
+
+            # Return information about the download
+            data_size = len(workout_data) if isinstance(workout_data, (bytes, bytearray)) else 0
+            return json.dumps({
+                "workout_id": workout_id,
+                "format": "FIT",
+                "size_bytes": data_size,
+                "message": "Workout data is available in FIT format. Use Garmin Connect API to save to file."
+            }, indent=2)
         except Exception as e:
             return f"Error downloading workout: {str(e)}"
-    
+
     @app.tool()
     async def upload_workout(workout_data: dict) -> str:
         """Upload a workout from JSON data
 
+        Creates a new workout in Garmin Connect from structured workout data.
+
         Args:
-            workout_data: Dictionary containing workout data (will be converted to JSON)
+            workout_data: Dictionary containing workout structure (name, sport type, segments, etc.)
         """
         try:
             workout_json = json.dumps(workout_data)
             result = garmin_client.upload_workout(workout_json)
+
+            # Curate the response
+            if isinstance(result, dict):
+                curated = {
+                    "workout_id": result.get('workoutId'),
+                    "name": result.get('workoutName'),
+                    "status": "uploaded",
+                }
+                # Remove None values
+                curated = {k: v for k, v in curated.items() if v is not None}
+                return json.dumps(curated, indent=2)
+
             return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error uploading workout: {str(e)}"
-            
+
     @app.tool()
     async def upload_activity(file_path: str) -> str:
-        """Upload an activity from a file (this is just a placeholder - file operations would need special handling)
+        """Upload an activity from a file
+
+        Note: File upload operations are not supported in the MCP server implementation.
+        Use the Garmin Connect web interface or mobile app to upload activity files.
 
         Args:
             file_path: Path to the activity file (.fit, .gpx, .tcx)
         """
         try:
-            # This is a placeholder - actual implementation would need to handle file access
-            return f"Activity upload from file path {file_path} is not supported in this MCP server implementation."
+            return json.dumps({
+                "status": "not_supported",
+                "message": "Activity upload from file path is not supported in this MCP server implementation.",
+                "file_path": file_path,
+                "alternatives": [
+                    "Use Garmin Connect web interface",
+                    "Use Garmin Connect mobile app",
+                    "Use garminconnect Python library directly"
+                ]
+            }, indent=2)
         except Exception as e:
             return f"Error uploading activity: {str(e)}"
 
     @app.tool()
     async def get_scheduled_workouts(start_date: str, end_date: str) -> str:
-        """Get scheduled workouts between two dates.
+        """Get scheduled workouts between two dates with curated summary list
 
         Returns workouts that have been scheduled on the Garmin Connect calendar,
-        including their scheduled dates.
+        including their scheduled dates and completion status.
 
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -114,13 +285,20 @@ def register_tools(app):
             if not scheduled:
                 return f"No workouts scheduled between {start_date} and {end_date}."
 
-            return json.dumps(scheduled, indent=2)
+            # Curate the scheduled workout list
+            curated = {
+                "count": len(scheduled),
+                "date_range": {"start": start_date, "end": end_date},
+                "scheduled_workouts": [_curate_scheduled_workout(s) for s in scheduled]
+            }
+
+            return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving scheduled workouts: {str(e)}"
 
     @app.tool()
     async def get_training_plan_workouts(calendar_date: str) -> str:
-        """Get training plan workouts for a specific date.
+        """Get training plan workouts for a specific date
 
         Returns workouts from your active training plan scheduled for the given date.
 
@@ -143,13 +321,46 @@ def register_tools(app):
             if not workouts:
                 return f"No training plan workouts scheduled for {calendar_date}."
 
-            return json.dumps(plan_data, indent=2)
+            # Curate training plan data
+            curated = {
+                "date": calendar_date,
+                "plan_name": plan_data.get('trainingPlanName'),
+                "count": len(workouts),
+                "workouts": []
+            }
+
+            for w in workouts:
+                workout = w.get('workout', {})
+                sport_type = workout.get('sportType', {})
+
+                workout_summary = {
+                    "date": w.get('scheduledDate'),
+                    "workout_id": workout.get('workoutId'),
+                    "name": workout.get('workoutName'),
+                    "sport": sport_type.get('sportTypeKey'),
+                    "completed": w.get('completed', False),
+                }
+
+                if workout.get('estimatedDuration'):
+                    workout_summary['estimated_duration_seconds'] = workout.get('estimatedDuration')
+
+                if workout.get('estimatedDistance'):
+                    workout_summary['estimated_distance_meters'] = workout.get('estimatedDistance')
+
+                # Remove None values
+                workout_summary = {k: v for k, v in workout_summary.items() if v is not None}
+                curated["workouts"].append(workout_summary)
+
+            # Remove None values from top level
+            curated = {k: v for k, v in curated.items() if v is not None}
+
+            return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving training plan workouts: {str(e)}"
 
     @app.tool()
     async def schedule_workout(workout_id: int, calendar_date: str) -> str:
-        """Schedule a workout to a specific calendar date.
+        """Schedule a workout to a specific calendar date
 
         This adds an existing workout from your Garmin workout library
         to your Garmin Connect calendar on the specified date.
@@ -163,9 +374,20 @@ def register_tools(app):
             response = garmin_client.garth.post("connectapi", url, json={"date": calendar_date})
 
             if response.status_code == 200:
-                return f"Successfully scheduled workout {workout_id} for {calendar_date}"
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
+                }, indent=2)
             else:
-                return f"Failed to schedule workout: HTTP {response.status_code}"
+                return json.dumps({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "http_status": response.status_code,
+                    "message": f"Failed to schedule workout: HTTP {response.status_code}"
+                }, indent=2)
         except Exception as e:
             return f"Error scheduling workout: {str(e)}"
 
