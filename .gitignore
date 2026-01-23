@@ -12,34 +12,4 @@ build/
 # Virtual environments
 .env
 .venv/
-venv/
-env/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# UV
-.uv/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Garmin tokens (security)
-.garminconnect/
-.garminconnect_base64
-
-# Secrets
-*.secret
-secrets/
+*.log
