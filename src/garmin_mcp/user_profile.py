@@ -32,7 +32,9 @@ def register_tools(app):
         """Get user's preferred unit system from profile"""
         try:
             unit_system = garmin_client.get_unit_system()
-            return json.dumps(unit_system, indent=2)
+            if isinstance(unit_system, (dict, list)):
+                return json.dumps(unit_system, indent=2)
+            return str(unit_system)
         except Exception as e:
             return f"Error retrieving unit system: {str(e)}"
     
