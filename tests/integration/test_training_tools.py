@@ -93,13 +93,18 @@ async def test_get_endurance_score_tool(app_with_training, mock_garmin_client):
 @pytest.mark.asyncio
 async def test_get_training_effect_tool(app_with_training, mock_garmin_client):
     """Test get_training_effect tool"""
-    # Setup mock
-    training_effect = {
-        "aerobicEffect": 3.5,
-        "anaerobicEffect": 2.0,
-        "activityId": 12345678901
+    # Setup mock - get_training_effect uses get_activity internally
+    activity_data = {
+        "summaryDTO": {
+            "trainingEffect": 3.5,
+            "anaerobicTrainingEffect": 2.0,
+            "trainingEffectLabel": "Highly Improving",
+            "activityTrainingLoad": 150,
+            "recoveryTime": 720,  # 12 hours in minutes
+            "performanceCondition": 95,
+        }
     }
-    mock_garmin_client.get_training_effect.return_value = training_effect
+    mock_garmin_client.get_activity.return_value = activity_data
 
     # Call tool
     result = await app_with_training.call_tool(
@@ -109,7 +114,7 @@ async def test_get_training_effect_tool(app_with_training, mock_garmin_client):
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_training_effect.assert_called_once_with(12345678901)
+    mock_garmin_client.get_activity.assert_called_once_with(12345678901)
 
 
 @pytest.mark.asyncio
@@ -247,8 +252,8 @@ async def test_get_hrv_data_no_data(app_with_training, mock_garmin_client):
 @pytest.mark.asyncio
 async def test_get_training_effect_exception(app_with_training, mock_garmin_client):
     """Test get_training_effect tool when API raises exception"""
-    # Setup mock to raise exception
-    mock_garmin_client.get_training_effect.side_effect = Exception("API Error")
+    # Setup mock to raise exception - get_training_effect uses get_activity internally
+    mock_garmin_client.get_activity.side_effect = Exception("API Error")
 
     # Call tool
     result = await app_with_training.call_tool(
