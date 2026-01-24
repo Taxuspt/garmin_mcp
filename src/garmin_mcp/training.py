@@ -160,27 +160,30 @@ def register_tools(app):
             activity_id: ID of the activity to retrieve training effect for
         """
         try:
-            effect = garmin_client.get_training_effect(activity_id)
-            if not effect:
-                return f"No training effect data found for activity with ID {activity_id}."
+            # Training effect data is available through get_activity
+            # The garminconnect library doesn't have a separate get_training_effect method
+            activity = garmin_client.get_activity(activity_id)
+            if not activity:
+                return f"No activity found with ID {activity_id}."
+
+            # Extract training effect data from activity summary
+            summary = activity.get('summaryDTO', {})
 
             # Curate to essential fields only
             curated = {
-                "aerobic_effect": effect.get('aerobicTrainingEffect'),
-                "aerobic_effect_label": effect.get('aerobicTrainingEffectLabel'),
-                "anaerobic_effect": effect.get('anaerobicTrainingEffect'),
-                "anaerobic_effect_label": effect.get('anaerobicTrainingEffectLabel'),
+                "activity_id": activity_id,
+                "aerobic_effect": summary.get('trainingEffect'),  # This is aerobic training effect
+                "anaerobic_effect": summary.get('anaerobicTrainingEffect'),
+                "training_effect_label": summary.get('trainingEffectLabel'),
 
                 # Recovery metrics
-                "recovery_time_hours": round(effect.get('recoveryTime', 0) / 60, 1) if effect.get('recoveryTime') else None,
+                "recovery_time_hours": round(summary.get('recoveryTime', 0) / 60, 1) if summary.get('recoveryTime') else None,
 
                 # Training load
-                "training_load": effect.get('activityTrainingLoad'),
-                "load_ratio": effect.get('trainingLoadRatio'),
+                "training_load": summary.get('activityTrainingLoad'),
 
-                # Performance condition
-                "performance_condition": effect.get('performanceCondition'),
-                "performance_condition_label": effect.get('performanceConditionLabel'),
+                # Additional metrics that may be available
+                "performance_condition": summary.get('performanceCondition'),
             }
 
             # Remove None values
