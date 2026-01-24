@@ -50,6 +50,74 @@ If you need any of these endpoints, please [open an issue](https://github.com/Ta
 
 ## Setup
 
+### Quick Start for Claude Desktop
+
+The easiest way to use this MCP server with Claude Desktop is to authenticate once before adding the server to your configuration.
+
+#### Prerequisites
+
+- Python 3.12+
+- Garmin Connect account
+- MFA may be required if enabled on your account
+
+#### Step 1: Pre-authenticate (One-time)
+
+Before adding to Claude Desktop, authenticate once in your terminal:
+
+```bash
+
+# Install and run authentication tool
+uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
+
+# You'll be prompted for:
+# - Email (or set GARMIN_EMAIL env var)
+# - Password (or set GARMIN_PASSWORD env var)
+# - MFA code (if enabled on your account)
+
+# OAuth tokens will be saved to ~/.garminconnect
+```
+
+**Note:** You can also set credentials via environment variables:
+```bash
+GARMIN_EMAIL=your@email.com GARMIN_PASSWORD=secret garmin-mcp-auth
+```
+
+If you don't have MFA enabled you can also skip `garmin-mcp-auth` and pass `GARMIN_EMAIL` and `GARMIN_PASSWORD` as env variables directly to Claude Desktop (or other MCP client, if supported), see below for an example.
+
+#### Step 2: Configure Claude Desktop
+
+Add to your Claude Desktop MCP settings **WITHOUT** credentials:
+
+**macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "garmin": {
+      "command": "uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--from",
+        "git+https://github.com/Taxuspt/garmin_mcp",
+        "garmin-mcp"
+      ]
+    }
+  }
+}
+```
+
+**Important:** No `GARMIN_EMAIL` or `GARMIN_PASSWORD` needed in config! The server uses your saved tokens.
+
+#### Step 3: Restart Claude Desktop
+
+Your Garmin data is now available in Claude!
+
+---
+
+### Development Setup
+
 1. Install the required packages on a new environment:
 
 ```bash
@@ -258,35 +326,56 @@ For other issues, check the Claude Desktop logs at:
 
 ### Garmin Connect Multi-Factor Authentication (MFA)
 
-If you have MFA/one-time codes enabled in your Garmin account, you need to login at the command line first to set the OAuth token.
+#### Understanding MFA with MCP Servers
 
-#### Option 1: Using uvx (Recommended for Claude Desktop)
+MCP servers run as background processes without direct terminal access. If your Garmin account has MFA enabled, you must authenticate once using the pre-authentication tool before the server can run.
 
-The app expects either the env var GARMIN_EMAIL or GARMIN_EMAIL_FILE. You can store these in files with the following command:
+#### Recommended: Pre-Authentication Tool
+
+The easiest way to handle MFA is using the dedicated authentication tool:
 
 ```bash
+garmin-mcp-auth
+```
+
+This saves OAuth tokens to `~/.garminconnect` for future use. The server will automatically use these tokens when running in Claude Desktop or other MCP clients.
+
+**Additional Options:**
+
+```bash
+# Use environment variables for credentials
+GARMIN_EMAIL=you@example.com GARMIN_PASSWORD=secret garmin-mcp-auth
+
+# Verify existing tokens
+garmin-mcp-auth --verify
+
+# Force re-authentication (e.g., when tokens expire)
+garmin-mcp-auth --force-reauth
+
+# Use custom token location
+garmin-mcp-auth --token-path ~/.garmin_tokens
+```
+
+#### Alternative: Manual First Run
+
+You can also authenticate by running the server once interactively:
+
+```bash
+# Store credentials in files for security
 echo "your_email@example.com" > ~/.garmin_email
 echo "your_password" > ~/.garmin_password
 chmod 600 ~/.garmin_email ~/.garmin_password
+
+# Run server interactively to authenticate
+GARMIN_EMAIL_FILE=~/.garmin_email GARMIN_PASSWORD_FILE=~/.garmin_password \
+  uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp
+
+# Enter MFA code when prompted
+# Tokens will be saved automatically
+# Now add to Claude Desktop config without credentials
 ```
 
-Then you can manually run the login script:
-
-```bash
-GARMIN_EMAIL_FILE=~/.garmin_email GARMIN_PASSWORD_FILE=~/.garmin_password uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp
-```
-
-You will see:
-
-```
-Garmin Connect MFA required. Please check your email/phone for the code.
-Enter MFA code: 123456
-Oauth tokens stored in '~/.garminconnect' directory for future use. (first method)
-
-Oauth tokens encoded as base64 string and saved to '~/.garminconnect_base64' file for future use. (second method)
-```
-
-After setting the token at the CLI, you can use the following in Claude Desktop without the env vars, because the OAuth tokens have been set:
+After initial authentication, configure Claude Desktop **without** credentials (tokens are already saved):
 
 ```json
 {
@@ -305,9 +394,31 @@ After setting the token at the CLI, you can use the following in Claude Desktop 
 }
 ```
 
-#### Option 2: Using Docker
+#### Using Docker with MFA
 
 If using Docker, follow the [Handling MFA with Docker](#handling-mfa-with-docker) section above for a streamlined experience with persistent token storage.
+
+#### Troubleshooting MFA
+
+**Error: "MFA authentication required but no interactive terminal available"**
+
+Solution:
+1. Open terminal
+2. Run: `garmin-mcp-auth`
+3. Enter credentials and MFA code
+4. Restart Claude Desktop
+
+**Token Expired**
+
+OAuth tokens expire periodically (approximately every 6 months). Re-authenticate:
+```bash
+garmin-mcp-auth --force-reauth
+```
+
+**Verify Tokens Work**
+```bash
+garmin-mcp-auth --verify
+```
 
 ## Testing
 

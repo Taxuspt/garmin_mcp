@@ -25,8 +25,30 @@ from garmin_mcp import data_management
 from garmin_mcp import womens_health
 
 
+def is_interactive_terminal() -> bool:
+    """Detect if running in interactive terminal vs MCP subprocess.
+
+    Returns:
+        bool: True if running in an interactive terminal, False otherwise
+    """
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def get_mfa() -> str:
-    """Get MFA code from user input"""
+    """Get MFA code from user input.
+
+    Raises:
+        RuntimeError: If running in non-interactive environment
+    """
+    if not is_interactive_terminal():
+        print(
+            "\nERROR: MFA code required but no interactive terminal available.\n"
+            "Please run 'garmin-mcp-auth' in your terminal first.\n"
+            "See: https://github.com/Taxuspt/garmin_mcp#mfa-setup\n",
+            file=sys.stderr
+        )
+        raise RuntimeError("MFA required but non-interactive environment")
+
     print("\nGarmin Connect MFA required. Please check your email/phone for the code.", file=sys.stderr)
     return input("Enter MFA code: ")
 
@@ -58,6 +80,7 @@ tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64
 
 def init_api(email, password):
     """Initialize Garmin API with your credentials."""
+    import io
 
     try:
         # Using Oauth1 and OAuth2 token files from directory
@@ -73,11 +96,32 @@ def init_api(email, password):
         # with open(dir_path, "r") as token_file:
         #     tokenstore = token_file.read()
 
-        garmin = Garmin()
-        garmin.login(tokenstore)
+        # Suppress stderr for token validation to avoid confusing library errors
+        old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+
+        try:
+            garmin = Garmin()
+            garmin.login(tokenstore)
+        finally:
+            sys.stderr = old_stderr
 
     except (FileNotFoundError, GarthHTTPError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
+
+        # Check if we're in a non-interactive environment without credentials
+        if not is_interactive_terminal() and (not email or not password):
+            print(
+                "ERROR: OAuth tokens not found and no interactive terminal available.\n"
+                "Please authenticate first:\n"
+                "  1. Run: garmin-mcp-auth\n"
+                "  2. Enter your credentials and MFA code\n"
+                "  3. Restart your MCP client\n"
+                f"Tokens will be saved to: {tokenstore}\n",
+                file=sys.stderr
+            )
+            return None
+
         print(
             "Login tokens not present, login with your Garmin Connect credentials to generate them.\n"
             f"They will be stored in '{tokenstore}' for future use.\n"
@@ -106,7 +150,31 @@ def init_api(email, password):
             GarminConnectAuthenticationError,
             requests.exceptions.HTTPError,
         ) as err:
-            print(err, file=sys.stderr)
+            error_msg = str(err)
+
+            # Provide clean, actionable error messages
+            print("\nAuthentication failed.", file=sys.stderr)
+
+            if isinstance(err, GarminConnectAuthenticationError):
+                if "MFA" in error_msg or "code" in error_msg.lower():
+                    print("MFA code may be incorrect or expired.", file=sys.stderr)
+                else:
+                    print("Invalid email or password.", file=sys.stderr)
+            elif isinstance(err, GarthHTTPError):
+                if "401" in error_msg or "Unauthorized" in error_msg:
+                    print("Invalid credentials. Please check your email and password.", file=sys.stderr)
+                elif "429" in error_msg:
+                    print("Too many requests. Please wait and try again.", file=sys.stderr)
+                elif "500" in error_msg or "503" in error_msg:
+                    print("Garmin Connect service issue. Please try again later.", file=sys.stderr)
+                else:
+                    print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
+            elif isinstance(err, requests.exceptions.HTTPError):
+                print("Network error. Please check your connection.", file=sys.stderr)
+            else:
+                print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
+
+            print(f"\nTip: Run 'garmin-mcp-auth' to authenticate interactively.", file=sys.stderr)
             return None
 
     return garmin

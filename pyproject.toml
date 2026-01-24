@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 garmin-mcp = "garmin_mcp:main"
+garmin-mcp-auth = "garmin_mcp.auth_cli:main"
 
 [tool.uv]
 dev-dependencies = [
