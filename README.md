@@ -69,6 +69,16 @@ Your Garmin Connect credentials are read from environment variables:
 
 File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
 
+### Testing the server locally with MCP Inspector
+
+The Inspector runs directly through npx without requiring installation. Run from the project root:
+
+```bash
+npx @modelcontextprotocol/inspector uv run garmin-mcp
+```
+
+You'll be able to inspect and test the tools.
+
 ### With Claude Desktop
 
 1. Create a configuration in Claude Desktop:
@@ -78,7 +88,11 @@ Edit your Claude Desktop configuration file:
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add this server configuration:
+You have two options to run the MCP locally with Claude.
+
+#### Directly from github without cloning the repo:
+
+1. Add this server configuration:
 
 ```json
 {
@@ -101,7 +115,29 @@ Add this server configuration:
 }
 ```
 
-Replace the path with the absolute path to your server file.
+You might have to add the full path to `uvx` you can check the full path with `which uvx`
+
+2. Restart Claude Desktop
+
+#### Directly from your local copy of the repository:
+
+1. Add this server configuration:
+
+```
+{
+  "mcpServers": {
+    "garmin-local": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "<full path to your local repository>/garmin_mcp",
+        "run",
+        "garmin-mcp"
+      ]
+    }
+  }
+}
+```
 
 2. Restart Claude Desktop
 
@@ -226,13 +262,6 @@ docker volume rm garmin_mcp_garmin-tokens
 
 To use the Dockerized MCP server with Claude Desktop, you can configure it to communicate with the container. However, note that MCP servers typically communicate via stdio, which works best with direct process execution. For Docker-based deployments, consider using the standard `uvx` method shown in the [With Claude Desktop](#with-claude-desktop) section instead.
 
-### With MCP Inspector
-
-For testing, you can use the MCP Inspector from the project root:
-
-```bash
-npx @modelcontextprotocol/inspector uv run garmin-mcp
-```
 
 ## Usage Examples
 
@@ -245,11 +274,42 @@ Once connected in Claude, you can ask questions like:
 
 ## Troubleshooting
 
+### "Failed to spawn process: No such file or directory"
+
+If Claude Desktop can't find `uvx`, it's because `uvx` is not in the PATH that Claude Desktop uses. To fix this:
+
+1. Find where `uvx` is installed:
+```bash
+which uvx
+```
+
+2. Use the full path in your configuration. For example, if `uvx` is at `/Users/username/.cargo/bin/uvx`:
+```json
+{
+  "mcpServers": {
+    "garmin": {
+      "command": "/Users/username/.cargo/bin/uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--from",
+        "git+https://github.com/Taxuspt/garmin_mcp",
+        "garmin-mcp"
+      ]
+    }
+  }
+}
+```
+
+### Login Issues
+
 If you encounter login issues:
 
 1. Verify your credentials are correct
 2. Check if Garmin Connect requires additional verification
 3. Ensure the garminconnect package is up to date
+
+### Logs
 
 For other issues, check the Claude Desktop logs at:
 
