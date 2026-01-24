@@ -12,6 +12,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_PROGRESS_SUMMARY,
     MOCK_HRV_DATA,
     MOCK_TRAINING_STATUS,
+    MOCK_LACTATE_THRESHOLD,
 )
 
 
@@ -207,6 +208,23 @@ async def test_get_training_status_tool(app_with_training, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.get_training_status.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_lactate_threshold_tool(app_with_training, mock_garmin_client):
+    """Test get_lactate_threshold tool returns lactate threshold data"""
+    # Setup mock
+    mock_garmin_client.get_lactate_threshold.return_value = MOCK_LACTATE_THRESHOLD
+
+    # Call tool
+    result = await app_with_training.call_tool(
+        "get_lactate_threshold",
+        {"date": "2024-01-15"}
+    )
+
+    # Verify
+    assert result is not None
+    mock_garmin_client.get_lactate_threshold.assert_called_once_with("2024-01-15")
 
 
 # Error handling tests

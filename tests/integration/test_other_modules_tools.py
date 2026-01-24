@@ -344,6 +344,30 @@ async def test_get_gear_stats_tool(app_with_gear, mock_garmin_client):
     mock_garmin_client.get_gear_stats.assert_called_once_with("abc123")
 
 
+@pytest.mark.asyncio
+async def test_add_gear_to_activity_tool(app_with_gear, mock_garmin_client):
+    """Test add_gear_to_activity tool"""
+    mock_garmin_client.add_gear_to_activity.return_value = {}
+    result = await app_with_gear.call_tool(
+        "add_gear_to_activity",
+        {"activity_id": 12345678901, "gear_uuid": "abc123"}
+    )
+    assert result is not None
+    mock_garmin_client.add_gear_to_activity.assert_called_once_with(12345678901, "abc123")
+
+
+@pytest.mark.asyncio
+async def test_remove_gear_from_activity_tool(app_with_gear, mock_garmin_client):
+    """Test remove_gear_from_activity tool"""
+    mock_garmin_client.remove_gear_from_activity.return_value = {}
+    result = await app_with_gear.call_tool(
+        "remove_gear_from_activity",
+        {"activity_id": 12345678901, "gear_uuid": "abc123"}
+    )
+    assert result is not None
+    mock_garmin_client.remove_gear_from_activity.assert_called_once_with(12345678901, "abc123")
+
+
 # Women's Health module tests
 @pytest.fixture
 def app_with_womens_health(mock_garmin_client):

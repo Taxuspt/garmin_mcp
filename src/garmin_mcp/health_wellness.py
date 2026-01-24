@@ -699,4 +699,191 @@ def register_tools(app):
         except Exception as e:
             return f"Error retrieving daily wellness events: {str(e)}"
 
+    @app.tool()
+    async def get_weekly_steps(date: str) -> str:
+        """Get weekly step data aggregates
+
+        Returns weekly step totals and daily breakdown for the week containing
+        the specified date.
+
+        Args:
+            date: Date in YYYY-MM-DD format (any day in the week you want to query)
+        """
+        try:
+            weekly_data = garmin_client.get_weekly_steps(date)
+            if not weekly_data:
+                return f"No weekly steps data found for week containing {date}"
+
+            # Curate the weekly steps data
+            curated = {
+                "date": date,
+                "week_start_date": weekly_data.get('startDate'),
+                "week_end_date": weekly_data.get('endDate'),
+                "total_steps": weekly_data.get('totalSteps'),
+                "average_steps_per_day": weekly_data.get('averageSteps'),
+                "goal_steps": weekly_data.get('weeklyStepGoal'),
+            }
+
+            # Add daily breakdown if available
+            daily_values = weekly_data.get('dailyStepTotals', [])
+            if daily_values:
+                curated["daily_steps"] = [
+                    {
+                        "date": day.get('calendarDate'),
+                        "steps": day.get('totalSteps'),
+                    }
+                    for day in daily_values
+                ]
+
+            # Remove None values
+            curated = {k: v for k, v in curated.items() if v is not None}
+
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving weekly steps data: {str(e)}"
+
+    @app.tool()
+    async def get_weekly_stress(date: str) -> str:
+        """Get weekly stress data trends
+
+        Returns weekly stress averages and daily breakdown for the week containing
+        the specified date.
+
+        Args:
+            date: Date in YYYY-MM-DD format (any day in the week you want to query)
+        """
+        try:
+            weekly_data = garmin_client.get_weekly_stress(date)
+            if not weekly_data:
+                return f"No weekly stress data found for week containing {date}"
+
+            # Curate the weekly stress data
+            curated = {
+                "date": date,
+                "week_start_date": weekly_data.get('startDate'),
+                "week_end_date": weekly_data.get('endDate'),
+                "average_stress_level": weekly_data.get('averageStressLevel'),
+                "max_stress_level": weekly_data.get('maxStressLevel'),
+            }
+
+            # Add daily breakdown if available
+            daily_values = weekly_data.get('dailyStressLevels', [])
+            if daily_values:
+                curated["daily_stress"] = [
+                    {
+                        "date": day.get('calendarDate'),
+                        "avg_stress_level": day.get('averageStressLevel'),
+                        "max_stress_level": day.get('maxStressLevel'),
+                        "rest_stress_duration_seconds": day.get('restStressDuration'),
+                        "activity_stress_duration_seconds": day.get('activityStressDuration'),
+                        "low_stress_duration_seconds": day.get('lowStressDuration'),
+                        "medium_stress_duration_seconds": day.get('mediumStressDuration'),
+                        "high_stress_duration_seconds": day.get('highStressDuration'),
+                    }
+                    for day in daily_values
+                ]
+                # Remove None values from each daily entry
+                curated["daily_stress"] = [
+                    {k: v for k, v in day.items() if v is not None}
+                    for day in curated["daily_stress"]
+                ]
+
+            # Remove None values
+            curated = {k: v for k, v in curated.items() if v is not None}
+
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving weekly stress data: {str(e)}"
+
+    @app.tool()
+    async def get_weekly_intensity_minutes(date: str) -> str:
+        """Get weekly intensity minutes data
+
+        Returns weekly totals of moderate and vigorous intensity minutes for the
+        week containing the specified date.
+
+        Args:
+            date: Date in YYYY-MM-DD format (any day in the week you want to query)
+        """
+        try:
+            weekly_data = garmin_client.get_weekly_intensity_minutes(date)
+            if not weekly_data:
+                return f"No weekly intensity minutes data found for week containing {date}"
+
+            # Curate the weekly intensity data
+            curated = {
+                "date": date,
+                "week_start_date": weekly_data.get('startDate'),
+                "week_end_date": weekly_data.get('endDate'),
+                "total_moderate_intensity_minutes": weekly_data.get('moderateIntensityMinutes'),
+                "total_vigorous_intensity_minutes": weekly_data.get('vigorousIntensityMinutes'),
+                "total_intensity_minutes": weekly_data.get('totalIntensityMinutes'),
+                "weekly_goal_minutes": weekly_data.get('weeklyGoalMinutes'),
+            }
+
+            # Add daily breakdown if available
+            daily_values = weekly_data.get('dailyIntensityMinutes', [])
+            if daily_values:
+                curated["daily_intensity"] = [
+                    {
+                        "date": day.get('calendarDate'),
+                        "moderate_intensity_minutes": day.get('moderateIntensityMinutes'),
+                        "vigorous_intensity_minutes": day.get('vigorousIntensityMinutes'),
+                    }
+                    for day in daily_values
+                ]
+                # Remove None values from each daily entry
+                curated["daily_intensity"] = [
+                    {k: v for k, v in day.items() if v is not None}
+                    for day in curated["daily_intensity"]
+                ]
+
+            # Remove None values
+            curated = {k: v for k, v in curated.items() if v is not None}
+
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving weekly intensity minutes data: {str(e)}"
+
+    @app.tool()
+    async def get_morning_training_readiness(date: str) -> str:
+        """Get morning training readiness score
+
+        Returns the morning training readiness assessment, which evaluates
+        recovery status and readiness to train based on overnight metrics.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            readiness = garmin_client.get_morning_training_readiness(date)
+            if not readiness:
+                return f"No morning training readiness data found for {date}"
+
+            # Curate the morning training readiness data
+            curated = {
+                "date": date,
+                "readiness_score": readiness.get('readinessScore'),
+                "readiness_level": readiness.get('readinessLevel'),
+                "recovery_time_hours": readiness.get('recoveryTime'),
+                "hrv_status": readiness.get('hrvStatus'),
+                "sleep_quality": readiness.get('sleepQuality'),
+                "sleep_score": readiness.get('sleepScore'),
+                "resting_heart_rate_bpm": readiness.get('restingHeartRate'),
+                "hrv_baseline": readiness.get('hrvBaseline'),
+                "hrv_last_night": readiness.get('hrvLastNight'),
+                "body_battery_percent": readiness.get('bodyBattery'),
+                "stress_level": readiness.get('stressLevel'),
+                "training_load_balance": readiness.get('trainingLoadBalance'),
+                "acute_load": readiness.get('acuteLoad'),
+                "chronic_load": readiness.get('chronicLoad'),
+            }
+
+            # Remove None values
+            curated = {k: v for k, v in curated.items() if v is not None}
+
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving morning training readiness: {str(e)}"
+
     return app

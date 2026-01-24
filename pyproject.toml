@@ -10,10 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "python-dotenv==1.0.1",
-    "garminconnect==0.2.25",
+    "garminconnect==0.2.38",
     "requests==2.32.3",
     "mcp==1.3.0",
-    "garth==0.5.2",
+    "garth>=0.5.17,<0.6.0",
 ]
 
 [project.scripts]
