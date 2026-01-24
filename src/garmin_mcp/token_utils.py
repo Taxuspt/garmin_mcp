@@ -71,7 +71,8 @@ def validate_tokens(token_path: str = None) -> Tuple[bool, str]:
 
         # Try a simple API call to verify tokens work
         try:
-            garmin.get_user_summary()
+            # Use get_full_name() as it doesn't require parameters
+            garmin.get_full_name()
             return True, ""
         except Exception as e:
             # Extract clean error message

@@ -77,6 +77,11 @@ uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-au
 # OAuth tokens will be saved to ~/.garminconnect
 ```
 
+You can verify your credentials at any time with
+```bash
+uv run garmin-mcp-auth --verify
+```
+
 **Note:** You can also set credentials via environment variables:
 ```bash
 GARMIN_EMAIL=your@email.com GARMIN_PASSWORD=secret garmin-mcp-auth
