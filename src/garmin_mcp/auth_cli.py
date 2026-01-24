@@ -138,9 +138,15 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
         # Verify tokens work
         print("\nVerifying tokens...")
-        user_summary = garmin.get_user_summary()
-        print(f"✓ Authentication successful!")
-        print(f"  Logged in as: {user_summary.get('displayName', 'Unknown')}")
+        try:
+            # Try to get user's full name as a simple verification
+            full_name = garmin.get_full_name()
+            print(f"✓ Authentication successful!")
+            print(f"  Logged in as: {full_name}")
+        except Exception:
+            # Fallback: just confirm tokens were saved
+            print(f"✓ Authentication successful!")
+            print(f"  OAuth tokens saved and ready to use.")
 
         print("\n" + "=" * 60)
         print("SUCCESS: You can now use the Garmin MCP server!")

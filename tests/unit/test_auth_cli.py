@@ -139,7 +139,7 @@ class TestAuthenticate:
         mock_garmin_instance.garth = Mock()
         mock_garmin_instance.garth.dump = Mock()
         mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
-        mock_garmin_instance.get_user_summary = Mock(return_value={"displayName": "Test User"})
+        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -161,7 +161,7 @@ class TestAuthenticate:
         mock_garmin_instance.garth = Mock()
         mock_garmin_instance.garth.dump = Mock()
         mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
-        mock_garmin_instance.get_user_summary = Mock(return_value={"displayName": "Test User"})
+        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -171,7 +171,7 @@ class TestAuthenticate:
             assert result is True
             mock_garmin_instance.login.assert_called_once()
             mock_garmin_instance.garth.dump.assert_called_once_with(tmpdir)
-            mock_garmin_instance.get_user_summary.assert_called_once()
+            mock_garmin_instance.get_full_name.assert_called_once()
 
             # Check base64 file was created (use expanded path)
             expanded_base64_path = os.path.expanduser(base64_path)

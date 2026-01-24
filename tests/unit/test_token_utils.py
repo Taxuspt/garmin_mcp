@@ -89,7 +89,7 @@ class TestValidateTokens:
         mock_exists.return_value = True
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock()
-        mock_garmin_instance.get_user_summary = Mock(return_value={"displayName": "Test"})
+        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -98,7 +98,7 @@ class TestValidateTokens:
         assert is_valid is True
         assert error == ""
         mock_garmin_instance.login.assert_called_once()
-        mock_garmin_instance.get_user_summary.assert_called_once()
+        mock_garmin_instance.get_full_name.assert_called_once()
 
     @patch("garmin_mcp.token_utils.token_exists")
     @patch("garmin_mcp.token_utils.Garmin")
@@ -139,7 +139,7 @@ class TestValidateTokens:
         mock_exists.return_value = True
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock()
-        mock_garmin_instance.get_user_summary = Mock(side_effect=Exception("API error"))
+        mock_garmin_instance.get_full_name = Mock(side_effect=Exception("API error"))
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
