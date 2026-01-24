@@ -486,3 +486,94 @@ MOCK_MENSTRUAL_DATA = {
     "phase": "FOLLICULAR",
     "symptoms": []
 }
+
+# Weekly Health Metrics (added in v0.2.38)
+MOCK_WEEKLY_STEPS = {
+    "startDate": "2024-01-08",
+    "endDate": "2024-01-14",
+    "totalSteps": 70000,
+    "averageSteps": 10000,
+    "weeklyStepGoal": 70000,
+    "dailyStepTotals": [
+        {"calendarDate": "2024-01-08", "totalSteps": 12000},
+        {"calendarDate": "2024-01-09", "totalSteps": 9500},
+        {"calendarDate": "2024-01-10", "totalSteps": 11000},
+    ]
+}
+
+MOCK_WEEKLY_STRESS = {
+    "startDate": "2024-01-08",
+    "endDate": "2024-01-14",
+    "averageStressLevel": 35,
+    "maxStressLevel": 75,
+    "dailyStressLevels": [
+        {
+            "calendarDate": "2024-01-08",
+            "averageStressLevel": 32,
+            "maxStressLevel": 65,
+            "restStressDuration": 28800,
+            "lowStressDuration": 18000,
+        }
+    ]
+}
+
+MOCK_WEEKLY_INTENSITY_MINUTES = {
+    "startDate": "2024-01-08",
+    "endDate": "2024-01-14",
+    "moderateIntensityMinutes": 120,
+    "vigorousIntensityMinutes": 45,
+    "totalIntensityMinutes": 165,
+    "weeklyGoalMinutes": 150,
+    "dailyIntensityMinutes": [
+        {
+            "calendarDate": "2024-01-08",
+            "moderateIntensityMinutes": 30,
+            "vigorousIntensityMinutes": 10,
+        }
+    ]
+}
+
+MOCK_MORNING_TRAINING_READINESS = {
+    "readinessScore": 75,
+    "readinessLevel": "GOOD",
+    "recoveryTime": 12,
+    "hrvStatus": "BALANCED",
+    "sleepQuality": "GOOD",
+    "sleepScore": 82,
+    "restingHeartRate": 55,
+    "hrvBaseline": 65,
+    "hrvLastNight": 68,
+    "bodyBattery": 85,
+    "stressLevel": 25,
+}
+
+# Activity Management
+MOCK_ACTIVITY_COUNT = 523
+
+MOCK_ACTIVITY_TYPES = [
+    {
+        "typeId": 1,
+        "typeKey": "running",
+        "displayName": "Running",
+        "parentTypeId": None,
+        "isHidden": False,
+    },
+    {
+        "typeId": 2,
+        "typeKey": "cycling",
+        "displayName": "Cycling",
+        "parentTypeId": None,
+        "isHidden": False,
+    }
+]
+
+# Training
+MOCK_LACTATE_THRESHOLD = {
+    "lactateThresholdHeartRate": 165,
+    "lactateThresholdSpeed": 3.5,
+    "lactateThresholdPace": 286,
+    "runningLactateThresholdHeartRate": 165,
+    "autoDetected": True,
+    "measurementDate": "2024-01-15T10:30:00",
+    "sport": "running",
+}

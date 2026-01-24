@@ -8,10 +8,45 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ## Features
 
-- List recent activities
+- List recent activities with pagination support
 - Get detailed activity information
-- Access health metrics (steps, heart rate, sleep)
+- Access health metrics (steps, heart rate, sleep, stress, respiration)
 - View body composition data
+- Track training status and readiness
+- Manage gear and equipment
+- Access workouts and training plans
+- Weekly health aggregates (steps, stress, intensity minutes)
+
+### Tool Coverage
+
+This MCP server implements **95+ tools** covering ~88% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
+
+- ✅ Activity Management (14 tools)
+- ✅ Health & Wellness (30 tools) - includes custom lightweight summary tools
+- ✅ Training & Performance (9 tools)
+- ✅ Workouts (8 tools)
+- ✅ Devices (7 tools)
+- ✅ Gear Management (5 tools)
+- ✅ Weight Tracking (5 tools)
+- ✅ Challenges & Badges (10 tools)
+- ✅ Women's Health (3 tools)
+- ✅ User Profile (3 tools)
+
+### Intentionally Skipped Endpoints
+
+Some endpoints are not implemented due to performance or complexity considerations:
+
+**High Data Volume:**
+- `get_activity_details()` - Returns large GPS tracks and chart data (50KB-500KB). Use `get_activity()` for summaries instead.
+
+**Specialized Workout Formats:**
+- `upload_running_workout()`, `upload_cycling_workout()`, `upload_swimming_workout()` - Sport-specific workout uploads. Use `upload_workout()` for general workouts.
+
+**Maintenance & Destructive Operations:**
+- `delete_activity()`, `delete_blood_pressure()` - Destructive operations require careful consideration.
+- Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
+
+If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
 
 ## Setup
 

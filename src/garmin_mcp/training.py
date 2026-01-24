@@ -387,6 +387,43 @@ def register_tools(app):
             return f"Error retrieving training status data: {str(e)}"
 
     @app.tool()
+    async def get_lactate_threshold(date: str) -> str:
+        """Get lactate threshold data
+
+        Returns lactate threshold information, which is the exercise intensity at
+        which lactate starts to accumulate in the blood. This is a key metric for
+        endurance training.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            threshold = garmin_client.get_lactate_threshold(date)
+            if not threshold:
+                return f"No lactate threshold data found for {date}"
+
+            # Curate the lactate threshold data
+            curated = {
+                "date": date,
+                "lactate_threshold_bpm": threshold.get('lactateThresholdHeartRate'),
+                "lactate_threshold_speed_mps": threshold.get('lactateThresholdSpeed'),
+                "lactate_threshold_pace_seconds_per_km": threshold.get('lactateThresholdPace'),
+                "running_lactate_threshold_bpm": threshold.get('runningLactateThresholdHeartRate'),
+                "cycling_lactate_threshold_bpm": threshold.get('cyclingLactateThresholdHeartRate'),
+                "cycling_lactate_threshold_watts": threshold.get('cyclingLactateThresholdPower'),
+                "auto_detected": threshold.get('autoDetected'),
+                "measurement_timestamp": threshold.get('measurementDate'),
+                "sport": threshold.get('sport'),
+            }
+
+            # Remove None values
+            curated = {k: v for k, v in curated.items() if v is not None}
+
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving lactate threshold data: {str(e)}"
+
+    @app.tool()
     async def request_reload(date: str) -> str:
         """Request reload of epoch data
 

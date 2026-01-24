@@ -26,6 +26,10 @@ from tests.fixtures.garmin_responses import (
     MOCK_STRESS_DATA,
     MOCK_RESPIRATION_DATA,
     MOCK_SPO2_DATA,
+    MOCK_WEEKLY_STEPS,
+    MOCK_WEEKLY_STRESS,
+    MOCK_WEEKLY_INTENSITY_MINUTES,
+    MOCK_MORNING_TRAINING_READINESS,
 )
 
 
@@ -470,6 +474,74 @@ async def test_get_all_day_events_tool(app_with_health_wellness, mock_garmin_cli
     # Verify
     assert result is not None
     mock_garmin_client.get_all_day_events.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_weekly_steps_tool(app_with_health_wellness, mock_garmin_client):
+    """Test get_weekly_steps tool returns weekly step data"""
+    # Setup mock
+    mock_garmin_client.get_weekly_steps.return_value = MOCK_WEEKLY_STEPS
+
+    # Call tool
+    result = await app_with_health_wellness.call_tool(
+        "get_weekly_steps",
+        {"date": "2024-01-10"}
+    )
+
+    # Verify
+    assert result is not None
+    mock_garmin_client.get_weekly_steps.assert_called_once_with("2024-01-10")
+
+
+@pytest.mark.asyncio
+async def test_get_weekly_stress_tool(app_with_health_wellness, mock_garmin_client):
+    """Test get_weekly_stress tool returns weekly stress data"""
+    # Setup mock
+    mock_garmin_client.get_weekly_stress.return_value = MOCK_WEEKLY_STRESS
+
+    # Call tool
+    result = await app_with_health_wellness.call_tool(
+        "get_weekly_stress",
+        {"date": "2024-01-10"}
+    )
+
+    # Verify
+    assert result is not None
+    mock_garmin_client.get_weekly_stress.assert_called_once_with("2024-01-10")
+
+
+@pytest.mark.asyncio
+async def test_get_weekly_intensity_minutes_tool(app_with_health_wellness, mock_garmin_client):
+    """Test get_weekly_intensity_minutes tool returns weekly intensity data"""
+    # Setup mock
+    mock_garmin_client.get_weekly_intensity_minutes.return_value = MOCK_WEEKLY_INTENSITY_MINUTES
+
+    # Call tool
+    result = await app_with_health_wellness.call_tool(
+        "get_weekly_intensity_minutes",
+        {"date": "2024-01-10"}
+    )
+
+    # Verify
+    assert result is not None
+    mock_garmin_client.get_weekly_intensity_minutes.assert_called_once_with("2024-01-10")
+
+
+@pytest.mark.asyncio
+async def test_get_morning_training_readiness_tool(app_with_health_wellness, mock_garmin_client):
+    """Test get_morning_training_readiness tool returns morning readiness data"""
+    # Setup mock
+    mock_garmin_client.get_morning_training_readiness.return_value = MOCK_MORNING_TRAINING_READINESS
+
+    # Call tool
+    result = await app_with_health_wellness.call_tool(
+        "get_morning_training_readiness",
+        {"date": "2024-01-15"}
+    )
+
+    # Verify
+    assert result is not None
+    mock_garmin_client.get_morning_training_readiness.assert_called_once_with("2024-01-15")
 
 
 # Error handling tests
