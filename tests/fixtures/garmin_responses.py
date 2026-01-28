@@ -438,12 +438,29 @@ MOCK_PROGRESS_SUMMARY = {
 }
 
 MOCK_HRV_DATA = {
-    "calendarDate": "2024-01-15",
-    "weeklyAvg": 45,
-    "lastNightAvg": 48,
-    "lastNight5MinHigh": 52,
-    "status": "BALANCED",
-    "feedbackPhrase": "Your HRV is in the normal range"
+    "userProfilePk": 12345678,
+    "hrvSummary": {
+        "calendarDate": "2024-01-15",
+        "weeklyAvg": 45,
+        "lastNightAvg": 48,
+        "lastNight5MinHigh": 52,
+        "baseline": {
+            "lowUpper": 35,
+            "balancedLow": 40,
+            "balancedUpper": 55,
+            "markerValue": 0.5,
+        },
+        "status": "BALANCED",
+        "feedbackPhrase": "HRV_BALANCED_2",
+        "createTimeStamp": "2024-01-15T07:30:00.000",
+    },
+    "hrvReadings": [
+        {"hrvValue": 45, "readingTimeGMT": "2024-01-15T00:15:00.0", "readingTimeLocal": "2024-01-15T00:15:00.0"},
+        {"hrvValue": 48, "readingTimeGMT": "2024-01-15T00:20:00.0", "readingTimeLocal": "2024-01-15T00:20:00.0"},
+        {"hrvValue": 52, "readingTimeGMT": "2024-01-15T00:25:00.0", "readingTimeLocal": "2024-01-15T00:25:00.0"},
+    ],
+    "sleepStartTimestampLocal": "2024-01-15T00:10:00.0",
+    "sleepEndTimestampLocal": "2024-01-15T07:30:00.0",
 }
 
 # Workouts
@@ -564,16 +581,101 @@ MOCK_ACTIVITY_TYPES = [
         "displayName": "Cycling",
         "parentTypeId": None,
         "isHidden": False,
-    }
+    },
+    {
+        "typeId": 3,
+        "typeKey": "hiking",
+        "displayName": "Hiking",
+        "parentTypeId": 17,
+        "isHidden": False,
+    },
+    {
+        "typeId": 163,
+        "typeKey": "yoga",
+        "displayName": "Yoga",
+        "parentTypeId": 29,
+        "isHidden": False,
+    },
 ]
 
-# Training
+MOCK_ENDURANCE_SCORE = {
+    "userProfilePK": 12345678,
+    "startDate": "2024-01-08",
+    "endDate": "2024-01-15",
+    "avg": 5631,
+    "max": 5740,
+    "groupMap": {
+        "2024-01-08": {
+            "groupAverage": 5548,
+            "groupMax": 5561,
+            "enduranceContributorDTOList": [
+                {"activityTypeId": 3, "group": None, "contribution": 8.89},
+                {"activityTypeId": None, "group": 0, "contribution": 82.15},
+                {"activityTypeId": None, "group": 1, "contribution": 4.10},
+                {"activityTypeId": None, "group": 8, "contribution": 4.86},
+            ],
+        },
+    },
+    "enduranceScoreDTO": {
+        "userProfilePK": 12345678,
+        "deviceId": 1234567890,
+        "calendarDate": "2024-01-15",
+        "overallScore": 5712,
+        "classification": 2,
+        "feedbackPhrase": 38,
+        "primaryTrainingDevice": True,
+        "gaugeLowerLimit": 3570,
+        "classificationLowerLimitIntermediate": 5100,
+        "classificationLowerLimitTrained": 5800,
+        "classificationLowerLimitWellTrained": 6500,
+        "classificationLowerLimitExpert": 7200,
+        "classificationLowerLimitSuperior": 7900,
+        "classificationLowerLimitElite": 8600,
+        "gaugeUpperLimit": 10320,
+        "contributors": [
+            {"activityTypeId": None, "group": 0, "contribution": 87.47},
+            {"activityTypeId": 3, "group": None, "contribution": 5.49},
+            {"activityTypeId": 163, "group": None, "contribution": 3.13},
+            {"activityTypeId": None, "group": 8, "contribution": 3.91},
+        ],
+    },
+}
+
+# Training - Lactate Threshold
+# Response format for latest=True
 MOCK_LACTATE_THRESHOLD = {
-    "lactateThresholdHeartRate": 165,
-    "lactateThresholdSpeed": 3.5,
-    "lactateThresholdPace": 286,
-    "runningLactateThresholdHeartRate": 165,
-    "autoDetected": True,
-    "measurementDate": "2024-01-15T10:30:00",
-    "sport": "running",
+    "speed_and_heart_rate": {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15T10:30:00.000",
+        "speed": 0.32222132,
+        "heartRate": 169,
+        "heartRateCycling": None,
+    },
+    "power": {
+        "userProfilePk": 12345678,
+        "calendarDate": "2024-01-15T11:00:00.000",
+        "origin": "weight",
+        "sport": "RUNNING",
+        "functionalThresholdPower": 334,
+        "weight": 73.0,
+        "powerToWeight": 4.575,
+        "isStale": False,
+    },
+}
+
+# Response format for latest=False (date range)
+MOCK_LACTATE_THRESHOLD_RANGE = {
+    "speed": [
+        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.29444, "updatedDate": "2024-01-08"},
+        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.30555, "updatedDate": "2024-01-12"},
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.31666, "updatedDate": "2024-01-15"},
+    ],
+    "heartRate": [
+        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 165, "updatedDate": "2024-01-08"},
+        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 167, "updatedDate": "2024-01-12"},
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 169, "updatedDate": "2024-01-15"},
+    ],
+    "power": [
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 334.0, "updatedDate": "2024-01-15"},
+    ],
 }
