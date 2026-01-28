@@ -1,6 +1,7 @@
 """
 Training and performance functions for Garmin Connect MCP Server
 """
+
 import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
@@ -30,38 +31,42 @@ def register_tools(app):
             metric: Metric to get progress for (e.g., "elevationGain", "duration", "distance", "movingDuration")
         """
         try:
-            summary = garmin_client.get_progress_summary_between_dates(
+            summary_data = garmin_client.get_progress_summary_between_dates(
                 start_date, end_date, metric
             )
-            if not summary:
+
+            if not summary_data:
                 return f"No progress summary found for {metric} between {start_date} and {end_date}."
+
+            # The API returns a list with one item containing stats by activity type
+            if isinstance(summary_data, list) and len(summary_data) > 0:
+                data = summary_data[0]
+            else:
+                return f"Unexpected response format from API"
 
             # Curate to essential fields only
             curated = {
                 "metric": metric,
                 "start_date": start_date,
                 "end_date": end_date,
+                "date": data.get("date"),
+                "count_of_activities": data.get("countOfActivities"),
+                "stats_by_activity_type": {},
             }
 
-            # Add metric-specific fields with proper units
-            if metric == "distance":
-                curated["total_distance_meters"] = summary.get('totalDistance')
-                curated["avg_distance_meters"] = summary.get('avgDistance')
-            elif metric == "duration":
-                curated["total_duration_seconds"] = summary.get('totalDuration')
-                curated["avg_duration_seconds"] = summary.get('avgDuration')
-            elif metric == "elevationGain":
-                curated["total_elevation_meters"] = summary.get('totalElevationGain')
-                curated["avg_elevation_meters"] = summary.get('avgElevationGain')
-            elif metric == "movingDuration":
-                curated["total_moving_seconds"] = summary.get('totalMovingDuration')
-                curated["avg_moving_seconds"] = summary.get('avgMovingDuration')
-
-            # Add common training metrics
-            curated["aerobic_effect"] = summary.get('aerobicEffect')
-            curated["anaerobic_effect"] = summary.get('anaerobicEffect')
-            curated["training_load"] = summary.get('trainingLoad')
-            curated["activity_count"] = summary.get('numberOfActivities')
+            # Parse stats by activity type
+            stats = data.get("stats", {})
+            for activity_type, activity_stats in stats.items():
+                if metric in activity_stats:
+                    metric_data = activity_stats[metric]
+                    if metric_data and metric_data.get("count", 0) > 0:
+                        curated["stats_by_activity_type"][activity_type] = {
+                            "count": metric_data.get("count"),
+                            "sum": metric_data.get("sum"),
+                            "avg": metric_data.get("avg"),
+                            "min": metric_data.get("min"),
+                            "max": metric_data.get("max"),
+                        }
 
             # Remove None values
             curated = {k: v for k, v in curated.items() if v is not None}
@@ -80,28 +85,44 @@ def register_tools(app):
         """
         try:
             hill_score_data = garmin_client.get_hill_score(start_date, end_date)
+
             if not hill_score_data:
                 return f"No hill score data found between {start_date} and {end_date}."
+
+            # Parse the period average and max score
+            period_avg_score = hill_score_data.get("periodAvgScore", {})
+            avg_score = (
+                next(iter(period_avg_score.values())) if period_avg_score else None
+            )
+
+            # Get the most recent daily score (first in list)
+            daily_scores = hill_score_data.get("hillScoreDTOList", [])
+            latest_score = daily_scores[0] if daily_scores else {}
 
             # Curate to essential fields only
             curated = {
                 "start_date": start_date,
                 "end_date": end_date,
-                "hill_score": hill_score_data.get('hillScore'),
-                "current_hill_score": hill_score_data.get('currentHillScore'),
-
-                # Recent performance
-                "recent_elevation_gain_meters": hill_score_data.get('recentElevationGain'),
-                "recent_ascent_time_seconds": hill_score_data.get('recentAscentTime'),
-                "recent_climb_count": hill_score_data.get('recentClimbCount'),
-
-                # Historical averages
-                "avg_elevation_gain_meters": hill_score_data.get('avgElevationGain'),
-                "avg_ascent_time_seconds": hill_score_data.get('avgAscentTime'),
-
-                # Performance indicators
-                "improvement_percent": hill_score_data.get('improvementPercent'),
-                "qualifier": hill_score_data.get('hillScoreQualifier'),
+                "period_avg_score": avg_score,
+                "max_score": hill_score_data.get("maxScore"),
+                # Latest daily score
+                "latest_date": latest_score.get("calendarDate"),
+                "latest_overall_score": latest_score.get("overallScore"),
+                "latest_strength_score": latest_score.get("strengthScore"),
+                "latest_endurance_score": latest_score.get("enduranceScore"),
+                "latest_classification_id": latest_score.get(
+                    "hillScoreClassificationId"
+                ),
+                # Daily scores over the period
+                "daily_scores": [
+                    {
+                        "date": score.get("calendarDate"),
+                        "overall": score.get("overallScore"),
+                        "strength": score.get("strengthScore"),
+                        "endurance": score.get("enduranceScore"),
+                    }
+                    for score in daily_scores
+                ],
             }
 
             # Remove None values
@@ -128,21 +149,18 @@ def register_tools(app):
             curated = {
                 "start_date": start_date,
                 "end_date": end_date,
-                "endurance_score": endurance_data.get('enduranceScore'),
-                "current_endurance_score": endurance_data.get('currentEnduranceScore'),
-
+                "endurance_score": endurance_data.get("enduranceScore"),
+                "current_endurance_score": endurance_data.get("currentEnduranceScore"),
                 # Recent performance
-                "recent_duration_seconds": endurance_data.get('recentDuration'),
-                "recent_distance_meters": endurance_data.get('recentDistance'),
-                "recent_activity_count": endurance_data.get('recentActivityCount'),
-
+                "recent_duration_seconds": endurance_data.get("recentDuration"),
+                "recent_distance_meters": endurance_data.get("recentDistance"),
+                "recent_activity_count": endurance_data.get("recentActivityCount"),
                 # Historical averages
-                "avg_duration_seconds": endurance_data.get('avgDuration'),
-                "avg_distance_meters": endurance_data.get('avgDistance'),
-
+                "avg_duration_seconds": endurance_data.get("avgDuration"),
+                "avg_distance_meters": endurance_data.get("avgDistance"),
                 # Performance indicators
-                "improvement_percent": endurance_data.get('improvementPercent'),
-                "qualifier": endurance_data.get('enduranceScoreQualifier'),
+                "improvement_percent": endurance_data.get("improvementPercent"),
+                "qualifier": endurance_data.get("enduranceScoreQualifier"),
             }
 
             # Remove None values
@@ -167,23 +185,26 @@ def register_tools(app):
                 return f"No activity found with ID {activity_id}."
 
             # Extract training effect data from activity summary
-            summary = activity.get('summaryDTO', {})
+            summary = activity.get("summaryDTO", {})
 
             # Curate to essential fields only
             curated = {
                 "activity_id": activity_id,
-                "aerobic_effect": summary.get('trainingEffect'),  # This is aerobic training effect
-                "anaerobic_effect": summary.get('anaerobicTrainingEffect'),
-                "training_effect_label": summary.get('trainingEffectLabel'),
-
+                "aerobic_effect": summary.get(
+                    "trainingEffect"
+                ),  # This is aerobic training effect
+                "anaerobic_effect": summary.get("anaerobicTrainingEffect"),
+                "training_effect_label": summary.get("trainingEffectLabel"),
                 # Recovery metrics
-                "recovery_time_hours": round(summary.get('recoveryTime', 0) / 60, 1) if summary.get('recoveryTime') else None,
-
+                "recovery_time_hours": (
+                    round(summary.get("recoveryTime", 0) / 60, 1)
+                    if summary.get("recoveryTime")
+                    else None
+                ),
                 # Training load
-                "training_load": summary.get('activityTrainingLoad'),
-
+                "training_load": summary.get("activityTrainingLoad"),
                 # Additional metrics that may be available
-                "performance_condition": summary.get('performanceCondition'),
+                "performance_condition": summary.get("performanceCondition"),
             }
 
             # Remove None values
@@ -208,24 +229,24 @@ def register_tools(app):
             # Curate to essential fields only
             curated = {
                 "date": date,
-
                 # VO2 Max metrics
-                "vo2_max": metrics.get('vo2MaxValue'),
-                "vo2_max_precision": metrics.get('vo2MaxPrecisionIndex'),
-
+                "vo2_max": metrics.get("vo2MaxValue"),
+                "vo2_max_precision": metrics.get("vo2MaxPrecisionIndex"),
                 # Fitness age
-                "fitness_age_years": metrics.get('fitnessAge'),
-                "chronological_age_years": metrics.get('chronologicalAge'),
-                "fitness_age_description": metrics.get('fitnessAgeDescription'),
-
+                "fitness_age_years": metrics.get("fitnessAge"),
+                "chronological_age_years": metrics.get("chronologicalAge"),
+                "fitness_age_description": metrics.get("fitnessAgeDescription"),
                 # Lactate threshold
-                "lactate_threshold_heart_rate_bpm": metrics.get('lactateThresholdHeartRate'),
-                "lactate_threshold_speed_mps": metrics.get('lactateThresholdSpeed'),
-                "lactate_threshold_pace_seconds_per_km": metrics.get('lactateThresholdPace'),
-
+                "lactate_threshold_heart_rate_bpm": metrics.get(
+                    "lactateThresholdHeartRate"
+                ),
+                "lactate_threshold_speed_mps": metrics.get("lactateThresholdSpeed"),
+                "lactate_threshold_pace_seconds_per_km": metrics.get(
+                    "lactateThresholdPace"
+                ),
                 # Other max metrics
-                "max_heart_rate_bpm": metrics.get('maxHeartRate'),
-                "max_avg_power_watts": metrics.get('functionalThresholdPower'),
+                "max_heart_rate_bpm": metrics.get("maxHeartRate"),
+                "max_avg_power_watts": metrics.get("functionalThresholdPower"),
             }
 
             # Remove None values
@@ -249,25 +270,21 @@ def register_tools(app):
 
             # Curate to essential fields only
             curated = {
-                "date": hrv_data.get('calendarDate') or date,
-
+                "date": hrv_data.get("calendarDate") or date,
                 # Current HRV values
-                "last_night_avg_hrv_ms": hrv_data.get('lastNightAvg'),
-                "last_night_5min_high_hrv_ms": hrv_data.get('lastNight5MinHigh'),
-
+                "last_night_avg_hrv_ms": hrv_data.get("lastNightAvg"),
+                "last_night_5min_high_hrv_ms": hrv_data.get("lastNight5MinHigh"),
                 # Baseline and trends
-                "weekly_avg_hrv_ms": hrv_data.get('weeklyAvg'),
-                "baseline_hrv_ms": hrv_data.get('baseline'),
-
+                "weekly_avg_hrv_ms": hrv_data.get("weeklyAvg"),
+                "baseline_hrv_ms": hrv_data.get("baseline"),
                 # Status and feedback
-                "status": hrv_data.get('status'),
-                "feedback": hrv_data.get('feedbackPhrase'),
-                "status_value": hrv_data.get('statusValue'),
-
+                "status": hrv_data.get("status"),
+                "feedback": hrv_data.get("feedbackPhrase"),
+                "status_value": hrv_data.get("statusValue"),
                 # Historical markers
-                "last_7_days_avg_hrv_ms": hrv_data.get('lastSevenDaysAvg'),
-                "balanced_low_hrv_ms": hrv_data.get('balancedLow'),
-                "balanced_high_hrv_ms": hrv_data.get('balancedHigh'),
+                "last_7_days_avg_hrv_ms": hrv_data.get("lastSevenDaysAvg"),
+                "balanced_low_hrv_ms": hrv_data.get("balancedLow"),
+                "balanced_high_hrv_ms": hrv_data.get("balancedHigh"),
             }
 
             # Remove None values
@@ -292,19 +309,17 @@ def register_tools(app):
             # Curate to essential fields only
             curated = {
                 "date": date,
-                "fitness_age_years": fitness_age.get('fitnessAge'),
-                "chronological_age_years": fitness_age.get('chronologicalAge'),
-                "age_difference_years": fitness_age.get('ageDifference'),
-
+                "fitness_age_years": fitness_age.get("fitnessAge"),
+                "chronological_age_years": fitness_age.get("chronologicalAge"),
+                "age_difference_years": fitness_age.get("ageDifference"),
                 # Contributing metrics
-                "vo2_max": fitness_age.get('vo2Max'),
-                "resting_heart_rate_bpm": fitness_age.get('restingHeartRate'),
-                "bmi": fitness_age.get('bmi'),
-                "body_fat_percent": fitness_age.get('bodyFatPercent'),
-
+                "vo2_max": fitness_age.get("vo2Max"),
+                "resting_heart_rate_bpm": fitness_age.get("restingHeartRate"),
+                "bmi": fitness_age.get("bmi"),
+                "body_fat_percent": fitness_age.get("bodyFatPercent"),
                 # Metadata
-                "fitness_age_description": fitness_age.get('fitnessAgeDescription'),
-                "measurement_timestamp": fitness_age.get('measurementDate'),
+                "fitness_age_description": fitness_age.get("fitnessAgeDescription"),
+                "measurement_timestamp": fitness_age.get("measurementDate"),
             }
 
             # Remove None values
@@ -330,8 +345,8 @@ def register_tools(app):
                 return f"No training status data found for {date}."
 
             # Extract from nested structure
-            recent_status = status.get('mostRecentTrainingStatus', {})
-            latest_data = recent_status.get('latestTrainingStatusData', {})
+            recent_status = status.get("mostRecentTrainingStatus", {})
+            latest_data = recent_status.get("latestTrainingStatusData", {})
 
             # Get first device data (usually the primary device)
             device_data = {}
@@ -339,14 +354,14 @@ def register_tools(app):
                 device_data = data
                 break
 
-            acwr_data = device_data.get('acuteTrainingLoadDTO', {})
+            acwr_data = device_data.get("acuteTrainingLoadDTO", {})
 
             # VO2 Max data
-            vo2_data = status.get('mostRecentVO2Max', {}).get('generic', {})
+            vo2_data = status.get("mostRecentVO2Max", {}).get("generic", {})
 
             # Training load balance
-            load_balance = status.get('mostRecentTrainingLoadBalance', {})
-            load_map = load_balance.get('metricsTrainingLoadBalanceDTOMap', {})
+            load_balance = status.get("mostRecentTrainingLoadBalance", {})
+            load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap", {})
             load_data = {}
             for device_id, data in load_map.items():
                 load_data = data
@@ -354,32 +369,32 @@ def register_tools(app):
 
             # Curate to essential fields only - remove userIds
             curated = {
-                "date": device_data.get('calendarDate', date),
-
+                "date": device_data.get("calendarDate", date),
                 # Training status
-                "training_status": device_data.get('trainingStatus'),
-                "training_status_feedback": device_data.get('trainingStatusFeedbackPhrase'),
-                "sport": device_data.get('sport'),
-                "fitness_trend": device_data.get('fitnessTrend'),
-
+                "training_status": device_data.get("trainingStatus"),
+                "training_status_feedback": device_data.get(
+                    "trainingStatusFeedbackPhrase"
+                ),
+                "sport": device_data.get("sport"),
+                "fitness_trend": device_data.get("fitnessTrend"),
                 # Acute Chronic Workload Ratio
-                "acute_load": acwr_data.get('dailyTrainingLoadAcute'),
-                "chronic_load": acwr_data.get('dailyTrainingLoadChronic'),
-                "load_ratio": acwr_data.get('dailyAcuteChronicWorkloadRatio'),
-                "acwr_status": acwr_data.get('acwrStatus'),
-                "acwr_percent": acwr_data.get('acwrPercent'),
-                "optimal_chronic_load_min": acwr_data.get('minTrainingLoadChronic'),
-                "optimal_chronic_load_max": acwr_data.get('maxTrainingLoadChronic'),
-
+                "acute_load": acwr_data.get("dailyTrainingLoadAcute"),
+                "chronic_load": acwr_data.get("dailyTrainingLoadChronic"),
+                "load_ratio": acwr_data.get("dailyAcuteChronicWorkloadRatio"),
+                "acwr_status": acwr_data.get("acwrStatus"),
+                "acwr_percent": acwr_data.get("acwrPercent"),
+                "optimal_chronic_load_min": acwr_data.get("minTrainingLoadChronic"),
+                "optimal_chronic_load_max": acwr_data.get("maxTrainingLoadChronic"),
                 # VO2 Max
-                "vo2_max": vo2_data.get('vo2MaxValue'),
-                "vo2_max_precise": vo2_data.get('vo2MaxPreciseValue'),
-
+                "vo2_max": vo2_data.get("vo2MaxValue"),
+                "vo2_max_precise": vo2_data.get("vo2MaxPreciseValue"),
                 # Monthly training load
-                "monthly_load_aerobic_low": load_data.get('monthlyLoadAerobicLow'),
-                "monthly_load_aerobic_high": load_data.get('monthlyLoadAerobicHigh'),
-                "monthly_load_anaerobic": load_data.get('monthlyLoadAnaerobic'),
-                "training_balance_feedback": load_data.get('trainingBalanceFeedbackPhrase'),
+                "monthly_load_aerobic_low": load_data.get("monthlyLoadAerobicLow"),
+                "monthly_load_aerobic_high": load_data.get("monthlyLoadAerobicHigh"),
+                "monthly_load_anaerobic": load_data.get("monthlyLoadAnaerobic"),
+                "training_balance_feedback": load_data.get(
+                    "trainingBalanceFeedbackPhrase"
+                ),
             }
 
             # Remove None values
@@ -408,15 +423,23 @@ def register_tools(app):
             # Curate the lactate threshold data
             curated = {
                 "date": date,
-                "lactate_threshold_bpm": threshold.get('lactateThresholdHeartRate'),
-                "lactate_threshold_speed_mps": threshold.get('lactateThresholdSpeed'),
-                "lactate_threshold_pace_seconds_per_km": threshold.get('lactateThresholdPace'),
-                "running_lactate_threshold_bpm": threshold.get('runningLactateThresholdHeartRate'),
-                "cycling_lactate_threshold_bpm": threshold.get('cyclingLactateThresholdHeartRate'),
-                "cycling_lactate_threshold_watts": threshold.get('cyclingLactateThresholdPower'),
-                "auto_detected": threshold.get('autoDetected'),
-                "measurement_timestamp": threshold.get('measurementDate'),
-                "sport": threshold.get('sport'),
+                "lactate_threshold_bpm": threshold.get("lactateThresholdHeartRate"),
+                "lactate_threshold_speed_mps": threshold.get("lactateThresholdSpeed"),
+                "lactate_threshold_pace_seconds_per_km": threshold.get(
+                    "lactateThresholdPace"
+                ),
+                "running_lactate_threshold_bpm": threshold.get(
+                    "runningLactateThresholdHeartRate"
+                ),
+                "cycling_lactate_threshold_bpm": threshold.get(
+                    "cyclingLactateThresholdHeartRate"
+                ),
+                "cycling_lactate_threshold_watts": threshold.get(
+                    "cyclingLactateThresholdPower"
+                ),
+                "auto_detected": threshold.get("autoDetected"),
+                "measurement_timestamp": threshold.get("measurementDate"),
+                "sport": threshold.get("sport"),
             }
 
             # Remove None values
