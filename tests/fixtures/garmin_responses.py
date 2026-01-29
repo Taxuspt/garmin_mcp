@@ -374,6 +374,15 @@ MOCK_DEVICE_SETTINGS = {
     "timeFormat": "24_HOUR"
 }
 
+MOCK_DEVICE_LAST_USED = {
+    "userDeviceId": 4113247000,
+    "userProfileNumber": 80653452,
+    "lastUsedDeviceName": "Garmin Forerunner 945",
+    "lastUsedDeviceApplicationKey": "123456789",
+    "lastUsedDeviceUploadTime": 1706457600000,
+    "imageUrl": "https://example.com/device.png",
+}
+
 # Weight Management
 MOCK_WEIGH_INS = [
     {
@@ -409,23 +418,57 @@ MOCK_UNIT_SYSTEM = {
     "elevationUnit": "METER"
 }
 
-# Gear
+# Gear - matches actual Garmin API structure
 MOCK_GEAR = [
     {
-        "gearId": 123,
-        "displayName": "Running Shoes - Nike",
-        "gearTypeName": "SHOE",
-        "distance": 500000,  # meters
-        "dateBegin": "2024-01-01",
-        "isActive": True
+        "gearPk": 37406207,
+        "uuid": "8abfc40d71fb4860bce19072b6c79644",
+        "userProfilePk": 80653452,
+        "gearMakeName": "Other",
+        "gearModelName": "Unknown Shoes",
+        "gearTypeName": "Shoes",
+        "gearStatusName": "active",
+        "displayName": "Nimbus 25",
+        "customMakeModel": "Asics Nimbus 25",
+        "dateBegin": "2024-03-15T00:00:00.0",
+        "dateEnd": None,
+        "maximumMeters": 643738.0,
+        "notified": True,
+    },
+    {
+        "gearPk": 30974314,
+        "uuid": "6f27ed27397749ac9f6f450e039c2424",
+        "userProfilePk": 80653452,
+        "gearMakeName": "Other",
+        "gearModelName": "Unknown Shoes",
+        "gearTypeName": "Shoes",
+        "gearStatusName": "retired",
+        "displayName": "Nimbus 24",
+        "customMakeModel": "ASICS Gel-Nimbus 24",
+        "dateBegin": "2022-09-09T23:00:00.0",
+        "dateEnd": "2024-04-01T19:14:05.0",
+        "maximumMeters": 700000.0,
+        "notified": True,
+    },
+]
+
+MOCK_GEAR_DEFAULTS = [
+    {
+        "uuid": "8abfc40d71fb4860bce19072b6c79644",
+        "activityTypePk": 1,  # Running
+        "defaultGear": True,
     }
 ]
 
 MOCK_GEAR_STATS = {
-    "gearId": 123,
-    "totalDistance": 500000,
-    "totalActivities": 50,
-    "avgDistance": 10000
+    "gearPk": 37406207,
+    "uuid": "8abfc40d71fb4860bce19072b6c79644",
+    "createDate": 1710511566000,
+    "updateDate": 1769631904000,
+    "totalDistance": 881406.607421875,
+    "totalActivities": 137,
+    "isProcessing": False,
+    "processing": False,
 }
 
 # Training
