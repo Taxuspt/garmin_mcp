@@ -547,51 +547,55 @@ MOCK_MENSTRUAL_DATA = {
     "symptoms": []
 }
 
-# Weekly Health Metrics (added in v0.2.38)
-MOCK_WEEKLY_STEPS = {
-    "startDate": "2024-01-08",
-    "endDate": "2024-01-14",
-    "totalSteps": 70000,
-    "averageSteps": 10000,
-    "weeklyStepGoal": 70000,
-    "dailyStepTotals": [
-        {"calendarDate": "2024-01-08", "totalSteps": 12000},
-        {"calendarDate": "2024-01-09", "totalSteps": 9500},
-        {"calendarDate": "2024-01-10", "totalSteps": 11000},
-    ]
-}
+# Weekly Health Metrics - APIs return lists of weekly aggregates
+MOCK_WEEKLY_STEPS = [
+    {
+        "calendarDate": "2024-01-08",
+        "values": {
+            "totalSteps": 70000,
+            "averageSteps": 10000,
+            "totalDistance": 50000,
+            "averageDistance": 7142,
+            "wellnessDataDaysCount": 7,
+        },
+    },
+    {
+        "calendarDate": "2024-01-01",
+        "values": {
+            "totalSteps": 65000,
+            "averageSteps": 9285,
+            "totalDistance": 46000,
+            "averageDistance": 6571,
+            "wellnessDataDaysCount": 7,
+        },
+    },
+]
 
-MOCK_WEEKLY_STRESS = {
-    "startDate": "2024-01-08",
-    "endDate": "2024-01-14",
-    "averageStressLevel": 35,
-    "maxStressLevel": 75,
-    "dailyStressLevels": [
-        {
-            "calendarDate": "2024-01-08",
-            "averageStressLevel": 32,
-            "maxStressLevel": 65,
-            "restStressDuration": 28800,
-            "lowStressDuration": 18000,
-        }
-    ]
-}
+MOCK_WEEKLY_STRESS = [
+    {
+        "calendarDate": "2024-01-08",
+        "value": 35,
+    },
+    {
+        "calendarDate": "2024-01-01",
+        "value": 38,
+    },
+]
 
-MOCK_WEEKLY_INTENSITY_MINUTES = {
-    "startDate": "2024-01-08",
-    "endDate": "2024-01-14",
-    "moderateIntensityMinutes": 120,
-    "vigorousIntensityMinutes": 45,
-    "totalIntensityMinutes": 165,
-    "weeklyGoalMinutes": 150,
-    "dailyIntensityMinutes": [
-        {
-            "calendarDate": "2024-01-08",
-            "moderateIntensityMinutes": 30,
-            "vigorousIntensityMinutes": 10,
-        }
-    ]
-}
+MOCK_WEEKLY_INTENSITY_MINUTES = [
+    {
+        "calendarDate": "2024-01-08",
+        "weeklyGoal": 150,
+        "moderateValue": 120,
+        "vigorousValue": 45,
+    },
+    {
+        "calendarDate": "2024-01-01",
+        "weeklyGoal": 150,
+        "moderateValue": 90,
+        "vigorousValue": 30,
+    },
+]
 
 MOCK_MORNING_TRAINING_READINESS = {
     "readinessScore": 75,
