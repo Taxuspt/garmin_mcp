@@ -1,6 +1,7 @@
 """
 Device-related functions for Garmin Connect MCP Server
 """
+
 import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
@@ -13,13 +14,6 @@ def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
     garmin_client = client
-
-
-def _camel_to_snake(name: str) -> str:
-    """Convert camelCase to snake_case"""
-    import re
-    name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
 
 
 def register_tools(app):
@@ -38,22 +32,23 @@ def register_tools(app):
             for device in devices:
                 # Extract only essential device information
                 device_info = {
-                    "device_id": device.get('deviceId'),
-                    "device_name": device.get('displayName') or device.get('productDisplayName'),
-                    "model": device.get('partNumber'),
-                    "manufacturer": device.get('manufacturerName'),
-                    "serial_number": device.get('serialNumber'),
-                    "software_version": device.get('softwareVersionString'),
-                    "status": device.get('deviceStatusName'),
-                    "last_sync_time": device.get('lastSyncTime'),
-                    "battery_status": device.get('batteryStatus'),
+                    "device_id": device.get("deviceId"),
+                    "device_name": device.get("displayName")
+                    or device.get("productDisplayName"),
+                    "model": device.get("partNumber"),
+                    "manufacturer": device.get("manufacturerName"),
+                    "serial_number": device.get("serialNumber"),
+                    "software_version": device.get("softwareVersionString"),
+                    "status": device.get("deviceStatusName"),
+                    "last_sync_time": device.get("lastSyncTime"),
+                    "battery_status": device.get("batteryStatus"),
                 }
 
                 # Add optional metadata if present
-                if device.get('deviceType'):
-                    device_info["device_type"] = device.get('deviceType')
-                if device.get('primaryDevice') is not None:
-                    device_info["is_primary"] = device.get('primaryDevice')
+                if device.get("deviceType"):
+                    device_info["device_type"] = device.get("deviceType")
+                if device.get("primaryDevice") is not None:
+                    device_info["is_primary"] = device.get("primaryDevice")
 
                 # Remove None values
                 device_info = {k: v for k, v in device_info.items() if v is not None}
@@ -73,17 +68,21 @@ def register_tools(app):
 
             # Curate to essential device information
             curated = {
-                "device_id": device.get('deviceId'),
-                "device_name": device.get('displayName') or device.get('productDisplayName'),
-                "model": device.get('partNumber'),
-                "manufacturer": device.get('manufacturerName'),
-                "serial_number": device.get('serialNumber'),
-                "software_version": device.get('softwareVersionString'),
-                "last_sync_time": device.get('lastSyncTime'),
-                "battery_status": device.get('batteryStatus'),
-                "device_type": device.get('deviceType'),
-                "user_profile_id": device.get('userProfileId'),
+                "user_device_id": device.get("userDeviceId"),
+                "device_name": device.get("lastUsedDeviceName"),
+                "device_key": device.get("lastUsedDeviceApplicationKey"),
+                "user_profile_id": device.get("userProfileNumber"),
             }
+
+            # Format last upload time if available
+            upload_time_ms = device.get("lastUsedDeviceUploadTime")
+            if upload_time_ms:
+                dt = datetime.datetime.fromtimestamp(upload_time_ms / 1000.0)
+                curated["last_upload_time"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            # Add image URL if available
+            if device.get("imageUrl"):
+                curated["image_url"] = device.get("imageUrl")
 
             # Remove None values
             curated = {k: v for k, v in curated.items() if v is not None}
@@ -96,55 +95,65 @@ def register_tools(app):
     async def get_device_settings(device_id: Union[int, str]) -> str:
         """Get settings for a specific Garmin device
 
+        Returns device configuration including time/date format, units,
+        activity tracking settings, and alarm information.
+
         Args:
-            device_id: Device ID
+            device_id: Device ID (can be obtained from get_devices or get_device_last_used)
         """
         try:
-            device_id = str(device_id)
             settings = garmin_client.get_device_settings(device_id)
             if not settings:
                 return f"No settings found for device ID {device_id}."
 
-            # Curate device settings to essential configuration
+            # Curate device settings
             curated = {
-                "device_id": device_id,
+                "device_id": settings.get("deviceId"),
+                "time_format": settings.get("timeFormat"),
+                "date_format": settings.get("dateFormat"),
+                "measurement_units": settings.get("measurementUnits"),
             }
 
-            # Time and location settings
-            if settings.get('timeZoneOffsetInMilliseconds') is not None:
-                curated["timezone_offset_hours"] = round(settings.get('timeZoneOffsetInMilliseconds') / 3600000, 1)
-            if settings.get('timeMode'):
-                curated["time_mode"] = settings.get('timeMode')
+            # Sound/vibration settings
+            if settings.get("keyTonesEnabled") is not None:
+                curated["key_tones_enabled"] = settings.get("keyTonesEnabled")
+            if settings.get("keyVibrationEnabled") is not None:
+                curated["key_vibration_enabled"] = settings.get("keyVibrationEnabled")
+            if settings.get("alertTonesEnabled") is not None:
+                curated["alert_tones_enabled"] = settings.get("alertTonesEnabled")
 
-            # Display settings
-            display_fields = ['displayOrientation', 'activityTrackingOn', 'backlightMode', 'backlightTimeout']
-            for field in display_fields:
-                if settings.get(field) is not None:
-                    curated[_camel_to_snake(field)] = settings.get(field)
+            # Activity tracking settings
+            activity_tracking = settings.get("activityTracking", {})
+            if activity_tracking:
+                tracking_info = {}
+                if activity_tracking.get("moveAlertEnabled") is not None:
+                    tracking_info["move_alert_enabled"] = activity_tracking.get(
+                        "moveAlertEnabled"
+                    )
+                if activity_tracking.get("pulseOxSleepTrackingEnabled") is not None:
+                    tracking_info["pulse_ox_sleep_tracking"] = activity_tracking.get(
+                        "pulseOxSleepTrackingEnabled"
+                    )
+                if activity_tracking.get("highHrAlertEnabled") is not None:
+                    tracking_info["high_hr_alert_enabled"] = activity_tracking.get(
+                        "highHrAlertEnabled"
+                    )
+                if activity_tracking.get("lowHrAlertEnabled") is not None:
+                    tracking_info["low_hr_alert_enabled"] = activity_tracking.get(
+                        "lowHrAlertEnabled"
+                    )
+                if tracking_info:
+                    curated["activity_tracking"] = tracking_info
 
-            # Heart rate settings
-            hr_fields = ['heartRateMonitorMode', 'heartRateBroadcastMode', 'wristHeartRateEnabled']
-            for field in hr_fields:
-                if settings.get(field) is not None:
-                    curated[_camel_to_snake(field)] = settings.get(field)
+            # Alarm count
+            alarms = settings.get("alarms", [])
+            if alarms:
+                enabled_alarms = [a for a in alarms if a.get("alarmMode") == "ON"]
+                curated["alarm_count"] = len(alarms)
+                curated["enabled_alarm_count"] = len(enabled_alarms)
 
-            # Fitness/Activity settings
-            activity_fields = ['autoActivityDetect', 'moveBarEnabled', 'moveAlertEnabled',
-                              'goalsSyncEnabled', 'intenseMinutesGoalEnabled']
-            for field in activity_fields:
-                if settings.get(field) is not None:
-                    curated[_camel_to_snake(field)] = settings.get(field)
-
-            # Smart features
-            smart_fields = ['smartNotificationsEnabled', 'phoneCallsEnabled', 'textMessagesEnabled',
-                           'weatherAlertsEnabled', 'weatherForecastEnabled']
-            for field in smart_fields:
-                if settings.get(field) is not None:
-                    curated[_camel_to_snake(field)] = settings.get(field)
-
-            # GPS settings
-            if settings.get('gpsEnabled') is not None:
-                curated["gps_enabled"] = settings.get('gpsEnabled')
+            # Remove None values
+            curated = {k: v for k, v in curated.items() if v is not None}
 
             return json.dumps(curated, indent=2)
         except Exception as e:
@@ -152,27 +161,51 @@ def register_tools(app):
 
     @app.tool()
     async def get_primary_training_device() -> str:
-        """Get information about the primary training device"""
+        """Get information about the primary training device
+
+        Returns details about the device designated as primary for training
+        metrics, along with other wearable devices on the account.
+        """
         try:
-            device = garmin_client.get_primary_training_device()
-            if not device:
+            data = garmin_client.get_primary_training_device()
+            if not data:
                 return "No primary training device found."
 
-            # Curate to essential device information
+            # Extract primary device ID
+            primary_device = data.get("PrimaryTrainingDevice", {})
+            primary_device_id = primary_device.get("deviceId")
+
+            # Get primary training devices list
+            primary_devices = data.get("PrimaryTrainingDevices", {}).get(
+                "deviceWeights", []
+            )
+
             curated = {
-                "device_id": device.get('deviceId'),
-                "device_name": device.get('displayName') or device.get('productDisplayName'),
-                "model": device.get('partNumber'),
-                "manufacturer": device.get('manufacturerName'),
-                "serial_number": device.get('serialNumber'),
-                "software_version": device.get('softwareVersionString'),
-                "last_sync_time": device.get('lastSyncTime'),
-                "battery_status": device.get('batteryStatus'),
-                "device_type": device.get('deviceType'),
+                "primary_device_id": primary_device_id,
             }
 
-            # Remove None values
-            curated = {k: v for k, v in curated.items() if v is not None}
+            # Curate the list of training-capable devices
+            if primary_devices:
+                devices_list = []
+                for device in primary_devices:
+                    device_info = {
+                        "device_id": device.get("deviceId"),
+                        "display_name": device.get("displayName"),
+                        "is_primary_wearable": device.get("primaryWearableDevice"),
+                        "primary_training_capable": device.get("primaryTrainingCapable"),
+                    }
+                    if device.get("imageUrl"):
+                        device_info["image_url"] = device.get("imageUrl")
+                    devices_list.append(device_info)
+                curated["training_devices"] = devices_list
+                curated["training_device_count"] = len(devices_list)
+
+            # Add wearable device count
+            wearable_data = data.get("WearableDevices", {})
+            if wearable_data.get("wearableDeviceCount"):
+                curated["wearable_device_count"] = wearable_data.get(
+                    "wearableDeviceCount"
+                )
 
             return json.dumps(curated, indent=2)
         except Exception as e:
@@ -182,8 +215,11 @@ def register_tools(app):
     async def get_device_solar_data(device_id: str, date: str) -> str:
         """Get solar data for a specific device
 
+        Returns solar charging data for devices with solar panels (e.g., Instinct Solar,
+        Fenix Solar). Only applicable to solar-capable devices.
+
         Args:
-            device_id: Device ID
+            device_id: Device ID (can be obtained from get_devices)
             date: Date in YYYY-MM-DD format
         """
         try:
@@ -191,76 +227,91 @@ def register_tools(app):
             if not solar_data:
                 return f"No solar data found for device ID {device_id} on {date}."
 
-            # Curate solar data to essential metrics
-            curated = {
-                "device_id": device_id,
-                "date": date,
-                "solar_intensity_avg": solar_data.get('solarIntensityAvg'),
-                "solar_intensity_max": solar_data.get('solarIntensityMax'),
-                "battery_charged_percent": solar_data.get('batteryCharged'),
-                "battery_used_percent": solar_data.get('batteryUsed'),
-                "battery_net_percent": solar_data.get('batteryNet'),
-            }
+            # Check if there's actual data in the response
+            daily_data = solar_data.get("solarDailyDataDTOs", [])
+            if not daily_data:
+                return f"No solar data available for device ID {device_id} on {date}. This device may not have solar capabilities."
 
-            # Add time ranges if available
-            if solar_data.get('solarIntensityStartTimeGmt'):
-                curated["start_time"] = solar_data.get('solarIntensityStartTimeGmt')
-            if solar_data.get('solarIntensityEndTimeGmt'):
-                curated["end_time"] = solar_data.get('solarIntensityEndTimeGmt')
+            # Curate solar data from the daily DTOs
+            curated_days = []
+            for day_data in daily_data:
+                curated_day = {
+                    "date": day_data.get("calendarDate"),
+                    "solar_intensity_avg": day_data.get("solarIntensityAvg"),
+                    "solar_intensity_max": day_data.get("solarIntensityMax"),
+                    "battery_charged_percent": day_data.get("batteryCharged"),
+                    "battery_used_percent": day_data.get("batteryUsed"),
+                    "battery_net_percent": day_data.get("batteryNet"),
+                }
+                # Remove None values
+                curated_day = {k: v for k, v in curated_day.items() if v is not None}
+                curated_days.append(curated_day)
 
-            # Remove None values
-            curated = {k: v for k, v in curated.items() if v is not None}
-
-            return json.dumps(curated, indent=2)
+            return json.dumps(
+                {"device_id": device_id, "solar_data": curated_days}, indent=2
+            )
         except Exception as e:
             return f"Error retrieving solar data: {str(e)}"
 
+    def _format_alarm_time(minutes: int) -> str:
+        """Convert minutes from midnight to HH:MM format"""
+        if minutes is None:
+            return None
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours:02d}:{mins:02d}"
+
     @app.tool()
     async def get_device_alarms() -> str:
-        """Get alarms from all Garmin devices"""
+        """Get alarms from all Garmin devices
+
+        Returns all configured alarms with their schedules, sounds, and enabled status.
+        """
         try:
             alarms = garmin_client.get_device_alarms()
             if not alarms:
                 return "No device alarms found."
 
-            # Curate alarm data to essential information
+            # Curate alarm data
             curated = []
             for alarm in alarms:
+                # Convert time from minutes to HH:MM
+                alarm_time_minutes = alarm.get("alarmTime")
+                alarm_time = _format_alarm_time(alarm_time_minutes)
+
                 alarm_info = {
-                    "alarm_id": alarm.get('alarmId'),
-                    "device_id": alarm.get('deviceId'),
-                    "time": alarm.get('time'),
-                    "enabled": alarm.get('enabled'),
-                    "repeat_days": [],
+                    "alarm_id": alarm.get("alarmId"),
+                    "time": alarm_time,
+                    "time_minutes": alarm_time_minutes,
+                    "enabled": alarm.get("alarmMode") == "ON",
+                    "days": alarm.get("alarmDays", []),
+                    "sound": alarm.get("alarmSound"),
                 }
 
-                # Parse repeat days
-                days_map = {
-                    'monday': alarm.get('repeatMonday'),
-                    'tuesday': alarm.get('repeatTuesday'),
-                    'wednesday': alarm.get('repeatWednesday'),
-                    'thursday': alarm.get('repeatThursday'),
-                    'friday': alarm.get('repeatFriday'),
-                    'saturday': alarm.get('repeatSaturday'),
-                    'sunday': alarm.get('repeatSunday'),
-                }
-                alarm_info["repeat_days"] = [day for day, enabled in days_map.items() if enabled]
+                # Add backlight setting
+                if alarm.get("backlight"):
+                    alarm_info["backlight"] = alarm.get("backlight")
 
-                # Add optional fields
-                if alarm.get('alarmName'):
-                    alarm_info["name"] = alarm.get('alarmName')
-                if alarm.get('smartAlarmEnabled') is not None:
-                    alarm_info["smart_alarm_enabled"] = alarm.get('smartAlarmEnabled')
-                if alarm.get('backlight') is not None:
-                    alarm_info["backlight"] = alarm.get('backlight')
-                if alarm.get('vibration') is not None:
-                    alarm_info["vibration"] = alarm.get('vibration')
+                # Add message if present
+                if alarm.get("alarmMessage"):
+                    alarm_info["message"] = alarm.get("alarmMessage")
 
-                # Remove None and empty values
-                alarm_info = {k: v for k, v in alarm_info.items() if v is not None and v != []}
                 curated.append(alarm_info)
 
-            return json.dumps(curated, indent=2)
+            # Sort by time
+            curated.sort(key=lambda x: x.get("time_minutes") or 0)
+
+            # Summary
+            enabled_count = sum(1 for a in curated if a.get("enabled"))
+
+            return json.dumps(
+                {
+                    "total_alarms": len(curated),
+                    "enabled_alarms": enabled_count,
+                    "alarms": curated,
+                },
+                indent=2,
+            )
         except Exception as e:
             return f"Error retrieving device alarms: {str(e)}"
 
