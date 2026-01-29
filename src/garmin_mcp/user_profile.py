@@ -23,9 +23,7 @@ def register_tools(app):
         """Get user's full name from profile"""
         try:
             full_name = garmin_client.get_full_name()
-            if isinstance(full_name, (dict, list)):
-                return json.dumps(full_name, indent=2)
-            return str(full_name)
+            return json.dumps({"full_name": full_name}, indent=2)
         except Exception as e:
             return f"Error retrieving user's full name: {str(e)}"
 
@@ -34,9 +32,7 @@ def register_tools(app):
         """Get user's preferred unit system from profile"""
         try:
             unit_system = garmin_client.get_unit_system()
-            if isinstance(unit_system, (dict, list)):
-                return json.dumps(unit_system, indent=2)
-            return str(unit_system)
+            return json.dumps({"unit_system": unit_system}, indent=2)
         except Exception as e:
             return f"Error retrieving unit system: {str(e)}"
     
