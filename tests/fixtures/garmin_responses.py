@@ -383,18 +383,56 @@ MOCK_DEVICE_LAST_USED = {
     "imageUrl": "https://example.com/device.png",
 }
 
-# Weight Management
-MOCK_WEIGH_INS = [
-    {
-        "date": 1705276800000,
-        "weight": 70000,  # grams
+# Weight Management - API returns nested structure
+MOCK_WEIGH_INS = {
+    "dailyWeightSummaries": [
+        {
+            "summaryDate": "2024-01-15",
+            "numOfWeightEntries": 1,
+            "allWeightMetrics": [
+                {
+                    "samplePk": 1705276800000,
+                    "calendarDate": "2024-01-15",
+                    "weight": 70000,  # grams
+                    "bmi": 22.5,
+                    "bodyFat": 15.0,
+                    "bodyWater": 60.0,
+                    "boneMass": 3200,  # grams
+                    "muscleMass": 32500,  # grams
+                    "sourceType": "MANUAL",
+                    "timestampGMT": 1705276800000,
+                }
+            ],
+        }
+    ],
+    "totalAverage": {
+        "weight": 70000,
         "bmi": 22.5,
-        "bodyFat": 15.0,
-        "bodyWater": 60.0,
-        "boneMass": 3.2,
-        "muscleMass": 32.5
-    }
-]
+    },
+}
+
+MOCK_DAILY_WEIGH_INS = {
+    "startDate": "2024-01-15",
+    "endDate": "2024-01-15",
+    "dateWeightList": [
+        {
+            "samplePk": 1705276800000,
+            "calendarDate": "2024-01-15",
+            "weight": 70000,  # grams
+            "bmi": 22.5,
+            "bodyFat": 15.0,
+            "bodyWater": 60.0,
+            "boneMass": 3200,  # grams
+            "muscleMass": 32500,  # grams
+            "sourceType": "MANUAL",
+            "timestampGMT": 1705276800000,
+        }
+    ],
+    "totalAverage": {
+        "weight": 70000,
+        "bmi": 22.5,
+    },
+}
 
 # User Profile
 MOCK_USER_PROFILE = {

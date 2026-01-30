@@ -28,6 +28,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_DEVICE_SETTINGS,
     MOCK_DEVICE_LAST_USED,
     MOCK_WEIGH_INS,
+    MOCK_DAILY_WEIGH_INS,
     MOCK_USER_PROFILE,
     MOCK_UNIT_SYSTEM,
     MOCK_GEAR,
@@ -140,7 +141,7 @@ async def test_get_weigh_ins_tool(app_with_weight, mock_garmin_client):
 @pytest.mark.asyncio
 async def test_get_daily_weigh_ins_tool(app_with_weight, mock_garmin_client):
     """Test get_daily_weigh_ins tool"""
-    mock_garmin_client.get_daily_weigh_ins.return_value = MOCK_WEIGH_INS[0]
+    mock_garmin_client.get_daily_weigh_ins.return_value = MOCK_DAILY_WEIGH_INS
     result = await app_with_weight.call_tool(
         "get_daily_weigh_ins",
         {"date": "2024-01-15"}
@@ -152,8 +153,8 @@ async def test_get_daily_weigh_ins_tool(app_with_weight, mock_garmin_client):
 @pytest.mark.asyncio
 async def test_delete_weigh_ins_tool(app_with_weight, mock_garmin_client):
     """Test delete_weigh_ins tool"""
-    delete_response = {"status": "success", "message": "Weigh-in deleted"}
-    mock_garmin_client.delete_weigh_ins.return_value = delete_response
+    # API returns count of deleted entries
+    mock_garmin_client.delete_weigh_ins.return_value = 1
     result = await app_with_weight.call_tool(
         "delete_weigh_ins",
         {"date": "2024-01-15", "delete_all": True}
