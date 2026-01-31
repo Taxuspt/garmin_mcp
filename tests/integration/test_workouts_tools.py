@@ -1,7 +1,7 @@
 """
 Integration tests for workouts module MCP tools
 
-Tests all 7 workout tools using FastMCP integration with mocked Garmin API responses.
+Tests workout tools using FastMCP integration with mocked Garmin API responses.
 """
 import pytest
 from unittest.mock import Mock
@@ -42,7 +42,9 @@ async def test_get_workouts_tool(app_with_workouts, mock_garmin_client):
 
 @pytest.mark.asyncio
 async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
-    """Test get_workout_by_id tool returns specific workout"""
+    """Test get_workout_by_id tool returns specific workout with step details"""
+    import json as json_module
+
     # Setup mock
     mock_garmin_client.get_workout_by_id.return_value = MOCK_WORKOUT_DETAILS
 
@@ -56,6 +58,30 @@ async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.get_workout_by_id.assert_called_once_with(workout_id)
+
+    # Parse the result and verify curation includes steps
+    result_data = json_module.loads(result[0].text)
+    assert result_data["id"] == 123456
+    assert result_data["name"] == "5K Tempo Run"
+    assert result_data["sport"] == "running"
+
+    # Verify segments include steps
+    assert "segments" in result_data
+    segment = result_data["segments"][0]
+    assert "steps" in segment
+    assert segment["step_count"] == 3
+
+    # Verify step details are curated correctly
+    warmup_step = segment["steps"][0]
+    assert warmup_step["type"] == "warmup"
+    assert warmup_step["end_condition"] == "time"
+    assert warmup_step["end_condition_value"] == 600.0
+
+    # Verify interval step with target zone
+    interval_step = segment["steps"][1]
+    assert interval_step["type"] == "interval"
+    assert interval_step["target_type"] == "pace.zone"
+    assert interval_step["target_zone"] == 4
 
 
 @pytest.mark.asyncio
@@ -86,39 +112,21 @@ async def test_upload_workout_tool(app_with_workouts, mock_garmin_client):
     """Test upload_workout tool uploads new workout"""
     # Setup mock
     upload_response = {
-        "status": "success",
         "workoutId": 123457,
-        "message": "Workout uploaded successfully"
+        "workoutName": "New Workout"
     }
     mock_garmin_client.upload_workout.return_value = upload_response
 
-    # Call tool - pass dict which will be converted to JSON
+    # Call tool - pass dict which is passed directly to API
     workout_data = {"workoutName": "New Workout", "sportType": {"sportTypeId": 1}}
     result = await app_with_workouts.call_tool(
         "upload_workout",
         {"workout_data": workout_data}
     )
 
-    # Verify - the function converts dict to JSON string before calling API
+    # Verify - dict is passed directly to the API
     assert result is not None
-    import json
-    expected_json = json.dumps(workout_data)
-    mock_garmin_client.upload_workout.assert_called_once_with(expected_json)
-
-
-@pytest.mark.asyncio
-async def test_upload_activity_tool(app_with_workouts, mock_garmin_client):
-    """Test upload_activity tool - returns placeholder message"""
-    # Call tool - this is a placeholder implementation that doesn't call the client
-    file_path = "/path/to/activity.fit"
-    result = await app_with_workouts.call_tool(
-        "upload_activity",
-        {"file_path": file_path}
-    )
-
-    # Verify - should return placeholder message
-    assert result is not None
-    assert "not supported" in str(result).lower()
+    mock_garmin_client.upload_workout.assert_called_once_with(workout_data)
 
 
 @pytest.mark.asyncio

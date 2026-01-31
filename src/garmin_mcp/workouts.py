@@ -42,34 +42,66 @@ def _curate_workout_summary(workout: dict) -> dict:
     return {k: v for k, v in summary.items() if v is not None}
 
 
-def _curate_workout_segment(segment: dict) -> dict:
-    """Extract essential segment information"""
+def _curate_workout_step(step: dict) -> dict:
+    """Extract essential workout step information"""
+    step_type = step.get('stepType', {})
+    end_condition = step.get('endCondition', {})
+    target_type = step.get('targetType', {})
+
     curated = {
-        "order": segment.get('segmentOrder'),
-        "type": segment.get('type'),
+        "order": step.get('stepOrder'),
+        "type": step_type.get('stepTypeKey'),  # warmup, interval, cooldown, rest, recover
     }
 
-    # Duration
-    if segment.get('duration'):
-        curated['duration_seconds'] = segment.get('duration')
-    elif segment.get('durationType'):
-        curated['duration_type'] = segment.get('durationType')
+    # Description
+    if step.get('description'):
+        curated['description'] = step.get('description')
 
-    # Target/Intensity
-    if segment.get('targetType'):
-        curated['target_type'] = segment.get('targetType')
-    if segment.get('targetValue'):
-        curated['target_value'] = segment.get('targetValue')
-    if segment.get('intensityType'):
-        curated['intensity'] = segment.get('intensityType')
+    # End condition (duration/distance/lap press)
+    if end_condition.get('conditionTypeKey'):
+        curated['end_condition'] = end_condition.get('conditionTypeKey')
+    if step.get('endConditionValue'):
+        # Value meaning depends on condition type (seconds for time, meters for distance)
+        curated['end_condition_value'] = step.get('endConditionValue')
 
-    # Distance if applicable
-    if segment.get('distance'):
-        curated['distance_meters'] = segment.get('distance')
+    # Target (heart rate, pace, power, etc.)
+    target_key = target_type.get('workoutTargetTypeKey')
+    if target_key and target_key != 'no.target':
+        curated['target_type'] = target_key
+        if step.get('targetValueOne'):
+            curated['target_value_low'] = step.get('targetValueOne')
+        if step.get('targetValueTwo'):
+            curated['target_value_high'] = step.get('targetValueTwo')
+        if step.get('zoneNumber'):
+            curated['target_zone'] = step.get('zoneNumber')
 
-    # Repeat count for intervals
-    if segment.get('repeatCount'):
-        curated['repeat_count'] = segment.get('repeatCount')
+    # Repeat info for repeat steps
+    if step.get('type') == 'RepeatGroupDTO':
+        curated['repeat_count'] = step.get('numberOfIterations')
+
+    return {k: v for k, v in curated.items() if v is not None}
+
+
+def _curate_workout_segment(segment: dict) -> dict:
+    """Extract essential segment information including workout steps"""
+    sport_type = segment.get('sportType', {})
+
+    curated = {
+        "order": segment.get('segmentOrder'),
+        "sport": sport_type.get('sportTypeKey'),
+    }
+
+    # Estimated metrics
+    if segment.get('estimatedDurationInSecs'):
+        curated['estimated_duration_seconds'] = segment.get('estimatedDurationInSecs')
+    if segment.get('estimatedDistanceInMeters'):
+        curated['estimated_distance_meters'] = segment.get('estimatedDistanceInMeters')
+
+    # Workout steps - the actual content of the segment
+    steps = segment.get('workoutSteps', [])
+    if steps:
+        curated['steps'] = [_curate_workout_step(s) for s in steps]
+        curated['step_count'] = len(steps)
 
     return {k: v for k, v in curated.items() if v is not None}
 
@@ -217,15 +249,16 @@ def register_tools(app):
             workout_data: Dictionary containing workout structure (name, sport type, segments, etc.)
         """
         try:
-            workout_json = json.dumps(workout_data)
-            result = garmin_client.upload_workout(workout_json)
+            # Pass dict directly - library handles conversion
+            result = garmin_client.upload_workout(workout_data)
 
             # Curate the response
             if isinstance(result, dict):
                 curated = {
+                    "status": "success",
                     "workout_id": result.get('workoutId'),
                     "name": result.get('workoutName'),
-                    "status": "uploaded",
+                    "message": "Workout uploaded successfully"
                 }
                 # Remove None values
                 curated = {k: v for k, v in curated.items() if v is not None}
@@ -234,30 +267,6 @@ def register_tools(app):
             return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error uploading workout: {str(e)}"
-
-    @app.tool()
-    async def upload_activity(file_path: str) -> str:
-        """Upload an activity from a file
-
-        Note: File upload operations are not supported in the MCP server implementation.
-        Use the Garmin Connect web interface or mobile app to upload activity files.
-
-        Args:
-            file_path: Path to the activity file (.fit, .gpx, .tcx)
-        """
-        try:
-            return json.dumps({
-                "status": "not_supported",
-                "message": "Activity upload from file path is not supported in this MCP server implementation.",
-                "file_path": file_path,
-                "alternatives": [
-                    "Use Garmin Connect web interface",
-                    "Use Garmin Connect mobile app",
-                    "Use garminconnect Python library directly"
-                ]
-            }, indent=2)
-        except Exception as e:
-            return f"Error uploading activity: {str(e)}"
 
     @app.tool()
     async def get_scheduled_workouts(start_date: str, end_date: str) -> str:

@@ -559,20 +559,44 @@ MOCK_WORKOUT_DETAILS = {
     "workoutName": "5K Tempo Run",
     "description": "Tempo run workout for 5K training",
     "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+    "estimatedDuration": 2400,
+    "estimatedDistance": 5000,
+    "createdDate": "2024-01-15T10:00:00.0",
+    "updatedDate": "2024-01-15T10:00:00.0",
     "workoutSegments": [
         {
             "segmentOrder": 1,
-            "type": "WARMUP",
-            "duration": 600,
-            "targetType": "HEART_RATE_ZONE",
-            "targetValue": 2
-        },
-        {
-            "segmentOrder": 2,
-            "type": "INTERVAL",
-            "duration": 1200,
-            "targetType": "PACE",
-            "targetValue": 240  # seconds per km
+            "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+            "workoutSteps": [
+                {
+                    "stepId": 1001,
+                    "stepOrder": 1,
+                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                    "description": "Easy warm up run",
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": 600.0,
+                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                },
+                {
+                    "stepId": 1002,
+                    "stepOrder": 2,
+                    "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                    "description": "Tempo pace",
+                    "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance"},
+                    "endConditionValue": 5000.0,
+                    "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"},
+                    "zoneNumber": 4
+                },
+                {
+                    "stepId": 1003,
+                    "stepOrder": 3,
+                    "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
+                    "description": "Cool down jog",
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": 300.0,
+                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                }
+            ]
         }
     ]
 }
