@@ -700,148 +700,147 @@ def register_tools(app):
             return f"Error retrieving daily wellness events: {str(e)}"
 
     @app.tool()
-    async def get_weekly_steps(date: str) -> str:
+    async def get_weekly_steps(end_date: str, weeks: int = 4) -> str:
         """Get weekly step data aggregates
 
-        Returns weekly step totals and daily breakdown for the week containing
-        the specified date.
+        Returns weekly step totals for the specified number of weeks ending at end_date.
 
         Args:
-            date: Date in YYYY-MM-DD format (any day in the week you want to query)
+            end_date: End date in YYYY-MM-DD format
+            weeks: Number of weeks to fetch (default 4, max 52)
         """
         try:
-            weekly_data = garmin_client.get_weekly_steps(date)
+            weeks = min(weeks, 52)  # Cap at 52 weeks
+            weekly_data = garmin_client.get_weekly_steps(end_date, weeks)
             if not weekly_data:
-                return f"No weekly steps data found for week containing {date}"
+                return f"No weekly steps data found for {weeks} weeks ending {end_date}"
 
-            # Curate the weekly steps data
-            curated = {
-                "date": date,
-                "week_start_date": weekly_data.get('startDate'),
-                "week_end_date": weekly_data.get('endDate'),
-                "total_steps": weekly_data.get('totalSteps'),
-                "average_steps_per_day": weekly_data.get('averageSteps'),
-                "goal_steps": weekly_data.get('weeklyStepGoal'),
-            }
+            # Curate the weekly steps data (API returns a list with nested 'values')
+            curated_weeks = []
+            for week in weekly_data:
+                values = week.get("values", {})
+                week_entry = {
+                    "week_start": week.get("calendarDate"),
+                    "total_steps": values.get("totalSteps"),
+                    "average_steps": values.get("averageSteps"),
+                    "total_distance_meters": values.get("totalDistance"),
+                    "average_distance_meters": values.get("averageDistance"),
+                    "days_with_data": values.get("wellnessDataDaysCount"),
+                }
+                # Remove None values
+                week_entry = {k: v for k, v in week_entry.items() if v is not None}
+                curated_weeks.append(week_entry)
 
-            # Add daily breakdown if available
-            daily_values = weekly_data.get('dailyStepTotals', [])
-            if daily_values:
-                curated["daily_steps"] = [
-                    {
-                        "date": day.get('calendarDate'),
-                        "steps": day.get('totalSteps'),
-                    }
-                    for day in daily_values
-                ]
+            # Sort by date (most recent first)
+            curated_weeks.sort(key=lambda x: x.get("week_start") or "", reverse=True)
 
-            # Remove None values
-            curated = {k: v for k, v in curated.items() if v is not None}
-
-            return json.dumps(curated, indent=2)
+            return json.dumps(
+                {
+                    "end_date": end_date,
+                    "weeks_requested": weeks,
+                    "weeks_returned": len(curated_weeks),
+                    "weekly_data": curated_weeks,
+                },
+                indent=2,
+            )
         except Exception as e:
             return f"Error retrieving weekly steps data: {str(e)}"
 
     @app.tool()
-    async def get_weekly_stress(date: str) -> str:
-        """Get weekly stress data trends
+    async def get_weekly_stress(end_date: str, weeks: int = 4) -> str:
+        """Get weekly stress data aggregates
 
-        Returns weekly stress averages and daily breakdown for the week containing
-        the specified date.
+        Returns weekly stress values for the specified number of weeks ending at end_date.
 
         Args:
-            date: Date in YYYY-MM-DD format (any day in the week you want to query)
+            end_date: End date in YYYY-MM-DD format
+            weeks: Number of weeks to fetch (default 4, max 52)
         """
         try:
-            weekly_data = garmin_client.get_weekly_stress(date)
+            weeks = min(weeks, 52)  # Cap at 52 weeks
+            weekly_data = garmin_client.get_weekly_stress(end_date, weeks)
             if not weekly_data:
-                return f"No weekly stress data found for week containing {date}"
+                return f"No weekly stress data found for {weeks} weeks ending {end_date}"
 
-            # Curate the weekly stress data
-            curated = {
-                "date": date,
-                "week_start_date": weekly_data.get('startDate'),
-                "week_end_date": weekly_data.get('endDate'),
-                "average_stress_level": weekly_data.get('averageStressLevel'),
-                "max_stress_level": weekly_data.get('maxStressLevel'),
-            }
+            # Curate the weekly stress data (API returns a list)
+            curated_weeks = []
+            for week in weekly_data:
+                week_entry = {
+                    "week_start": week.get("calendarDate"),
+                    "stress_value": week.get("value"),
+                }
+                # Remove None values
+                week_entry = {k: v for k, v in week_entry.items() if v is not None}
+                curated_weeks.append(week_entry)
 
-            # Add daily breakdown if available
-            daily_values = weekly_data.get('dailyStressLevels', [])
-            if daily_values:
-                curated["daily_stress"] = [
-                    {
-                        "date": day.get('calendarDate'),
-                        "avg_stress_level": day.get('averageStressLevel'),
-                        "max_stress_level": day.get('maxStressLevel'),
-                        "rest_stress_duration_seconds": day.get('restStressDuration'),
-                        "activity_stress_duration_seconds": day.get('activityStressDuration'),
-                        "low_stress_duration_seconds": day.get('lowStressDuration'),
-                        "medium_stress_duration_seconds": day.get('mediumStressDuration'),
-                        "high_stress_duration_seconds": day.get('highStressDuration'),
-                    }
-                    for day in daily_values
-                ]
-                # Remove None values from each daily entry
-                curated["daily_stress"] = [
-                    {k: v for k, v in day.items() if v is not None}
-                    for day in curated["daily_stress"]
-                ]
+            # Sort by date (most recent first)
+            curated_weeks.sort(key=lambda x: x.get("week_start") or "", reverse=True)
 
-            # Remove None values
-            curated = {k: v for k, v in curated.items() if v is not None}
-
-            return json.dumps(curated, indent=2)
+            return json.dumps(
+                {
+                    "end_date": end_date,
+                    "weeks_requested": weeks,
+                    "weeks_returned": len(curated_weeks),
+                    "weekly_data": curated_weeks,
+                },
+                indent=2,
+            )
         except Exception as e:
             return f"Error retrieving weekly stress data: {str(e)}"
 
     @app.tool()
-    async def get_weekly_intensity_minutes(date: str) -> str:
-        """Get weekly intensity minutes data
+    async def get_weekly_intensity_minutes(end_date: str, weeks: int = 4) -> str:
+        """Get weekly intensity minutes data aggregates
 
-        Returns weekly totals of moderate and vigorous intensity minutes for the
-        week containing the specified date.
+        Returns weekly intensity minutes (moderate and vigorous) for the specified
+        number of weeks ending at end_date.
 
         Args:
-            date: Date in YYYY-MM-DD format (any day in the week you want to query)
+            end_date: End date in YYYY-MM-DD format
+            weeks: Number of weeks to fetch (default 4, max 52)
         """
         try:
-            weekly_data = garmin_client.get_weekly_intensity_minutes(date)
+            weeks = min(weeks, 52)  # Cap at 52 weeks
+
+            # Calculate start_date from end_date and weeks
+            end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            start_dt = end_dt - datetime.timedelta(days=(weeks * 7) - 1)
+            start_date = start_dt.strftime("%Y-%m-%d")
+
+            weekly_data = garmin_client.get_weekly_intensity_minutes(start_date, end_date)
             if not weekly_data:
-                return f"No weekly intensity minutes data found for week containing {date}"
+                return f"No weekly intensity minutes data found for {weeks} weeks ending {end_date}"
 
-            # Curate the weekly intensity data
-            curated = {
-                "date": date,
-                "week_start_date": weekly_data.get('startDate'),
-                "week_end_date": weekly_data.get('endDate'),
-                "total_moderate_intensity_minutes": weekly_data.get('moderateIntensityMinutes'),
-                "total_vigorous_intensity_minutes": weekly_data.get('vigorousIntensityMinutes'),
-                "total_intensity_minutes": weekly_data.get('totalIntensityMinutes'),
-                "weekly_goal_minutes": weekly_data.get('weeklyGoalMinutes'),
-            }
+            # Curate the weekly intensity data (API returns a list)
+            curated_weeks = []
+            for week in weekly_data:
+                week_entry = {
+                    "week_start": week.get("calendarDate"),
+                    "weekly_goal": week.get("weeklyGoal"),
+                    "moderate_minutes": week.get("moderateValue"),
+                    "vigorous_minutes": week.get("vigorousValue"),
+                }
+                # Calculate total intensity minutes (vigorous counts double per WHO guidelines)
+                moderate = week.get("moderateValue") or 0
+                vigorous = week.get("vigorousValue") or 0
+                week_entry["total_minutes"] = moderate + vigorous
 
-            # Add daily breakdown if available
-            daily_values = weekly_data.get('dailyIntensityMinutes', [])
-            if daily_values:
-                curated["daily_intensity"] = [
-                    {
-                        "date": day.get('calendarDate'),
-                        "moderate_intensity_minutes": day.get('moderateIntensityMinutes'),
-                        "vigorous_intensity_minutes": day.get('vigorousIntensityMinutes'),
-                    }
-                    for day in daily_values
-                ]
-                # Remove None values from each daily entry
-                curated["daily_intensity"] = [
-                    {k: v for k, v in day.items() if v is not None}
-                    for day in curated["daily_intensity"]
-                ]
+                # Remove None values
+                week_entry = {k: v for k, v in week_entry.items() if v is not None}
+                curated_weeks.append(week_entry)
 
-            # Remove None values
-            curated = {k: v for k, v in curated.items() if v is not None}
+            # Sort by date (most recent first)
+            curated_weeks.sort(key=lambda x: x.get("week_start") or "", reverse=True)
 
-            return json.dumps(curated, indent=2)
+            return json.dumps(
+                {
+                    "end_date": end_date,
+                    "weeks_requested": weeks,
+                    "weeks_returned": len(curated_weeks),
+                    "weekly_data": curated_weeks,
+                },
+                indent=2,
+            )
         except Exception as e:
             return f"Error retrieving weekly intensity minutes data: {str(e)}"
 

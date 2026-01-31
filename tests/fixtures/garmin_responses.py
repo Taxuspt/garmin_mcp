@@ -374,18 +374,65 @@ MOCK_DEVICE_SETTINGS = {
     "timeFormat": "24_HOUR"
 }
 
-# Weight Management
-MOCK_WEIGH_INS = [
-    {
-        "date": 1705276800000,
-        "weight": 70000,  # grams
+MOCK_DEVICE_LAST_USED = {
+    "userDeviceId": 4113247000,
+    "userProfileNumber": 80653452,
+    "lastUsedDeviceName": "Garmin Forerunner 945",
+    "lastUsedDeviceApplicationKey": "123456789",
+    "lastUsedDeviceUploadTime": 1706457600000,
+    "imageUrl": "https://example.com/device.png",
+}
+
+# Weight Management - API returns nested structure
+MOCK_WEIGH_INS = {
+    "dailyWeightSummaries": [
+        {
+            "summaryDate": "2024-01-15",
+            "numOfWeightEntries": 1,
+            "allWeightMetrics": [
+                {
+                    "samplePk": 1705276800000,
+                    "calendarDate": "2024-01-15",
+                    "weight": 70000,  # grams
+                    "bmi": 22.5,
+                    "bodyFat": 15.0,
+                    "bodyWater": 60.0,
+                    "boneMass": 3200,  # grams
+                    "muscleMass": 32500,  # grams
+                    "sourceType": "MANUAL",
+                    "timestampGMT": 1705276800000,
+                }
+            ],
+        }
+    ],
+    "totalAverage": {
+        "weight": 70000,
         "bmi": 22.5,
-        "bodyFat": 15.0,
-        "bodyWater": 60.0,
-        "boneMass": 3.2,
-        "muscleMass": 32.5
-    }
-]
+    },
+}
+
+MOCK_DAILY_WEIGH_INS = {
+    "startDate": "2024-01-15",
+    "endDate": "2024-01-15",
+    "dateWeightList": [
+        {
+            "samplePk": 1705276800000,
+            "calendarDate": "2024-01-15",
+            "weight": 70000,  # grams
+            "bmi": 22.5,
+            "bodyFat": 15.0,
+            "bodyWater": 60.0,
+            "boneMass": 3200,  # grams
+            "muscleMass": 32500,  # grams
+            "sourceType": "MANUAL",
+            "timestampGMT": 1705276800000,
+        }
+    ],
+    "totalAverage": {
+        "weight": 70000,
+        "bmi": 22.5,
+    },
+}
 
 # User Profile
 MOCK_USER_PROFILE = {
@@ -409,23 +456,57 @@ MOCK_UNIT_SYSTEM = {
     "elevationUnit": "METER"
 }
 
-# Gear
+# Gear - matches actual Garmin API structure
 MOCK_GEAR = [
     {
-        "gearId": 123,
-        "displayName": "Running Shoes - Nike",
-        "gearTypeName": "SHOE",
-        "distance": 500000,  # meters
-        "dateBegin": "2024-01-01",
-        "isActive": True
+        "gearPk": 37406207,
+        "uuid": "8abfc40d71fb4860bce19072b6c79644",
+        "userProfilePk": 80653452,
+        "gearMakeName": "Other",
+        "gearModelName": "Unknown Shoes",
+        "gearTypeName": "Shoes",
+        "gearStatusName": "active",
+        "displayName": "Nimbus 25",
+        "customMakeModel": "Asics Nimbus 25",
+        "dateBegin": "2024-03-15T00:00:00.0",
+        "dateEnd": None,
+        "maximumMeters": 643738.0,
+        "notified": True,
+    },
+    {
+        "gearPk": 30974314,
+        "uuid": "6f27ed27397749ac9f6f450e039c2424",
+        "userProfilePk": 80653452,
+        "gearMakeName": "Other",
+        "gearModelName": "Unknown Shoes",
+        "gearTypeName": "Shoes",
+        "gearStatusName": "retired",
+        "displayName": "Nimbus 24",
+        "customMakeModel": "ASICS Gel-Nimbus 24",
+        "dateBegin": "2022-09-09T23:00:00.0",
+        "dateEnd": "2024-04-01T19:14:05.0",
+        "maximumMeters": 700000.0,
+        "notified": True,
+    },
+]
+
+MOCK_GEAR_DEFAULTS = [
+    {
+        "uuid": "8abfc40d71fb4860bce19072b6c79644",
+        "activityTypePk": 1,  # Running
+        "defaultGear": True,
     }
 ]
 
 MOCK_GEAR_STATS = {
-    "gearId": 123,
-    "totalDistance": 500000,
-    "totalActivities": 50,
-    "avgDistance": 10000
+    "gearPk": 37406207,
+    "uuid": "8abfc40d71fb4860bce19072b6c79644",
+    "createDate": 1710511566000,
+    "updateDate": 1769631904000,
+    "totalDistance": 881406.607421875,
+    "totalActivities": 137,
+    "isProcessing": False,
+    "processing": False,
 }
 
 # Training
@@ -438,12 +519,29 @@ MOCK_PROGRESS_SUMMARY = {
 }
 
 MOCK_HRV_DATA = {
-    "calendarDate": "2024-01-15",
-    "weeklyAvg": 45,
-    "lastNightAvg": 48,
-    "lastNight5MinHigh": 52,
-    "status": "BALANCED",
-    "feedbackPhrase": "Your HRV is in the normal range"
+    "userProfilePk": 12345678,
+    "hrvSummary": {
+        "calendarDate": "2024-01-15",
+        "weeklyAvg": 45,
+        "lastNightAvg": 48,
+        "lastNight5MinHigh": 52,
+        "baseline": {
+            "lowUpper": 35,
+            "balancedLow": 40,
+            "balancedUpper": 55,
+            "markerValue": 0.5,
+        },
+        "status": "BALANCED",
+        "feedbackPhrase": "HRV_BALANCED_2",
+        "createTimeStamp": "2024-01-15T07:30:00.000",
+    },
+    "hrvReadings": [
+        {"hrvValue": 45, "readingTimeGMT": "2024-01-15T00:15:00.0", "readingTimeLocal": "2024-01-15T00:15:00.0"},
+        {"hrvValue": 48, "readingTimeGMT": "2024-01-15T00:20:00.0", "readingTimeLocal": "2024-01-15T00:20:00.0"},
+        {"hrvValue": 52, "readingTimeGMT": "2024-01-15T00:25:00.0", "readingTimeLocal": "2024-01-15T00:25:00.0"},
+    ],
+    "sleepStartTimestampLocal": "2024-01-15T00:10:00.0",
+    "sleepEndTimestampLocal": "2024-01-15T07:30:00.0",
 }
 
 # Workouts
@@ -461,20 +559,44 @@ MOCK_WORKOUT_DETAILS = {
     "workoutName": "5K Tempo Run",
     "description": "Tempo run workout for 5K training",
     "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+    "estimatedDuration": 2400,
+    "estimatedDistance": 5000,
+    "createdDate": "2024-01-15T10:00:00.0",
+    "updatedDate": "2024-01-15T10:00:00.0",
     "workoutSegments": [
         {
             "segmentOrder": 1,
-            "type": "WARMUP",
-            "duration": 600,
-            "targetType": "HEART_RATE_ZONE",
-            "targetValue": 2
-        },
-        {
-            "segmentOrder": 2,
-            "type": "INTERVAL",
-            "duration": 1200,
-            "targetType": "PACE",
-            "targetValue": 240  # seconds per km
+            "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+            "workoutSteps": [
+                {
+                    "stepId": 1001,
+                    "stepOrder": 1,
+                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                    "description": "Easy warm up run",
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": 600.0,
+                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                },
+                {
+                    "stepId": 1002,
+                    "stepOrder": 2,
+                    "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                    "description": "Tempo pace",
+                    "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance"},
+                    "endConditionValue": 5000.0,
+                    "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"},
+                    "zoneNumber": 4
+                },
+                {
+                    "stepId": 1003,
+                    "stepOrder": 3,
+                    "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
+                    "description": "Cool down jog",
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": 300.0,
+                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                }
+            ]
         }
     ]
 }
@@ -487,51 +609,55 @@ MOCK_MENSTRUAL_DATA = {
     "symptoms": []
 }
 
-# Weekly Health Metrics (added in v0.2.38)
-MOCK_WEEKLY_STEPS = {
-    "startDate": "2024-01-08",
-    "endDate": "2024-01-14",
-    "totalSteps": 70000,
-    "averageSteps": 10000,
-    "weeklyStepGoal": 70000,
-    "dailyStepTotals": [
-        {"calendarDate": "2024-01-08", "totalSteps": 12000},
-        {"calendarDate": "2024-01-09", "totalSteps": 9500},
-        {"calendarDate": "2024-01-10", "totalSteps": 11000},
-    ]
-}
+# Weekly Health Metrics - APIs return lists of weekly aggregates
+MOCK_WEEKLY_STEPS = [
+    {
+        "calendarDate": "2024-01-08",
+        "values": {
+            "totalSteps": 70000,
+            "averageSteps": 10000,
+            "totalDistance": 50000,
+            "averageDistance": 7142,
+            "wellnessDataDaysCount": 7,
+        },
+    },
+    {
+        "calendarDate": "2024-01-01",
+        "values": {
+            "totalSteps": 65000,
+            "averageSteps": 9285,
+            "totalDistance": 46000,
+            "averageDistance": 6571,
+            "wellnessDataDaysCount": 7,
+        },
+    },
+]
 
-MOCK_WEEKLY_STRESS = {
-    "startDate": "2024-01-08",
-    "endDate": "2024-01-14",
-    "averageStressLevel": 35,
-    "maxStressLevel": 75,
-    "dailyStressLevels": [
-        {
-            "calendarDate": "2024-01-08",
-            "averageStressLevel": 32,
-            "maxStressLevel": 65,
-            "restStressDuration": 28800,
-            "lowStressDuration": 18000,
-        }
-    ]
-}
+MOCK_WEEKLY_STRESS = [
+    {
+        "calendarDate": "2024-01-08",
+        "value": 35,
+    },
+    {
+        "calendarDate": "2024-01-01",
+        "value": 38,
+    },
+]
 
-MOCK_WEEKLY_INTENSITY_MINUTES = {
-    "startDate": "2024-01-08",
-    "endDate": "2024-01-14",
-    "moderateIntensityMinutes": 120,
-    "vigorousIntensityMinutes": 45,
-    "totalIntensityMinutes": 165,
-    "weeklyGoalMinutes": 150,
-    "dailyIntensityMinutes": [
-        {
-            "calendarDate": "2024-01-08",
-            "moderateIntensityMinutes": 30,
-            "vigorousIntensityMinutes": 10,
-        }
-    ]
-}
+MOCK_WEEKLY_INTENSITY_MINUTES = [
+    {
+        "calendarDate": "2024-01-08",
+        "weeklyGoal": 150,
+        "moderateValue": 120,
+        "vigorousValue": 45,
+    },
+    {
+        "calendarDate": "2024-01-01",
+        "weeklyGoal": 150,
+        "moderateValue": 90,
+        "vigorousValue": 30,
+    },
+]
 
 MOCK_MORNING_TRAINING_READINESS = {
     "readinessScore": 75,
@@ -564,16 +690,101 @@ MOCK_ACTIVITY_TYPES = [
         "displayName": "Cycling",
         "parentTypeId": None,
         "isHidden": False,
-    }
+    },
+    {
+        "typeId": 3,
+        "typeKey": "hiking",
+        "displayName": "Hiking",
+        "parentTypeId": 17,
+        "isHidden": False,
+    },
+    {
+        "typeId": 163,
+        "typeKey": "yoga",
+        "displayName": "Yoga",
+        "parentTypeId": 29,
+        "isHidden": False,
+    },
 ]
 
-# Training
+MOCK_ENDURANCE_SCORE = {
+    "userProfilePK": 12345678,
+    "startDate": "2024-01-08",
+    "endDate": "2024-01-15",
+    "avg": 5631,
+    "max": 5740,
+    "groupMap": {
+        "2024-01-08": {
+            "groupAverage": 5548,
+            "groupMax": 5561,
+            "enduranceContributorDTOList": [
+                {"activityTypeId": 3, "group": None, "contribution": 8.89},
+                {"activityTypeId": None, "group": 0, "contribution": 82.15},
+                {"activityTypeId": None, "group": 1, "contribution": 4.10},
+                {"activityTypeId": None, "group": 8, "contribution": 4.86},
+            ],
+        },
+    },
+    "enduranceScoreDTO": {
+        "userProfilePK": 12345678,
+        "deviceId": 1234567890,
+        "calendarDate": "2024-01-15",
+        "overallScore": 5712,
+        "classification": 2,
+        "feedbackPhrase": 38,
+        "primaryTrainingDevice": True,
+        "gaugeLowerLimit": 3570,
+        "classificationLowerLimitIntermediate": 5100,
+        "classificationLowerLimitTrained": 5800,
+        "classificationLowerLimitWellTrained": 6500,
+        "classificationLowerLimitExpert": 7200,
+        "classificationLowerLimitSuperior": 7900,
+        "classificationLowerLimitElite": 8600,
+        "gaugeUpperLimit": 10320,
+        "contributors": [
+            {"activityTypeId": None, "group": 0, "contribution": 87.47},
+            {"activityTypeId": 3, "group": None, "contribution": 5.49},
+            {"activityTypeId": 163, "group": None, "contribution": 3.13},
+            {"activityTypeId": None, "group": 8, "contribution": 3.91},
+        ],
+    },
+}
+
+# Training - Lactate Threshold
+# Response format for latest=True
 MOCK_LACTATE_THRESHOLD = {
-    "lactateThresholdHeartRate": 165,
-    "lactateThresholdSpeed": 3.5,
-    "lactateThresholdPace": 286,
-    "runningLactateThresholdHeartRate": 165,
-    "autoDetected": True,
-    "measurementDate": "2024-01-15T10:30:00",
-    "sport": "running",
+    "speed_and_heart_rate": {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15T10:30:00.000",
+        "speed": 0.32222132,
+        "heartRate": 169,
+        "heartRateCycling": None,
+    },
+    "power": {
+        "userProfilePk": 12345678,
+        "calendarDate": "2024-01-15T11:00:00.000",
+        "origin": "weight",
+        "sport": "RUNNING",
+        "functionalThresholdPower": 334,
+        "weight": 73.0,
+        "powerToWeight": 4.575,
+        "isStale": False,
+    },
+}
+
+# Response format for latest=False (date range)
+MOCK_LACTATE_THRESHOLD_RANGE = {
+    "speed": [
+        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.29444, "updatedDate": "2024-01-08"},
+        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.30555, "updatedDate": "2024-01-12"},
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.31666, "updatedDate": "2024-01-15"},
+    ],
+    "heartRate": [
+        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 165, "updatedDate": "2024-01-08"},
+        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 167, "updatedDate": "2024-01-12"},
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 169, "updatedDate": "2024-01-15"},
+    ],
+    "power": [
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 334.0, "updatedDate": "2024-01-15"},
+    ],
 }

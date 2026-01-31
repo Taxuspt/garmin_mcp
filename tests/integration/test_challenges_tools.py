@@ -116,10 +116,15 @@ async def test_get_adhoc_challenges_default(app_with_challenges, mock_garmin_cli
     # Setup mock
     adhoc_challenges = [
         {
-            "challengeId": 1,
-            "challengeName": "January Step Challenge",
-            "challengeType": "STEPS",
-            "status": "IN_PROGRESS"
+            "socialChallengeStatusId": 2,
+            "socialChallengeActivityTypeId": 4,
+            "adHocChallengeName": "January Step Challenge",
+            "adHocChallengeDesc": "Steps Challenge",
+            "uuid": "ABC123",
+            "startDate": "2024-01-01T00:00:00.0",
+            "endDate": "2024-01-31T23:59:59.0",
+            "userRanking": 1,
+            "playerCount": 5,
         }
     ]
     mock_garmin_client.get_adhoc_challenges.return_value = adhoc_challenges
@@ -132,7 +137,7 @@ async def test_get_adhoc_challenges_default(app_with_challenges, mock_garmin_cli
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_adhoc_challenges.assert_called_once_with(0, 100)
+    mock_garmin_client.get_adhoc_challenges.assert_called_once_with(0, 20)
 
 
 @pytest.mark.asyncio
@@ -158,10 +163,18 @@ async def test_get_available_badge_challenges_tool(app_with_challenges, mock_gar
     # Setup mock
     badge_challenges = [
         {
-            "badgeId": 1,
-            "badgeName": "Marathon Challenge",
-            "description": "Run a marathon",
-            "available": True
+            "uuid": "ABC123",
+            "badgeChallengeName": "Marathon Challenge",
+            "challengeCategoryId": 1,
+            "badgeChallengeStatusId": 2,
+            "startDate": "2024-01-01T00:00:00.0",
+            "endDate": "2024-01-31T23:59:59.0",
+            "badgePoints": 4,
+            "badgeUnitId": 1,
+            "badgeProgressValue": None,
+            "badgeTargetValue": 42195.0,
+            "userJoined": False,
+            "joinable": True,
         }
     ]
     mock_garmin_client.get_available_badge_challenges.return_value = badge_challenges
@@ -174,7 +187,7 @@ async def test_get_available_badge_challenges_tool(app_with_challenges, mock_gar
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_available_badge_challenges.assert_called_once_with(1, 100)
+    mock_garmin_client.get_available_badge_challenges.assert_called_once_with(1, 20)
 
 
 @pytest.mark.asyncio
@@ -201,11 +214,18 @@ async def test_get_non_completed_badge_challenges_tool(app_with_challenges, mock
     # Setup mock
     non_completed = [
         {
-            "badgeId": 2,
-            "badgeName": "Ultra Marathon Challenge",
-            "description": "Run an ultra marathon",
-            "progress": 45,
-            "completed": False
+            "uuid": "DEF456",
+            "badgeChallengeName": "Ultra Marathon Challenge",
+            "challengeCategoryId": 1,
+            "badgeChallengeStatusId": 2,
+            "startDate": "2024-01-01T00:00:00.0",
+            "endDate": "2024-01-31T23:59:59.0",
+            "badgePoints": 4,
+            "badgeUnitId": 1,
+            "badgeProgressValue": 21000.0,
+            "badgeTargetValue": 50000.0,
+            "badgeEarnedDate": None,
+            "userJoined": True,
         }
     ]
     mock_garmin_client.get_non_completed_badge_challenges.return_value = non_completed
@@ -218,7 +238,7 @@ async def test_get_non_completed_badge_challenges_tool(app_with_challenges, mock
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_non_completed_badge_challenges.assert_called_once_with(1, 100)
+    mock_garmin_client.get_non_completed_badge_challenges.assert_called_once_with(1, 20)
 
 
 @pytest.mark.asyncio
@@ -250,28 +270,25 @@ async def test_get_inprogress_virtual_challenges_tool(app_with_challenges, mock_
     # Setup mock
     virtual_challenges = [
         {
-            "challengeId": 123,
-            "challengeName": "Virtual NYC Marathon",
-            "challengeType": "VIRTUAL_RACE",
-            "startDate": "2024-01-01",
-            "endDate": "2024-01-31",
-            "progress": 65,
-            "status": "IN_PROGRESS"
+            "uuid": "GHI789",
+            "name": "Virtual NYC Marathon",
+            "startDate": "2024-01-01T00:00:00.0",
+            "endDate": "2024-01-31T23:59:59.0",
+            "progress": 28000.0,
+            "target": 42195.0,
         }
     ]
     mock_garmin_client.get_inprogress_virtual_challenges.return_value = virtual_challenges
 
-    # Call tool
+    # Call tool with default parameters
     result = await app_with_challenges.call_tool(
         "get_inprogress_virtual_challenges",
-        {"start_date": "2024-01-01", "end_date": "2024-01-31"}
+        {}
     )
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_inprogress_virtual_challenges.assert_called_once_with(
-        "2024-01-01", "2024-01-31"
-    )
+    mock_garmin_client.get_inprogress_virtual_challenges.assert_called_once_with(0, 20)
 
 
 # Error handling tests

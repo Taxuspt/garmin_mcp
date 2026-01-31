@@ -7,12 +7,17 @@ import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
 
+import json
+
 from garmin_mcp import training
 from tests.fixtures.garmin_responses import (
     MOCK_PROGRESS_SUMMARY,
     MOCK_HRV_DATA,
     MOCK_TRAINING_STATUS,
     MOCK_LACTATE_THRESHOLD,
+    MOCK_LACTATE_THRESHOLD_RANGE,
+    MOCK_ENDURANCE_SCORE,
+    MOCK_ACTIVITY_TYPES,
 )
 
 
@@ -71,13 +76,13 @@ async def test_get_hill_score_tool(app_with_training, mock_garmin_client):
 
 @pytest.mark.asyncio
 async def test_get_endurance_score_tool(app_with_training, mock_garmin_client):
-    """Test get_endurance_score tool"""
-    # Setup mock
-    endurance_score = {
-        "enduranceScore": 65,
-        "dateRange": {"start": "2024-01-08", "end": "2024-01-15"}
-    }
-    mock_garmin_client.get_endurance_score.return_value = endurance_score
+    """Test get_endurance_score tool with realistic API response"""
+    # Setup mocks
+    mock_garmin_client.get_endurance_score.return_value = MOCK_ENDURANCE_SCORE
+    mock_garmin_client.get_activity_types.return_value = MOCK_ACTIVITY_TYPES
+
+    # Reset the activity type cache to ensure fresh lookup
+    training._activity_type_cache = None
 
     # Call tool
     result = await app_with_training.call_tool(
@@ -85,9 +90,55 @@ async def test_get_endurance_score_tool(app_with_training, mock_garmin_client):
         {"start_date": "2024-01-08", "end_date": "2024-01-15"}
     )
 
-    # Verify
+    # Verify API was called correctly
     assert result is not None
     mock_garmin_client.get_endurance_score.assert_called_once_with("2024-01-08", "2024-01-15")
+
+    # Parse the result and verify content
+    data = json.loads(result[0].text)
+
+    # Check period summary
+    assert data["period_avg_score"] == 5631
+    assert data["period_max_score"] == 5740
+
+    # Check current score
+    assert data["current_score"] == 5712
+    assert data["current_date"] == "2024-01-15"
+    assert data["classification"] == "intermediate"
+    assert data["classification_id"] == 2
+
+    # Check thresholds
+    assert "thresholds" in data
+    assert data["thresholds"]["trained"] == 5800
+    assert data["thresholds"]["well_trained"] == 6500
+
+    # Check contributors have activity type names
+    assert "contributors" in data
+    contributors = data["contributors"]
+    assert len(contributors) == 4
+
+    # Find the hiking contributor
+    hiking_contributor = next(
+        (c for c in contributors if c.get("activity_type") == "hiking"), None
+    )
+    assert hiking_contributor is not None
+    assert hiking_contributor["contribution_percent"] == 5.49
+    assert hiking_contributor["activity_type_id"] == 3
+
+    # Find the yoga contributor
+    yoga_contributor = next(
+        (c for c in contributors if c.get("activity_type") == "yoga"), None
+    )
+    assert yoga_contributor is not None
+    assert yoga_contributor["contribution_percent"] == 3.13
+
+    # Check weekly breakdown exists
+    assert "weekly_breakdown" in data
+    assert len(data["weekly_breakdown"]) == 1
+    week = data["weekly_breakdown"][0]
+    assert week["week_start"] == "2024-01-08"
+    assert week["avg_score"] == 5548
+    assert week["max_score"] == 5561
 
 
 @pytest.mark.asyncio
@@ -115,29 +166,6 @@ async def test_get_training_effect_tool(app_with_training, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.get_activity.assert_called_once_with(12345678901)
-
-
-@pytest.mark.asyncio
-async def test_get_max_metrics_tool(app_with_training, mock_garmin_client):
-    """Test get_max_metrics tool"""
-    # Setup mock
-    max_metrics = {
-        "maxHeartRate": 180,
-        "maxSpeed": 4.5,
-        "maxPower": 350,
-        "date": "2024-01-15"
-    }
-    mock_garmin_client.get_max_metrics.return_value = max_metrics
-
-    # Call tool
-    result = await app_with_training.call_tool(
-        "get_max_metrics",
-        {"date": "2024-01-15"}
-    )
-
-    # Verify
-    assert result is not None
-    mock_garmin_client.get_max_metrics.assert_called_once_with("2024-01-15")
 
 
 @pytest.mark.asyncio
@@ -216,20 +244,60 @@ async def test_get_training_status_tool(app_with_training, mock_garmin_client):
 
 
 @pytest.mark.asyncio
-async def test_get_lactate_threshold_tool(app_with_training, mock_garmin_client):
-    """Test get_lactate_threshold tool returns lactate threshold data"""
-    # Setup mock
+async def test_get_lactate_threshold_tool_latest(app_with_training, mock_garmin_client):
+    """Test get_lactate_threshold tool returns latest lactate threshold data"""
+    # Setup mock with latest=True response format
     mock_garmin_client.get_lactate_threshold.return_value = MOCK_LACTATE_THRESHOLD
 
-    # Call tool
+    # Call tool with no dates (gets latest)
     result = await app_with_training.call_tool(
         "get_lactate_threshold",
-        {"date": "2024-01-15"}
+        {}
     )
 
-    # Verify
+    # Verify API call
     assert result is not None
-    mock_garmin_client.get_lactate_threshold.assert_called_once_with("2024-01-15")
+    mock_garmin_client.get_lactate_threshold.assert_called_once_with(latest=True)
+
+    # Verify output structure
+    data = json.loads(result[0].text)
+    assert data["lactate_threshold_speed_mps"] == 0.32222132
+    assert data["lactate_threshold_heart_rate_bpm"] == 169
+    assert data["functional_threshold_power_watts"] == 334
+    assert data["sport"] == "RUNNING"
+    assert data["power_to_weight"] == 4.575
+
+
+@pytest.mark.asyncio
+async def test_get_lactate_threshold_tool_range(app_with_training, mock_garmin_client):
+    """Test get_lactate_threshold tool returns lactate threshold data for date range"""
+    # Setup mock with date range response format
+    mock_garmin_client.get_lactate_threshold.return_value = MOCK_LACTATE_THRESHOLD_RANGE
+
+    # Call tool with date range
+    result = await app_with_training.call_tool(
+        "get_lactate_threshold",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+
+    # Verify API call
+    assert result is not None
+    mock_garmin_client.get_lactate_threshold.assert_called_once_with(
+        latest=False,
+        start_date="2024-01-08",
+        end_date="2024-01-15",
+    )
+
+    # Verify output structure
+    data = json.loads(result[0].text)
+    assert data["start_date"] == "2024-01-08"
+    assert data["end_date"] == "2024-01-15"
+    assert "speed_history" in data
+    assert len(data["speed_history"]) == 3
+    assert data["speed_history"][0]["date"] == "2024-01-08"
+    assert "heart_rate_history" in data
+    assert len(data["heart_rate_history"]) == 3
+    assert "power_history" in data
 
 
 # Error handling tests

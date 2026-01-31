@@ -482,15 +482,29 @@ async def test_get_weekly_steps_tool(app_with_health_wellness, mock_garmin_clien
     # Setup mock
     mock_garmin_client.get_weekly_steps.return_value = MOCK_WEEKLY_STEPS
 
-    # Call tool
+    # Call tool with end_date and weeks parameters
     result = await app_with_health_wellness.call_tool(
         "get_weekly_steps",
-        {"date": "2024-01-10"}
+        {"end_date": "2024-01-10", "weeks": 4}
     )
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_weekly_steps.assert_called_once_with("2024-01-10")
+    mock_garmin_client.get_weekly_steps.assert_called_once_with("2024-01-10", 4)
+
+
+@pytest.mark.asyncio
+async def test_get_weekly_steps_tool_default_weeks(app_with_health_wellness, mock_garmin_client):
+    """Test get_weekly_steps tool with default weeks parameter"""
+    mock_garmin_client.get_weekly_steps.return_value = MOCK_WEEKLY_STEPS
+
+    result = await app_with_health_wellness.call_tool(
+        "get_weekly_steps",
+        {"end_date": "2024-01-10"}
+    )
+
+    assert result is not None
+    mock_garmin_client.get_weekly_steps.assert_called_once_with("2024-01-10", 4)
 
 
 @pytest.mark.asyncio
@@ -499,15 +513,15 @@ async def test_get_weekly_stress_tool(app_with_health_wellness, mock_garmin_clie
     # Setup mock
     mock_garmin_client.get_weekly_stress.return_value = MOCK_WEEKLY_STRESS
 
-    # Call tool
+    # Call tool with end_date and weeks parameters
     result = await app_with_health_wellness.call_tool(
         "get_weekly_stress",
-        {"date": "2024-01-10"}
+        {"end_date": "2024-01-10", "weeks": 4}
     )
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_weekly_stress.assert_called_once_with("2024-01-10")
+    mock_garmin_client.get_weekly_stress.assert_called_once_with("2024-01-10", 4)
 
 
 @pytest.mark.asyncio
@@ -516,15 +530,34 @@ async def test_get_weekly_intensity_minutes_tool(app_with_health_wellness, mock_
     # Setup mock
     mock_garmin_client.get_weekly_intensity_minutes.return_value = MOCK_WEEKLY_INTENSITY_MINUTES
 
-    # Call tool
+    # Call tool with end_date and weeks parameters
     result = await app_with_health_wellness.call_tool(
         "get_weekly_intensity_minutes",
-        {"date": "2024-01-10"}
+        {"end_date": "2024-01-10", "weeks": 2}
     )
 
-    # Verify
+    # Verify - weeks=2 means start_date is 13 days back (2*7-1=13)
+    # From 2024-01-10, 13 days back is 2023-12-28
     assert result is not None
-    mock_garmin_client.get_weekly_intensity_minutes.assert_called_once_with("2024-01-10")
+    mock_garmin_client.get_weekly_intensity_minutes.assert_called_once_with("2023-12-28", "2024-01-10")
+
+
+@pytest.mark.asyncio
+async def test_get_weekly_intensity_minutes_tool_default_weeks(app_with_health_wellness, mock_garmin_client):
+    """Test get_weekly_intensity_minutes tool with default weeks parameter"""
+    # Setup mock
+    mock_garmin_client.get_weekly_intensity_minutes.return_value = MOCK_WEEKLY_INTENSITY_MINUTES
+
+    # Call tool with only end_date (weeks defaults to 4)
+    result = await app_with_health_wellness.call_tool(
+        "get_weekly_intensity_minutes",
+        {"end_date": "2024-01-10"}
+    )
+
+    # Verify - weeks=4 means start_date is 27 days back (4*7-1=27)
+    # From 2024-01-10, 27 days back is 2023-12-14
+    assert result is not None
+    mock_garmin_client.get_weekly_intensity_minutes.assert_called_once_with("2023-12-14", "2024-01-10")
 
 
 @pytest.mark.asyncio

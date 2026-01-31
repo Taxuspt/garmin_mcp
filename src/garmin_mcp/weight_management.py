@@ -27,32 +27,56 @@ def register_tools(app):
             end_date: End date in YYYY-MM-DD format
         """
         try:
-            weigh_ins = garmin_client.get_weigh_ins(start_date, end_date)
-            if not weigh_ins:
+            data = garmin_client.get_weigh_ins(start_date, end_date)
+            if not data:
                 return f"No weight measurements found between {start_date} and {end_date}."
+
+            # API returns nested structure: {dailyWeightSummaries: [{allWeightMetrics: [...]}]}
+            daily_summaries = data.get("dailyWeightSummaries", [])
+            if not daily_summaries:
+                return f"No weight measurements found between {start_date} and {end_date}."
+
+            # Extract all measurements from daily summaries
+            all_measurements = []
+            for day in daily_summaries:
+                metrics = day.get("allWeightMetrics", [])
+                all_measurements.extend(metrics)
 
             # Curate the response
             curated = {
-                "count": len(weigh_ins),
                 "date_range": {"start": start_date, "end": end_date},
+                "measurement_count": len(all_measurements),
+                "days_with_data": len(daily_summaries),
                 "measurements": []
             }
 
-            for w in weigh_ins:
+            for w in all_measurements:
                 measurement = {
-                    "date": w.get('date') or w.get('calendarDate'),
-                    "weight_grams": w.get('weight'),
-                    "bmi": w.get('bmi'),
-                    "body_fat_percent": w.get('bodyFat'),
-                    "body_water_percent": w.get('bodyWater'),
-                    "bone_mass_grams": w.get('boneMass'),
-                    "muscle_mass_grams": w.get('muscleMass'),
-                    "source_type": w.get('sourceType'),
-                    "timestamp": w.get('timestampLocal') or w.get('timestampGMT'),
+                    "date": w.get("calendarDate"),
+                    "weight_grams": w.get("weight"),
+                    "weight_kg": round(w.get("weight", 0) / 1000, 2) if w.get("weight") else None,
+                    "bmi": w.get("bmi"),
+                    "body_fat_percent": w.get("bodyFat"),
+                    "body_water_percent": w.get("bodyWater"),
+                    "bone_mass_grams": w.get("boneMass"),
+                    "muscle_mass_grams": w.get("muscleMass"),
+                    "source_type": w.get("sourceType"),
+                    "timestamp_gmt": w.get("timestampGMT"),
                 }
                 # Remove None values
                 measurement = {k: v for k, v in measurement.items() if v is not None}
                 curated["measurements"].append(measurement)
+
+            # Sort by date descending (most recent first)
+            curated["measurements"].sort(
+                key=lambda x: x.get("date") or "", reverse=True
+            )
+
+            # Include average if available
+            total_avg = data.get("totalAverage", {})
+            if total_avg.get("weight"):
+                curated["average_weight_grams"] = total_avg["weight"]
+                curated["average_weight_kg"] = round(total_avg["weight"] / 1000, 2)
 
             return json.dumps(curated, indent=2)
         except Exception as e:
@@ -66,31 +90,43 @@ def register_tools(app):
             date: Date in YYYY-MM-DD format
         """
         try:
-            weigh_ins = garmin_client.get_daily_weigh_ins(date)
-            if not weigh_ins:
+            data = garmin_client.get_daily_weigh_ins(date)
+            if not data:
+                return f"No weight measurements found for {date}."
+
+            # API returns nested structure: {dateWeightList: [...]}
+            weight_list = data.get("dateWeightList", [])
+            if not weight_list:
                 return f"No weight measurements found for {date}."
 
             # Curate the response
             curated = {
                 "date": date,
-                "count": len(weigh_ins),
+                "measurement_count": len(weight_list),
                 "measurements": []
             }
 
-            for w in weigh_ins:
+            for w in weight_list:
                 measurement = {
-                    "weight_grams": w.get('weight'),
-                    "bmi": w.get('bmi'),
-                    "body_fat_percent": w.get('bodyFat'),
-                    "body_water_percent": w.get('bodyWater'),
-                    "bone_mass_grams": w.get('boneMass'),
-                    "muscle_mass_grams": w.get('muscleMass'),
-                    "source_type": w.get('sourceType'),
-                    "timestamp": w.get('timestampLocal') or w.get('timestampGMT'),
+                    "weight_grams": w.get("weight"),
+                    "weight_kg": round(w.get("weight", 0) / 1000, 2) if w.get("weight") else None,
+                    "bmi": w.get("bmi"),
+                    "body_fat_percent": w.get("bodyFat"),
+                    "body_water_percent": w.get("bodyWater"),
+                    "bone_mass_grams": w.get("boneMass"),
+                    "muscle_mass_grams": w.get("muscleMass"),
+                    "source_type": w.get("sourceType"),
+                    "timestamp_gmt": w.get("timestampGMT"),
                 }
                 # Remove None values
                 measurement = {k: v for k, v in measurement.items() if v is not None}
                 curated["measurements"].append(measurement)
+
+            # Include average if available
+            total_avg = data.get("totalAverage", {})
+            if total_avg.get("weight"):
+                curated["average_weight_grams"] = total_avg["weight"]
+                curated["average_weight_kg"] = round(total_avg["weight"] / 1000, 2)
 
             return json.dumps(curated, indent=2)
         except Exception as e:
@@ -105,11 +141,12 @@ def register_tools(app):
             delete_all: Whether to delete all measurements for the day
         """
         try:
-            result = garmin_client.delete_weigh_ins(date, delete_all=delete_all)
-            # Return structured response
+            # API returns count of deleted entries
+            deleted_count = garmin_client.delete_weigh_ins(date, delete_all=delete_all)
             return json.dumps({
                 "status": "success",
                 "date": date,
+                "deleted_count": deleted_count if isinstance(deleted_count, int) else 0,
                 "message": f"Weight measurements deleted for {date}"
             }, indent=2)
         except Exception as e:
