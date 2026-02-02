@@ -143,25 +143,34 @@ def _curate_workout_details(workout: dict) -> dict:
 
 
 def _curate_scheduled_workout(scheduled: dict) -> dict:
-    """Extract essential scheduled workout information"""
-    workout = scheduled.get('workout', {})
-    sport_type = workout.get('sportType', {})
+    """Extract essential scheduled workout information from GraphQL response"""
+    # GraphQL response has workout data at top level (not nested)
+    # Completed is determined by presence of associatedActivityId
+    is_completed = scheduled.get('associatedActivityId') is not None
 
     summary = {
-        "date": scheduled.get('date'),
-        "workout_id": workout.get('workoutId'),
-        "name": workout.get('workoutName'),
-        "sport": sport_type.get('sportTypeKey'),
-        "provider": workout.get('workoutProvider'),
-        "completed": scheduled.get('completed', False),
+        "date": scheduled.get('scheduleDate'),
+        "workout_uuid": scheduled.get('workoutUuid'),
+        "workout_id": scheduled.get('workoutId'),
+        "name": scheduled.get('workoutName'),
+        "sport": scheduled.get('workoutType'),
+        "completed": is_completed,
     }
 
-    # Optional fields
-    if workout.get('estimatedDuration'):
-        summary['estimated_duration_seconds'] = workout.get('estimatedDuration')
+    # Training plan info
+    if scheduled.get('tpPlanName'):
+        summary['training_plan'] = scheduled.get('tpPlanName')
 
-    if workout.get('estimatedDistance'):
-        summary['estimated_distance_meters'] = workout.get('estimatedDistance')
+    # Optional fields
+    if scheduled.get('estimatedDurationInSecs'):
+        summary['estimated_duration_seconds'] = scheduled.get('estimatedDurationInSecs')
+
+    if scheduled.get('estimatedDistanceInMeters'):
+        summary['estimated_distance_meters'] = scheduled.get('estimatedDistanceInMeters')
+
+    # If completed, include the activity ID
+    if is_completed:
+        summary['activity_id'] = scheduled.get('associatedActivityId')
 
     # Remove None values
     return {k: v for k, v in summary.items() if v is not None}
@@ -245,6 +254,28 @@ def register_tools(app):
 
         Creates a new workout in Garmin Connect from structured workout data.
 
+        IMPORTANT: Step types must use Garmin's DTO format:
+        - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
+        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
+
+        Example workout structure:
+        {
+            "workoutName": "My Workout",
+            "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+            "workoutSegments": [{
+                "segmentOrder": 1,
+                "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+                "workoutSteps": [{
+                    "type": "ExecutableStepDTO",
+                    "stepOrder": 1,
+                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": 300.0,
+                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                }]
+            }]
+        }
+
         Args:
             workout_data: Dictionary containing workout structure (name, sport type, segments, etc.)
         """
@@ -325,40 +356,33 @@ def register_tools(app):
                 return "No training plan data found or error querying data."
 
             plan_data = result.get("data", {}).get("trainingPlanScalar", {})
-            workouts = plan_data.get("trainingPlanWorkoutScheduleDTOS", [])
+            training_plans = plan_data.get("trainingPlanWorkoutScheduleDTOS", [])
 
-            if not workouts:
+            if not training_plans:
                 return f"No training plan workouts scheduled for {calendar_date}."
+
+            # Collect all workouts from all training plans
+            all_workouts = []
+            plan_names = []
+
+            for plan in training_plans:
+                plan_name = plan.get('planName')
+                if plan_name and plan_name not in plan_names:
+                    plan_names.append(plan_name)
+
+                # workoutScheduleSummaries has same structure as scheduled workouts
+                workout_summaries = plan.get('workoutScheduleSummaries', [])
+                for workout in workout_summaries:
+                    # Reuse the scheduled workout curation since structure is identical
+                    all_workouts.append(_curate_scheduled_workout(workout))
 
             # Curate training plan data
             curated = {
                 "date": calendar_date,
-                "plan_name": plan_data.get('trainingPlanName'),
-                "count": len(workouts),
-                "workouts": []
+                "training_plans": plan_names if plan_names else None,
+                "count": len(all_workouts),
+                "workouts": all_workouts
             }
-
-            for w in workouts:
-                workout = w.get('workout', {})
-                sport_type = workout.get('sportType', {})
-
-                workout_summary = {
-                    "date": w.get('scheduledDate'),
-                    "workout_id": workout.get('workoutId'),
-                    "name": workout.get('workoutName'),
-                    "sport": sport_type.get('sportTypeKey'),
-                    "completed": w.get('completed', False),
-                }
-
-                if workout.get('estimatedDuration'):
-                    workout_summary['estimated_duration_seconds'] = workout.get('estimatedDuration')
-
-                if workout.get('estimatedDistance'):
-                    workout_summary['estimated_distance_meters'] = workout.get('estimatedDistance')
-
-                # Remove None values
-                workout_summary = {k: v for k, v in workout_summary.items() if v is not None}
-                curated["workouts"].append(workout_summary)
 
             # Remove None values from top level
             curated = {k: v for k, v in curated.items() if v is not None}

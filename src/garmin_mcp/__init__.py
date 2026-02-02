@@ -21,6 +21,7 @@ from garmin_mcp import weight_management
 from garmin_mcp import challenges
 from garmin_mcp import training
 from garmin_mcp import workouts
+from garmin_mcp import workout_templates
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
 
@@ -237,6 +238,9 @@ def main():
     app = workouts.register_tools(app)
     app = data_management.register_tools(app)
     app = womens_health.register_tools(app)
+
+    # Register resources (workout templates)
+    app = workout_templates.register_resources(app)
 
     # Run the MCP server
     app.run()
