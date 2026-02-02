@@ -132,15 +132,22 @@ async def test_upload_workout_tool(app_with_workouts, mock_garmin_client):
 @pytest.mark.asyncio
 async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client):
     """Test get_scheduled_workouts tool - uses GraphQL query"""
-    # Setup mock for GraphQL query
+    import json as json_module
+
+    # Setup mock for GraphQL query - matches actual API response structure
     graphql_response = {
         "data": {
             "workoutScheduleSummariesScalar": [
                 {
+                    "workoutUuid": "abc-123-def",
                     "workoutId": 123456,
                     "workoutName": "5K Tempo Run",
-                    "scheduledDate": "2024-01-15",
-                    "completed": False
+                    "workoutType": "running",
+                    "scheduleDate": "2024-01-15",
+                    "tpPlanName": "5K Training Plan",
+                    "associatedActivityId": None,
+                    "estimatedDurationInSecs": 1800,
+                    "estimatedDistanceInMeters": 5000.0
                 }
             ]
         }
@@ -153,6 +160,16 @@ async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client
         {"start_date": "2024-01-08", "end_date": "2024-01-15"}
     )
 
+    # Verify curation extracts correct fields
+    result_data = json_module.loads(result[0].text)
+    assert result_data["count"] == 1
+    workout = result_data["scheduled_workouts"][0]
+    assert workout["name"] == "5K Tempo Run"
+    assert workout["sport"] == "running"
+    assert workout["completed"] is False
+    assert workout["training_plan"] == "5K Training Plan"
+    assert workout["estimated_duration_seconds"] == 1800
+
     # Verify
     assert result is not None
     mock_garmin_client.query_garmin_graphql.assert_called_once()
@@ -161,16 +178,41 @@ async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client
 @pytest.mark.asyncio
 async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_client):
     """Test get_training_plan_workouts tool - uses GraphQL query"""
-    # Setup mock for GraphQL query
+    import json as json_module
+
+    # Setup mock for GraphQL query - matches actual API response structure
     graphql_response = {
         "data": {
             "trainingPlanScalar": {
                 "trainingPlanWorkoutScheduleDTOS": [
                     {
-                        "workoutId": 123456,
-                        "workoutName": "Week 1 - Day 1",
                         "planName": "5K Training Plan",
-                        "calendarDate": "2024-01-15"
+                        "trainingPlanDetailsDTO": {
+                            "athletePlanId": 12345,
+                            "workoutsPerWeek": 4
+                        },
+                        "workoutScheduleSummaries": [
+                            {
+                                "workoutUuid": "abc-123-def",
+                                "workoutId": None,
+                                "workoutName": "Base Run",
+                                "workoutType": "running",
+                                "scheduleDate": "2024-01-15",
+                                "tpPlanName": "5K Training Plan",
+                                "associatedActivityId": None,
+                                "estimatedDurationInSecs": 1800
+                            },
+                            {
+                                "workoutUuid": "xyz-456-ghi",
+                                "workoutId": None,
+                                "workoutName": "Strength",
+                                "workoutType": "strength_training",
+                                "scheduleDate": "2024-01-15",
+                                "tpPlanName": "5K Training Plan",
+                                "associatedActivityId": 987654,
+                                "estimatedDurationInSecs": 1200
+                            }
+                        ]
                     }
                 ]
             }
@@ -187,6 +229,23 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
     # Verify
     assert result is not None
     mock_garmin_client.query_garmin_graphql.assert_called_once()
+
+    # Verify curation extracts correct fields
+    result_data = json_module.loads(result[0].text)
+    assert result_data["date"] == "2024-01-15"
+    assert result_data["training_plans"] == ["5K Training Plan"]
+    assert result_data["count"] == 2
+
+    # Verify workouts are curated correctly
+    workouts = result_data["workouts"]
+    assert workouts[0]["name"] == "Base Run"
+    assert workouts[0]["sport"] == "running"
+    assert workouts[0]["completed"] is False
+
+    # Verify completed workout has activity_id
+    assert workouts[1]["name"] == "Strength"
+    assert workouts[1]["completed"] is True
+    assert workouts[1]["activity_id"] == 987654
 
 
 # Error handling tests
