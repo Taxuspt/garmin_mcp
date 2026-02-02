@@ -107,13 +107,18 @@ def _curate_workout_segment(segment: dict) -> dict:
 
 
 def _curate_workout_details(workout: dict) -> dict:
-    """Extract detailed workout information with segments but without verbose step data"""
-    sport_type = workout.get('sportType', {})
+    """Extract detailed workout information with segments
+
+    Handles both regular workouts (from get_workout_by_id) and training plan workouts
+    (from fbt-adaptive endpoint) which use slightly different field names.
+    """
+    sport_type = workout.get('sportType') or {}
 
     details = {
         "id": workout.get('workoutId'),
+        "uuid": workout.get('workoutUuid'),
         "name": workout.get('workoutName'),
-        "sport": sport_type.get('sportTypeKey'),
+        "sport": sport_type.get('sportTypeKey') if sport_type else None,
         "provider": workout.get('workoutProvider'),
         "created_date": workout.get('createdDate'),
         "updated_date": workout.get('updatedDate'),
@@ -123,16 +128,29 @@ def _curate_workout_details(workout: dict) -> dict:
     if workout.get('description'):
         details['description'] = workout.get('description')
 
-    if workout.get('estimatedDuration'):
-        details['estimated_duration_seconds'] = workout.get('estimatedDuration')
+    # Handle both field name variants (regular vs training plan workouts)
+    duration = workout.get('estimatedDuration') or workout.get('estimatedDurationInSecs')
+    if duration:
+        details['estimated_duration_seconds'] = duration
 
-    if workout.get('estimatedDistance'):
-        details['estimated_distance_meters'] = workout.get('estimatedDistance')
+    distance = workout.get('estimatedDistance') or workout.get('estimatedDistanceInMeters')
+    if distance:
+        details['estimated_distance_meters'] = distance
 
     if workout.get('avgTrainingSpeed'):
         details['avg_training_speed_mps'] = workout.get('avgTrainingSpeed')
 
-    # Curate segments (remove verbose step details)
+    # Training plan specific fields
+    if workout.get('workoutPhrase'):
+        details['workout_type'] = workout.get('workoutPhrase')
+
+    if workout.get('trainingEffectLabel'):
+        details['training_effect_label'] = workout.get('trainingEffectLabel')
+
+    if workout.get('estimatedTrainingEffect'):
+        details['estimated_training_effect'] = workout.get('estimatedTrainingEffect')
+
+    # Curate segments with workout steps
     segments = workout.get('workoutSegments', [])
     if segments:
         details['segments'] = [_curate_workout_segment(seg) for seg in segments]
@@ -160,6 +178,17 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
     # Training plan info
     if scheduled.get('tpPlanName'):
         summary['training_plan'] = scheduled.get('tpPlanName')
+
+    # Workout type description (e.g., "AEROBIC_LOW_SHORTAGE_BASE", "ANAEROBIC_SPEED", "LONG_WORKOUT")
+    # This describes the intent/type of the workout from Garmin Coach
+    if scheduled.get('workoutPhrase'):
+        summary['workout_type'] = scheduled.get('workoutPhrase')
+
+    # Rest day and race day flags
+    if scheduled.get('isRestDay'):
+        summary['is_rest_day'] = True
+    if scheduled.get('race'):
+        summary['is_race_day'] = True
 
     # Optional fields
     if scheduled.get('estimatedDurationInSecs'):
@@ -202,21 +231,38 @@ def register_tools(app):
             return f"Error retrieving workouts: {str(e)}"
 
     @app.tool()
-    async def get_workout_by_id(workout_id: int) -> str:
+    async def get_workout_by_id(workout_id: Union[int, str]) -> str:
         """Get detailed information for a specific workout
 
-        Returns workout details including segments and structure.
-        Use get_workouts to get a list of available workout IDs.
+        Returns workout details including segments and step structure.
+
+        Accepts either:
+        - Numeric workout ID (from get_workouts or get_scheduled_workouts)
+        - Workout UUID (from get_training_plan_workouts for Garmin Coach workouts)
 
         Args:
-            workout_id: ID of the workout to retrieve
+            workout_id: Workout ID (numeric) or UUID (for training plan workouts)
         """
         try:
-            workout = garmin_client.get_workout_by_id(workout_id)
-            if not workout:
-                return f"No workout found with ID {workout_id}."
+            workout_id_str = str(workout_id)
+            # Detect if this is a UUID (contains dashes) or numeric ID
+            is_uuid = '-' in workout_id_str
 
-            # Return curated details with segments but without verbose step data
+            if is_uuid:
+                # Training plan / Garmin Coach workout - use fbt-adaptive endpoint
+                url = f"workout-service/fbt-adaptive/{workout_id_str}"
+                response = garmin_client.garth.get("connectapi", url)
+                if response.status_code != 200:
+                    return f"No workout found with UUID {workout_id_str}. HTTP {response.status_code}"
+                workout = response.json()
+            else:
+                # Regular workout - use standard endpoint
+                workout = garmin_client.get_workout_by_id(int(workout_id_str))
+
+            if not workout:
+                return f"No workout found with ID {workout_id_str}."
+
+            # Return curated details with segments
             curated = _curate_workout_details(workout)
             return json.dumps(curated, indent=2)
         except Exception as e:
@@ -338,12 +384,17 @@ def register_tools(app):
 
     @app.tool()
     async def get_training_plan_workouts(calendar_date: str) -> str:
-        """Get training plan workouts for a specific date
+        """Get training plan workouts for the week containing the given date
 
-        Returns workouts from your active training plan scheduled for the given date.
+        Returns workouts from your active training plan for the week containing
+        the specified date. The API returns approximately 7 days of scheduled
+        workouts anchored around the given date.
+
+        Training plan workouts have workout_uuid (not workout_id). Use the
+        workout_uuid with get_workout_by_id to get detailed step information.
 
         Args:
-            calendar_date: Date in YYYY-MM-DD format
+            calendar_date: Reference date in YYYY-MM-DD format (returns week's workouts)
         """
         try:
             # Query for training plan workouts using GraphQL

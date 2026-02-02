@@ -42,22 +42,22 @@ async def test_get_workouts_tool(app_with_workouts, mock_garmin_client):
 
 @pytest.mark.asyncio
 async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
-    """Test get_workout_by_id tool returns specific workout with step details"""
+    """Test get_workout_by_id tool returns specific workout with step details (numeric ID)"""
     import json as json_module
 
     # Setup mock
     mock_garmin_client.get_workout_by_id.return_value = MOCK_WORKOUT_DETAILS
 
-    # Call tool
+    # Call tool with numeric ID (FastMCP passes numeric strings as int)
     workout_id = 123456
     result = await app_with_workouts.call_tool(
         "get_workout_by_id",
         {"workout_id": workout_id}
     )
 
-    # Verify
+    # Verify - tool converts to int for numeric IDs
     assert result is not None
-    mock_garmin_client.get_workout_by_id.assert_called_once_with(workout_id)
+    mock_garmin_client.get_workout_by_id.assert_called_once_with(123456)
 
     # Parse the result and verify curation includes steps
     result_data = json_module.loads(result[0].text)
@@ -82,6 +82,72 @@ async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
     assert interval_step["type"] == "interval"
     assert interval_step["target_type"] == "pace.zone"
     assert interval_step["target_zone"] == 4
+
+
+@pytest.mark.asyncio
+async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
+    """Test get_workout_by_id tool with UUID (training plan workout)"""
+    import json as json_module
+
+    # Setup mock for garth.get call (fbt-adaptive endpoint)
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "workoutId": None,
+        "workoutUuid": "d7a5491b-42a5-4d2d-ba38-4e414fc03caf",
+        "workoutName": "Base",
+        "description": "6:20/km",
+        "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+        "estimatedDurationInSecs": 2160,
+        "workoutPhrase": "AEROBIC_LOW_SHORTAGE_BASE",
+        "trainingEffectLabel": "AEROBIC_BASE",
+        "estimatedTrainingEffect": 2.3,
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                "endConditionValue": 2160.0,
+                "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"},
+                "targetValueOne": 2.777,
+                "targetValueTwo": 2.472
+            }]
+        }]
+    }
+    mock_garmin_client.garth.get.return_value = mock_response
+
+    # Call tool with UUID (contains dashes)
+    workout_uuid = "d7a5491b-42a5-4d2d-ba38-4e414fc03caf"
+    result = await app_with_workouts.call_tool(
+        "get_workout_by_id",
+        {"workout_id": workout_uuid}
+    )
+
+    # Verify fbt-adaptive endpoint was called
+    assert result is not None
+    mock_garmin_client.garth.get.assert_called_once_with(
+        "connectapi",
+        f"workout-service/fbt-adaptive/{workout_uuid}"
+    )
+
+    # Parse the result and verify training plan workout fields
+    result_data = json_module.loads(result[0].text)
+    assert result_data["uuid"] == workout_uuid
+    assert result_data["name"] == "Base"
+    assert result_data["sport"] == "running"
+    assert result_data["workout_type"] == "AEROBIC_LOW_SHORTAGE_BASE"
+    assert result_data["training_effect_label"] == "AEROBIC_BASE"
+    assert result_data["estimated_training_effect"] == 2.3
+    assert result_data["estimated_duration_seconds"] == 2160
+
+    # Verify segments include steps
+    assert "segments" in result_data
+    segment = result_data["segments"][0]
+    assert "steps" in segment
+    assert segment["step_count"] == 1
 
 
 @pytest.mark.asyncio
