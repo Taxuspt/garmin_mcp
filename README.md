@@ -19,10 +19,10 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **95+ tools** covering ~88% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
+This MCP server implements **96+ tools** covering ~89% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
 
 - ✅ Activity Management (14 tools)
-- ✅ Health & Wellness (30 tools) - includes custom lightweight summary tools
+- ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
 - ✅ Training & Performance (9 tools)
 - ✅ Workouts (8 tools)
 - ✅ Devices (7 tools)
@@ -487,7 +487,7 @@ garmin-mcp-auth --verify
 
 ## Testing
 
-This project includes comprehensive tests for all 81 MCP tools. **All 96 tests are currently passing (100%)**.
+This project includes comprehensive tests for all 96 MCP tools. **All 111 tests are currently passing (100%)**.
 
 ### Running Tests
 

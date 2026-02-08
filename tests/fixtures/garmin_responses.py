@@ -322,6 +322,24 @@ MOCK_SPO2_DATA = {
     ]
 }
 
+MOCK_LIFESTYLE_LOGGING_DATA = {
+    "calendarDate": "2024-01-15",
+    "lifestyleLogs": [
+        {
+            "type": "caffeine_consumption",
+            "value": "2 cups",
+            "timestamp": "2024-01-15T08:00:00",
+            "notes": "Morning coffee"
+        },
+        {
+            "type": "alcohol_consumption",
+            "value": "1 glass",
+            "timestamp": "2024-01-15T20:00:00",
+            "notes": "Red wine"
+        }
+    ]
+}
+
 # Challenges
 MOCK_GOALS = {
     "goals": [

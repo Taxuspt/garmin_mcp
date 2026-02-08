@@ -26,6 +26,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_STRESS_DATA,
     MOCK_RESPIRATION_DATA,
     MOCK_SPO2_DATA,
+    MOCK_LIFESTYLE_LOGGING_DATA,
     MOCK_WEEKLY_STEPS,
     MOCK_WEEKLY_STRESS,
     MOCK_WEEKLY_INTENSITY_MINUTES,
@@ -474,6 +475,23 @@ async def test_get_all_day_events_tool(app_with_health_wellness, mock_garmin_cli
     # Verify
     assert result is not None
     mock_garmin_client.get_all_day_events.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_lifestyle_logging_data_tool(app_with_health_wellness, mock_garmin_client):
+    """Test get_lifestyle_logging_data tool returns lifestyle logging data"""
+    # Setup mock
+    mock_garmin_client.get_lifestyle_logging_data.return_value = MOCK_LIFESTYLE_LOGGING_DATA
+
+    # Call tool
+    result = await app_with_health_wellness.call_tool(
+        "get_lifestyle_logging_data",
+        {"date": "2024-01-15"}
+    )
+
+    # Verify
+    assert result is not None
+    mock_garmin_client.get_lifestyle_logging_data.assert_called_once_with("2024-01-15")
 
 
 @pytest.mark.asyncio
