@@ -141,6 +141,7 @@ menu_options = {
     "U": f"Get Fitness Age data for {today.isoformat()}",
     "V": f"Get daily wellness events data for {startdate.isoformat()}",
     "W": "Get userprofile settings",
+    "X": f"Get lifestyle logging data for {today.isoformat()}",
     "Z": "Remove stored login tokens (logout)",
     "q": "Exit",
 }
@@ -881,6 +882,13 @@ def switch(api, i):
                 # Get userprofile settings
                 display_json(
                     "api.get_userprofile_settings()", api.get_userprofile_settings()
+                )
+
+            elif i == "X":
+                # Get lifestyle logging data
+                display_json(
+                    f"api.get_lifestyle_logging_data('{today.isoformat()}')",
+                    api.get_lifestyle_logging_data(today.isoformat()),
                 )
 
             elif i == "Z":

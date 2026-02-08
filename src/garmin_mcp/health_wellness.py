@@ -700,6 +700,25 @@ def register_tools(app):
             return f"Error retrieving daily wellness events: {str(e)}"
 
     @app.tool()
+    async def get_lifestyle_logging_data(date: str) -> str:
+        """Get lifestyle logging data for a specific date
+
+        Returns lifestyle logging data which allows users to track behaviors
+        and their impact on health metrics.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            data = garmin_client.get_lifestyle_logging_data(date)
+            if not data:
+                return f"No lifestyle logging data found for {date}"
+
+            return json.dumps(data, indent=2)
+        except Exception as e:
+            return f"Error retrieving lifestyle logging data: {str(e)}"
+
+    @app.tool()
     async def get_weekly_steps(end_date: str, weeks: int = 4) -> str:
         """Get weekly step data aggregates
 
