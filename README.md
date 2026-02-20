@@ -29,6 +29,7 @@ This MCP server implements **95+ tools** covering ~88% of the [python-garminconn
 - ✅ Gear Management (5 tools)
 - ✅ Weight Tracking (5 tools)
 - ✅ Challenges & Badges (10 tools)
+- ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (3 tools)
 
@@ -487,7 +488,7 @@ garmin-mcp-auth --verify
 
 ## Testing
 
-This project includes comprehensive tests for all 81 MCP tools. **All 96 tests are currently passing (100%)**.
+This project includes comprehensive tests for all MCP tools. **All 130 tests are currently passing (100%)**.
 
 ### Running Tests
 
@@ -507,5 +508,5 @@ uv run pytest tests/e2e/ -m e2e -v
 
 ### Test Structure
 
-- **Integration tests** (96 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
+- **Integration tests** (130 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
 - **End-to-end tests** (4 tests): Test with real MCP server and Garmin API (requires valid credentials)
