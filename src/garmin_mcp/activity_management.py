@@ -232,6 +232,8 @@ def register_tools(app):
                     "avg_cadence": lap.get('averageRunCadence'),
                     "avg_power_watts": lap.get('averagePower'),
                     "intensity_type": lap.get('intensityType'),
+                    "elevation_gain_meters": lap.get('elevationGain'),
+                    "elevation_loss_meters": lap.get('elevationLoss'),
                 }
                 # Remove None values
                 lap_data = {k: v for k, v in lap_data.items() if v is not None}
