@@ -215,6 +215,7 @@ def register_tools(app):
             curated = {
                 "activity_id": splits.get('activityId'),
                 "lap_count": len(laps),
+                "_raw_first_lap": laps[0] if laps else None,
                 "laps": []
             }
 
