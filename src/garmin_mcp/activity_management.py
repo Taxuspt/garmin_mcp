@@ -215,7 +215,6 @@ def register_tools(app):
             curated = {
                 "activity_id": splits.get('activityId'),
                 "lap_count": len(laps),
-                "_raw_first_lap": laps[0] if laps else None,
                 "laps": []
             }
 
@@ -233,8 +232,8 @@ def register_tools(app):
                     "avg_cadence": lap.get('averageRunCadence'),
                     "avg_power_watts": lap.get('averagePower'),
                     "intensity_type": lap.get('intensityType'),
-                    "total_ascent_meters": lap.get('totalAscent'),
-                    "total_descent_meters": lap.get('totalDescent'),
+                    "elevation_gain_meters": lap.get('elevationGain'),
+                    "elevation_loss_meters": lap.get('elevationLoss'),
                 }
                 # Remove None values
                 lap_data = {k: v for k, v in lap_data.items() if v is not None}
