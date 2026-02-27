@@ -318,3 +318,105 @@ class TestMain:
         assert exc_info.value.code == 0
         # Check that custom path was used
         assert "/custom/path" in mock_authenticate.call_args[0][0]
+
+    @patch("sys.argv", ["garmin-mcp-auth", "--is-cn"])
+    @patch("garmin_mcp.auth_cli.authenticate")
+    def test_main_is_cn_flag(self, mock_authenticate):
+        """Test main function with --is-cn flag."""
+        mock_authenticate.return_value = True
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 0
+        # Check that is_cn=True was passed
+        assert mock_authenticate.call_args[0][3] is True
+
+    @patch("sys.argv", ["garmin-mcp-auth"])
+    @patch("garmin_mcp.auth_cli.authenticate")
+    def test_main_is_cn_env_var(self, mock_authenticate):
+        """Test that GARMIN_IS_CN env var is used when --is-cn flag is not set."""
+        mock_authenticate.return_value = True
+
+        with patch.dict(os.environ, {"GARMIN_IS_CN": "true"}):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        # Check that is_cn=True was passed via env var
+        assert mock_authenticate.call_args[0][3] is True
+
+    @patch("sys.argv", ["garmin-mcp-auth"])
+    @patch("garmin_mcp.auth_cli.authenticate")
+    def test_main_is_cn_default_false(self, mock_authenticate):
+        """Test that is_cn defaults to False when neither flag nor env var is set."""
+        mock_authenticate.return_value = True
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GARMIN_IS_CN", None)
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+        # Check that is_cn=False was passed
+        assert mock_authenticate.call_args[0][3] is False
+
+
+class TestAuthenticateIsCn:
+    """Tests for is_cn parameter in authenticate function."""
+
+    @patch("garmin_mcp.auth_cli.token_exists")
+    @patch("garmin_mcp.auth_cli.get_credentials")
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_authenticate_passes_is_cn_true(self, mock_garmin, mock_get_creds, mock_exists):
+        """Test that is_cn=True is passed to Garmin constructor."""
+        mock_exists.return_value = False
+        mock_get_creds.return_value = ("test@example.com", "secret")
+
+        mock_garmin_instance = Mock()
+        mock_garmin_instance.login = Mock()
+        mock_garmin_instance.garth = Mock()
+        mock_garmin_instance.garth.dump = Mock()
+        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
+        mock_garmin.return_value = mock_garmin_instance
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False, is_cn=True)
+
+        assert result is True
+        # Verify Garmin was called with is_cn=True
+        mock_garmin.assert_called_once_with(
+            email="test@example.com",
+            password="secret",
+            is_cn=True,
+            prompt_mfa=get_mfa,
+        )
+
+    @patch("garmin_mcp.auth_cli.token_exists")
+    @patch("garmin_mcp.auth_cli.get_credentials")
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_authenticate_passes_is_cn_false(self, mock_garmin, mock_get_creds, mock_exists):
+        """Test that is_cn=False is passed to Garmin constructor by default."""
+        mock_exists.return_value = False
+        mock_get_creds.return_value = ("test@example.com", "secret")
+
+        mock_garmin_instance = Mock()
+        mock_garmin_instance.login = Mock()
+        mock_garmin_instance.garth = Mock()
+        mock_garmin_instance.garth.dump = Mock()
+        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
+        mock_garmin.return_value = mock_garmin_instance
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
+
+        assert result is True
+        # Verify Garmin was called with is_cn=False
+        mock_garmin.assert_called_once_with(
+            email="test@example.com",
+            password="secret",
+            is_cn=False,
+            prompt_mfa=get_mfa,
+        )

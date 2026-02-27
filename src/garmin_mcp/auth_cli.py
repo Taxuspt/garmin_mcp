@@ -76,13 +76,14 @@ def get_credentials() -> tuple[str, str]:
     return email, password
 
 
-def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = False) -> bool:
+def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = False, is_cn: bool = False) -> bool:
     """Authenticate with Garmin Connect and save tokens.
 
     Args:
         token_path: Path to save token directory
         token_base64_path: Path to save base64 token file
         force_reauth: Force re-authentication even if tokens exist
+        is_cn: Use Garmin Connect China (garmin.cn) instead of international
 
     Returns:
         bool: True if authentication succeeded, False otherwise
@@ -118,11 +119,12 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         return False
 
     # Authenticate with Garmin Connect
-    print(f"\nAuthenticating with Garmin Connect...")
+    region = "Garmin Connect CN (garmin.cn)" if is_cn else "Garmin Connect"
+    print(f"\nAuthenticating with {region}...")
     print(f"Email: {email}")
 
     try:
-        garmin = Garmin(email=email, password=password, is_cn=False, prompt_mfa=get_mfa)
+        garmin = Garmin(email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa)
         garmin.login()
 
         # Save tokens to directory
@@ -292,14 +294,29 @@ Examples:
         help="Force re-authentication even if valid tokens exist"
     )
 
+    parser.add_argument(
+        "--is-cn",
+        action="store_true",
+        default=None,
+        help="Use Garmin Connect China (garmin.cn) instead of the international version"
+    )
+
     args = parser.parse_args()
 
     # Get token paths
     token_path = args.token_path or get_token_path()
     token_base64_path = get_token_base64_path()
 
+    # Resolve is_cn: CLI flag takes priority, then env var, then default False
+    if args.is_cn:
+        is_cn = True
+    else:
+        is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
+
     print("\n" + "=" * 60)
     print("Garmin MCP Pre-Authentication Tool")
+    if is_cn:
+        print("Region: China (garmin.cn)")
     print("=" * 60)
 
     # Verify mode
@@ -308,7 +325,7 @@ Examples:
         sys.exit(0 if success else 1)
 
     # Authenticate mode
-    success = authenticate(token_path, token_base64_path, args.force_reauth)
+    success = authenticate(token_path, token_base64_path, args.force_reauth, is_cn)
     sys.exit(0 if success else 1)
 
 

@@ -9,6 +9,7 @@ services:
     environment:
       - GARMIN_EMAIL=${GARMIN_EMAIL}
       - GARMIN_PASSWORD=${GARMIN_PASSWORD}
+      # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
 
     # Option 2: Use file-based secrets (uncomment to use)
     # environment:

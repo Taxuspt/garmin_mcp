@@ -139,8 +139,45 @@ Your Garmin Connect credentials are read from environment variables:
 - `GARMIN_EMAIL_FILE`: Path to a file containing your Garmin Connect email address
 - `GARMIN_PASSWORD`: Your Garmin Connect password
 - `GARMIN_PASSWORD_FILE`: Path to a file containing your Garmin Connect password
+- `GARMIN_IS_CN`: Set to `true` to use Garmin Connect China (garmin.cn) instead of the international version (default: `false`)
 
 File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
+
+### Garmin Connect China (garmin.cn)
+
+If you use Garmin Connect China (garmin.cn) instead of the international version, set the `GARMIN_IS_CN` environment variable to `true`:
+
+```bash
+# Pre-authenticate with Garmin Connect China
+GARMIN_IS_CN=true garmin-mcp-auth
+
+# Or use the CLI flag
+garmin-mcp-auth --is-cn
+```
+
+For Claude Desktop, add `GARMIN_IS_CN` to the `env` section:
+
+```json
+{
+  "mcpServers": {
+    "garmin": {
+      "command": "uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--from",
+        "git+https://github.com/Taxuspt/garmin_mcp",
+        "garmin-mcp"
+      ],
+      "env": {
+        "GARMIN_IS_CN": "true"
+      }
+    }
+  }
+}
+```
+
+For Docker, add `GARMIN_IS_CN=true` to your `.env` file or uncomment it in `docker-compose.yml`.
 
 ### Testing the server locally with MCP Inspector
 
