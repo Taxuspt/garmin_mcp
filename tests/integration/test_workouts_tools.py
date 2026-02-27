@@ -6,6 +6,7 @@ Tests workout tools using FastMCP integration with mocked Garmin API responses.
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
+from garmin_mcp.client_resolver import set_global_client
 
 from garmin_mcp import workouts
 from tests.fixtures.garmin_responses import (
@@ -18,6 +19,7 @@ from tests.fixtures.garmin_responses import (
 def app_with_workouts(mock_garmin_client):
     """Create FastMCP app with workouts tools registered"""
     workouts.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Workouts")
     app = workouts.register_tools(app)
     return app
@@ -60,7 +62,7 @@ async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
     mock_garmin_client.get_workout_by_id.assert_called_once_with(123456)
 
     # Parse the result and verify curation includes steps
-    result_data = json_module.loads(result[0].text)
+    result_data = json_module.loads(result[0][0].text)
     assert result_data["id"] == 123456
     assert result_data["name"] == "5K Tempo Run"
     assert result_data["sport"] == "running"
@@ -134,7 +136,7 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
     )
 
     # Parse the result and verify training plan workout fields
-    result_data = json_module.loads(result[0].text)
+    result_data = json_module.loads(result[0][0].text)
     assert result_data["uuid"] == workout_uuid
     assert result_data["name"] == "Base"
     assert result_data["sport"] == "running"
@@ -227,7 +229,7 @@ async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client
     )
 
     # Verify curation extracts correct fields
-    result_data = json_module.loads(result[0].text)
+    result_data = json_module.loads(result[0][0].text)
     assert result_data["count"] == 1
     workout = result_data["scheduled_workouts"][0]
     assert workout["name"] == "5K Tempo Run"
@@ -297,7 +299,7 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
     mock_garmin_client.query_garmin_graphql.assert_called_once()
 
     # Verify curation extracts correct fields
-    result_data = json_module.loads(result[0].text)
+    result_data = json_module.loads(result[0][0].text)
     assert result_data["date"] == "2024-01-15"
     assert result_data["training_plans"] == ["5K Training Plan"]
     assert result_data["count"] == 2

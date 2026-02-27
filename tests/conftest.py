@@ -5,6 +5,7 @@ import pytest
 from unittest.mock import Mock
 from datetime import datetime, timedelta
 from mcp.server.fastmcp import FastMCP
+from garmin_mcp.client_resolver import set_global_client
 
 
 @pytest.fixture
@@ -173,6 +174,9 @@ def create_test_app(module, mock_client):
     """
     # Configure the module with mock client
     module.configure(mock_client)
+
+    # Also set in client_resolver so get_client(ctx) works
+    set_global_client(mock_client)
 
     # Create app and register tools
     app = FastMCP("Test Garmin MCP")

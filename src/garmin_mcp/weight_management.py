@@ -5,6 +5,9 @@ import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
+from mcp.server.fastmcp import Context
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -19,7 +22,7 @@ def register_tools(app):
     """Register all weight management tools with the MCP server app"""
 
     @app.tool()
-    async def get_weigh_ins(start_date: str, end_date: str) -> str:
+    async def get_weigh_ins(ctx: Context, start_date: str, end_date: str) -> str:
         """Get weight measurements between specified dates
 
         Args:
@@ -27,7 +30,7 @@ def register_tools(app):
             end_date: End date in YYYY-MM-DD format
         """
         try:
-            data = garmin_client.get_weigh_ins(start_date, end_date)
+            data = get_client(ctx).get_weigh_ins(start_date, end_date)
             if not data:
                 return f"No weight measurements found between {start_date} and {end_date}."
 
@@ -83,14 +86,14 @@ def register_tools(app):
             return f"Error retrieving weight measurements: {str(e)}"
 
     @app.tool()
-    async def get_daily_weigh_ins(date: str) -> str:
+    async def get_daily_weigh_ins(ctx: Context, date: str) -> str:
         """Get weight measurements for a specific date
 
         Args:
             date: Date in YYYY-MM-DD format
         """
         try:
-            data = garmin_client.get_daily_weigh_ins(date)
+            data = get_client(ctx).get_daily_weigh_ins(date)
             if not data:
                 return f"No weight measurements found for {date}."
 
@@ -133,7 +136,7 @@ def register_tools(app):
             return f"Error retrieving daily weight measurements: {str(e)}"
 
     @app.tool()
-    async def delete_weigh_ins(date: str, delete_all: bool = True) -> str:
+    async def delete_weigh_ins(ctx: Context, date: str, delete_all: bool = True) -> str:
         """Delete weight measurements for a specific date
 
         Args:
@@ -142,7 +145,7 @@ def register_tools(app):
         """
         try:
             # API returns count of deleted entries
-            deleted_count = garmin_client.delete_weigh_ins(date, delete_all=delete_all)
+            deleted_count = get_client(ctx).delete_weigh_ins(date, delete_all=delete_all)
             return json.dumps({
                 "status": "success",
                 "date": date,
@@ -153,7 +156,7 @@ def register_tools(app):
             return f"Error deleting weight measurements: {str(e)}"
 
     @app.tool()
-    async def add_weigh_in(weight: float, unit_key: str = "kg") -> str:
+    async def add_weigh_in(ctx: Context, weight: float, unit_key: str = "kg") -> str:
         """Add a new weight measurement
 
         Args:
@@ -161,7 +164,7 @@ def register_tools(app):
             unit_key: Unit of weight ('kg' or 'lb')
         """
         try:
-            result = garmin_client.add_weigh_in(weight=weight, unitKey=unit_key)
+            result = get_client(ctx).add_weigh_in(weight=weight, unitKey=unit_key)
             # Return structured response
             return json.dumps({
                 "status": "success",
@@ -174,6 +177,7 @@ def register_tools(app):
 
     @app.tool()
     async def add_weigh_in_with_timestamps(
+        ctx: Context,
         weight: float,
         unit_key: str = "kg",
         date_timestamp: str = None,
@@ -194,7 +198,7 @@ def register_tools(app):
                 date_timestamp = now.strftime('%Y-%m-%dT%H:%M:%S')
                 gmt_timestamp = now.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
 
-            result = garmin_client.add_weigh_in_with_timestamps(
+            result = get_client(ctx).add_weigh_in_with_timestamps(
                 weight=weight,
                 unitKey=unit_key,
                 dateTimestamp=date_timestamp,

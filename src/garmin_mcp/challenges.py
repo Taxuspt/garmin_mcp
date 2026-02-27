@@ -6,6 +6,9 @@ import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
+from mcp.server.fastmcp import Context
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -225,14 +228,14 @@ def register_tools(app):
     """Register all challenges-related tools with the MCP server app"""
 
     @app.tool()
-    async def get_goals(goal_type: str = "active") -> str:
+    async def get_goals(ctx: Context, goal_type: str = "active") -> str:
         """Get Garmin Connect goals (active, future, or past)
 
         Args:
             goal_type: Type of goals to retrieve. Options: "active", "future", or "past"
         """
         try:
-            goals = garmin_client.get_goals(goal_type)
+            goals = get_client(ctx).get_goals(goal_type)
             if not goals:
                 return f"No {goal_type} goals found."
             return json.dumps(goals, indent=2)
@@ -240,10 +243,10 @@ def register_tools(app):
             return f"Error retrieving {goal_type} goals: {str(e)}"
 
     @app.tool()
-    async def get_personal_record() -> str:
+    async def get_personal_record(ctx: Context) -> str:
         """Get personal records for user"""
         try:
-            records = garmin_client.get_personal_record()
+            records = get_client(ctx).get_personal_record()
             if not records:
                 return "No personal records found."
 
@@ -285,10 +288,10 @@ def register_tools(app):
             return f"Error retrieving personal records: {str(e)}"
 
     @app.tool()
-    async def get_earned_badges() -> str:
+    async def get_earned_badges(ctx: Context) -> str:
         """Get earned badges for user"""
         try:
-            badges = garmin_client.get_earned_badges()
+            badges = get_client(ctx).get_earned_badges()
             if not badges:
                 return "No earned badges found."
 
@@ -351,7 +354,7 @@ def register_tools(app):
             return f"Error retrieving earned badges: {str(e)}"
 
     @app.tool()
-    async def get_adhoc_challenges(start: int = 0, limit: int = 20) -> str:
+    async def get_adhoc_challenges(ctx: Context, start: int = 0, limit: int = 20) -> str:
         """Get user-created social/group challenges (e.g., step competitions with friends)
 
         Returns challenges created by users to compete with connections. These are
@@ -362,7 +365,7 @@ def register_tools(app):
             limit: Maximum number of challenges to return (default 20, max 100)
         """
         try:
-            challenges = garmin_client.get_adhoc_challenges(start, min(limit, 100))
+            challenges = get_client(ctx).get_adhoc_challenges(start, min(limit, 100))
             if not challenges:
                 return "No adhoc challenges found."
 
@@ -400,7 +403,7 @@ def register_tools(app):
             return f"Error retrieving adhoc challenges: {str(e)}"
 
     @app.tool()
-    async def get_available_badge_challenges(start: int = 1, limit: int = 20) -> str:
+    async def get_available_badge_challenges(ctx: Context, start: int = 1, limit: int = 20) -> str:
         """Get official Garmin badge challenges available to join
 
         Returns monthly/seasonal challenges from Garmin that the user can join.
@@ -411,7 +414,7 @@ def register_tools(app):
             limit: Maximum number of challenges to return (default 20, max 100)
         """
         try:
-            challenges = garmin_client.get_available_badge_challenges(start, min(limit, 100))
+            challenges = get_client(ctx).get_available_badge_challenges(start, min(limit, 100))
             if not challenges:
                 return "No available badge challenges found."
 
@@ -433,7 +436,7 @@ def register_tools(app):
             return f"Error retrieving available badge challenges: {str(e)}"
 
     @app.tool()
-    async def get_badge_challenges(start: int = 1, limit: int = 20) -> str:
+    async def get_badge_challenges(ctx: Context, start: int = 1, limit: int = 20) -> str:
         """Get all badge challenges the user has joined (completed and in-progress)
 
         Returns the user's history of badge challenges including progress,
@@ -444,7 +447,7 @@ def register_tools(app):
             limit: Maximum number of challenges to return (default 20, max 100)
         """
         try:
-            challenges = garmin_client.get_badge_challenges(start, min(limit, 100))
+            challenges = get_client(ctx).get_badge_challenges(start, min(limit, 100))
             if not challenges:
                 return "No badge challenges found."
 
@@ -466,7 +469,7 @@ def register_tools(app):
             return f"Error retrieving badge challenges: {str(e)}"
 
     @app.tool()
-    async def get_non_completed_badge_challenges(
+    async def get_non_completed_badge_challenges(ctx: Context, 
         start: int = 1, limit: int = 20
     ) -> str:
         """Get badge challenges currently in progress (not yet completed)
@@ -479,7 +482,7 @@ def register_tools(app):
             limit: Maximum number of challenges to return (default 20, max 100)
         """
         try:
-            challenges = garmin_client.get_non_completed_badge_challenges(
+            challenges = get_client(ctx).get_non_completed_badge_challenges(
                 start, min(limit, 100)
             )
             if not challenges:
@@ -501,14 +504,14 @@ def register_tools(app):
             return f"Error retrieving in-progress badge challenges: {str(e)}"
 
     @app.tool()
-    async def get_race_predictions() -> str:
+    async def get_race_predictions(ctx: Context) -> str:
         """Get predicted race times based on current fitness level
 
         Returns Garmin's predictions for 5K, 10K, half marathon, and marathon
         finish times based on the user's recent training data and VO2 max.
         """
         try:
-            predictions = garmin_client.get_race_predictions()
+            predictions = get_client(ctx).get_race_predictions()
             if not predictions:
                 return "No race predictions found."
 
@@ -540,7 +543,7 @@ def register_tools(app):
             return f"Error retrieving race predictions: {str(e)}"
 
     @app.tool()
-    async def get_inprogress_virtual_challenges(start: int = 0, limit: int = 20) -> str:
+    async def get_inprogress_virtual_challenges(ctx: Context, start: int = 0, limit: int = 20) -> str:
         """Get in-progress virtual challenges/expeditions
 
         Returns virtual challenges (like walking expeditions on famous trails)
@@ -551,7 +554,7 @@ def register_tools(app):
             limit: Maximum number of challenges to return (default 20, max 100)
         """
         try:
-            challenges = garmin_client.get_inprogress_virtual_challenges(
+            challenges = get_client(ctx).get_inprogress_virtual_challenges(
                 start, min(limit, 100)
             )
             if not challenges:

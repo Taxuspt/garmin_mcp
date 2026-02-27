@@ -485,6 +485,75 @@ garmin-mcp-auth --force-reauth
 garmin-mcp-auth --verify
 ```
 
+## Remote Mode (Multi-User, HTTP + OAuth2)
+
+Remote mode runs the MCP server over HTTP with OAuth2 authentication, enabling multi-user access. Each user authenticates directly with their **Garmin Connect credentials** during the OAuth2 flow — no pre-created accounts or manual account linking required.
+
+### How It Works
+
+When a client (e.g., Claude) connects to the remote server:
+
+1. The client discovers the OAuth2 endpoints and initiates authorization
+2. The user is redirected to a login page asking for their **Garmin Connect email and password**
+3. If 2FA is enabled on the Garmin account, a second page asks for the verification code
+4. On success, the Garmin session tokens are stored server-side and an OAuth2 access token is returned to the client
+5. The client uses this token to access all Garmin tools — no extra setup needed
+
+```
+Client → 401 → OAuth2 discovery
+  → /authorize → redirect to /login?state=...
+  → User enters Garmin email + password
+  → POST /login/callback
+      ├─ No 2FA → create user + session → redirect with auth code
+      └─ 2FA required → redirect to /login/mfa?state=...
+           → User enters verification code
+           → POST /login/mfa/callback → create user + session → redirect with auth code
+  → Client exchanges code for tokens → access granted
+```
+
+### Security
+
+- Garmin credentials are **never stored** — only garth OAuth tokens are persisted on disk
+- The 2FA client state is held in memory only, with a 5-minute TTL and single-use (`pop`)
+- Users are identified by their Garmin email (upserted on login)
+
+### Running the Remote Server
+
+#### With Docker Compose (Recommended)
+
+```bash
+# Set the public URL of your server
+export GARMIN_MCP_SERVER_URL=https://garmin-mcp.example.com
+
+# Start
+docker compose -f docker-compose.remote.yml up -d
+```
+
+#### Locally
+
+```bash
+export GARMIN_MCP_SERVER_URL=http://localhost:8000
+
+uv run garmin-mcp-remote
+```
+
+### Configuration (Environment Variables)
+
+| Variable | Default | Description |
+|---|---|---|
+| `GARMIN_MCP_SERVER_URL` | *(required)* | Public URL of the server |
+| `GARMIN_MCP_HOST` | `0.0.0.0` | Listen address |
+| `GARMIN_MCP_PORT` | `8000` | Listen port |
+| `GARMIN_MCP_PATH` | `/mcp` | MCP endpoint path |
+| `DB_PATH` | `/data/garmin_mcp.db` | SQLite database path |
+| `SESSION_STORAGE_PATH` | `/data/garmin_sessions` | Garth token storage |
+
+### Testing with MCP Inspector
+
+```bash
+npx @modelcontextprotocol/inspector http://localhost:8000/mcp
+```
+
 ## Testing
 
 This project includes comprehensive tests for all 81 MCP tools. **All 96 tests are currently passing (100%)**.

@@ -6,6 +6,9 @@ import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
+from mcp.server.fastmcp import Context
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -74,7 +77,7 @@ def register_tools(app):
 
     @app.tool()
     async def get_progress_summary_between_dates(
-        start_date: str, end_date: str, metric: str
+        ctx: Context, start_date: str, end_date: str, metric: str
     ) -> str:
         """Get progress summary for a metric between dates
 
@@ -84,7 +87,7 @@ def register_tools(app):
             metric: Metric to get progress for (e.g., "elevationGain", "duration", "distance", "movingDuration")
         """
         try:
-            summary_data = garmin_client.get_progress_summary_between_dates(
+            summary_data = get_client(ctx).get_progress_summary_between_dates(
                 start_date, end_date, metric
             )
 
@@ -129,7 +132,7 @@ def register_tools(app):
             return f"Error retrieving progress summary: {str(e)}"
 
     @app.tool()
-    async def get_hill_score(start_date: str, end_date: str) -> str:
+    async def get_hill_score(ctx: Context, start_date: str, end_date: str) -> str:
         """Get hill score data between dates
 
         Args:
@@ -137,7 +140,7 @@ def register_tools(app):
             end_date: End date in YYYY-MM-DD format
         """
         try:
-            hill_score_data = garmin_client.get_hill_score(start_date, end_date)
+            hill_score_data = get_client(ctx).get_hill_score(start_date, end_date)
 
             if not hill_score_data:
                 return f"No hill score data found between {start_date} and {end_date}."
@@ -186,7 +189,7 @@ def register_tools(app):
             return f"Error retrieving hill score data: {str(e)}"
 
     @app.tool()
-    async def get_endurance_score(start_date: str, end_date: str) -> str:
+    async def get_endurance_score(ctx: Context, start_date: str, end_date: str) -> str:
         """Get endurance score data between dates
 
         Args:
@@ -194,7 +197,7 @@ def register_tools(app):
             end_date: End date in YYYY-MM-DD format
         """
         try:
-            endurance_data = garmin_client.get_endurance_score(start_date, end_date)
+            endurance_data = get_client(ctx).get_endurance_score(start_date, end_date)
             if not endurance_data:
                 return f"No endurance score data found between {start_date} and {end_date}."
 
@@ -300,7 +303,7 @@ def register_tools(app):
             return f"Error retrieving endurance score data: {str(e)}"
 
     @app.tool()
-    async def get_training_effect(activity_id: int) -> str:
+    async def get_training_effect(ctx: Context, activity_id: int) -> str:
         """Get training effect data for a specific activity
 
         Args:
@@ -309,7 +312,7 @@ def register_tools(app):
         try:
             # Training effect data is available through get_activity
             # The garminconnect library doesn't have a separate get_training_effect method
-            activity = garmin_client.get_activity(activity_id)
+            activity = get_client(ctx).get_activity(activity_id)
             if not activity:
                 return f"No activity found with ID {activity_id}."
 
@@ -343,7 +346,7 @@ def register_tools(app):
             return f"Error retrieving training effect data: {str(e)}"
 
     @app.tool()
-    async def get_hrv_data(date: str, return_timeseries: bool = False) -> str:
+    async def get_hrv_data(ctx: Context, date: str, return_timeseries: bool = False) -> str:
         """Get Heart Rate Variability (HRV) data
 
         Args:
@@ -351,7 +354,7 @@ def register_tools(app):
             return_timeseries: If True, include detailed 5-minute HRV readings (can be large)
         """
         try:
-            hrv_data = garmin_client.get_hrv_data(date)
+            hrv_data = get_client(ctx).get_hrv_data(date)
             if not hrv_data:
                 return f"No HRV data found for {date}."
 
@@ -399,7 +402,7 @@ def register_tools(app):
             return f"Error retrieving HRV data: {str(e)}"
 
     @app.tool()
-    async def get_fitnessage_data(date: str, details: bool = False) -> str:
+    async def get_fitnessage_data(ctx: Context, date: str, details: bool = False) -> str:
         """Get fitness age data
 
         Args:
@@ -408,7 +411,7 @@ def register_tools(app):
                      with targets and improvement suggestions
         """
         try:
-            fitness_age = garmin_client.get_fitnessage_data(date)
+            fitness_age = get_client(ctx).get_fitnessage_data(date)
             if not fitness_age:
                 return f"No fitness age data found for {date}."
 
@@ -478,7 +481,7 @@ def register_tools(app):
             return f"Error retrieving fitness age data: {str(e)}"
 
     @app.tool()
-    async def get_training_status(date: str) -> str:
+    async def get_training_status(ctx: Context, date: str) -> str:
         """Get training status with curated metrics
 
         Returns comprehensive training status including load, VO2 max, recovery,
@@ -488,7 +491,7 @@ def register_tools(app):
             date: Date in YYYY-MM-DD format
         """
         try:
-            status = garmin_client.get_training_status(date)
+            status = get_client(ctx).get_training_status(date)
             if not status:
                 return f"No training status data found for {date}."
 
@@ -554,6 +557,7 @@ def register_tools(app):
 
     @app.tool()
     async def get_lactate_threshold(
+        ctx: Context,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
     ) -> str:
@@ -570,13 +574,13 @@ def register_tools(app):
         try:
             # Call API with appropriate parameters
             if start_date and end_date:
-                threshold = garmin_client.get_lactate_threshold(
+                threshold = get_client(ctx).get_lactate_threshold(
                     latest=False,
                     start_date=start_date,
                     end_date=end_date,
                 )
             else:
-                threshold = garmin_client.get_lactate_threshold(latest=True)
+                threshold = get_client(ctx).get_lactate_threshold(latest=True)
 
             if not threshold:
                 if start_date and end_date:
@@ -656,14 +660,14 @@ def register_tools(app):
             return f"Error retrieving lactate threshold data: {str(e)}"
 
     @app.tool()
-    async def request_reload(date: str) -> str:
+    async def request_reload(ctx: Context, date: str) -> str:
         """Request reload of epoch data
 
         Args:
             date: Date in YYYY-MM-DD format
         """
         try:
-            result = garmin_client.request_reload(date)
+            result = get_client(ctx).request_reload(date)
             return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error requesting data reload: {str(e)}"
