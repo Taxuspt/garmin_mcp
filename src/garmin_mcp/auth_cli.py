@@ -99,7 +99,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         sys.stderr = io.StringIO()
 
         try:
-            is_valid, error_msg = validate_tokens(token_path)
+            is_valid, error_msg = validate_tokens(token_path, is_cn=is_cn)
         finally:
             sys.stderr = old_stderr
 

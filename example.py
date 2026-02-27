@@ -202,7 +202,7 @@ def init_api(email, password):
         # with open(dir_path, "r") as token_file:
         #     tokenstore = token_file.read()
 
-        garmin = Garmin()
+        garmin = Garmin(is_cn=is_cn)
         garmin.login(tokenstore)
 
     except (FileNotFoundError, GarthHTTPError, GarminConnectAuthenticationError):

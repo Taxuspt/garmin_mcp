@@ -42,11 +42,12 @@ def token_exists(token_path: str = None) -> bool:
     return expanded_path.exists()
 
 
-def validate_tokens(token_path: str = None) -> Tuple[bool, str]:
+def validate_tokens(token_path: str = None, is_cn: bool = False) -> Tuple[bool, str]:
     """Validate tokens by attempting to use them.
 
     Args:
         token_path: Optional custom token path. Uses default if not provided.
+        is_cn: Use Garmin Connect China (garmin.cn) instead of international.
 
     Returns:
         Tuple of (is_valid, error_message). error_message is empty string if valid.
@@ -66,7 +67,7 @@ def validate_tokens(token_path: str = None) -> Tuple[bool, str]:
     sys.stderr = io.StringIO()
 
     try:
-        garmin = Garmin()
+        garmin = Garmin(is_cn=is_cn)
         garmin.login(token_path)
 
         # Try a simple API call to verify tokens work
@@ -134,11 +135,12 @@ def remove_tokens(token_path: str = None, base64_path: str = None) -> None:
         expanded_base64_path.unlink()
 
 
-def get_token_info(token_path: str = None) -> dict:
+def get_token_info(token_path: str = None, is_cn: bool = False) -> dict:
     """Get information about stored tokens.
 
     Args:
         token_path: Optional custom token path. Uses default if not provided.
+        is_cn: Use Garmin Connect China (garmin.cn) instead of international.
 
     Returns:
         dict: Token information including existence, validity, and path
@@ -151,7 +153,7 @@ def get_token_info(token_path: str = None) -> dict:
     error_msg = ""
 
     if exists:
-        is_valid, error_msg = validate_tokens(token_path)
+        is_valid, error_msg = validate_tokens(token_path, is_cn=is_cn)
 
     return {
         "path": token_path,
