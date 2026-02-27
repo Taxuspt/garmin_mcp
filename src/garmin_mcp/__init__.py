@@ -80,6 +80,7 @@ elif password_file:
 
 tokenstore = os.getenv("GARMINTOKENS") or "~/.garminconnect"
 tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
+is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
 
 def init_api(email, password):
@@ -106,7 +107,7 @@ def init_api(email, password):
         sys.stderr = io.StringIO()
 
         try:
-            garmin = Garmin()
+            garmin = Garmin(is_cn=is_cn)
             garmin.login(tokenstore)
         finally:
             sys.stderr = old_stderr
@@ -134,7 +135,7 @@ def init_api(email, password):
         )
         try:
             garmin = Garmin(
-                email=email, password=password, is_cn=False, prompt_mfa=get_mfa
+                email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa
             )
             garmin.login()
             # Save Oauth1 and Oauth2 token files to directory for next login
