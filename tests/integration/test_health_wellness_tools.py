@@ -6,6 +6,7 @@ Tests all 22 health and wellness tools using FastMCP integration with mocked Gar
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
+from garmin_mcp.client_resolver import set_global_client
 
 from garmin_mcp import health_wellness
 from tests.fixtures.garmin_responses import (
@@ -37,6 +38,7 @@ from tests.fixtures.garmin_responses import (
 def app_with_health_wellness(mock_garmin_client):
     """Create FastMCP app with health_wellness tools registered"""
     health_wellness.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Health Wellness")
     app = health_wellness.register_tools(app)
     return app

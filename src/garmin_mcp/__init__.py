@@ -24,6 +24,7 @@ from garmin_mcp import workouts
 from garmin_mcp import workout_templates
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
+from garmin_mcp.client_resolver import set_global_client
 
 
 def is_interactive_terminal() -> bool:
@@ -209,6 +210,9 @@ def main():
         return
 
     print("Garmin Connect client initialized successfully.", file=sys.stderr)
+
+    # Set global client for client_resolver (used by tool functions)
+    set_global_client(garmin_client)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)

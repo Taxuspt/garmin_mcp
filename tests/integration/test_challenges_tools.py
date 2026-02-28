@@ -6,6 +6,7 @@ Tests all 9 challenges and badges tools using FastMCP integration with mocked Ga
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
+from garmin_mcp.client_resolver import set_global_client
 
 from garmin_mcp import challenges
 from tests.fixtures.garmin_responses import (
@@ -19,6 +20,7 @@ from tests.fixtures.garmin_responses import (
 def app_with_challenges(mock_garmin_client):
     """Create FastMCP app with challenges tools registered"""
     challenges.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Challenges")
     app = challenges.register_tools(app)
     return app
