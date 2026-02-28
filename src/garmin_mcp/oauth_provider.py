@@ -491,48 +491,90 @@ class GarminOAuthProvider(
 
     # ─── Login pages ─────────────────────────────────────────────────
 
+    # Garmin delta logo as inline SVG
+    _GARMIN_LOGO_SVG = (
+        '<svg viewBox="0 0 40 40" width="48" height="48" xmlns="http://www.w3.org/2000/svg">'
+        '<path d="M20 0 L40 20 L20 40 L0 20 Z" fill="#1a8fc4"/>'
+        '<path d="M20 6 L34 20 L20 34 L6 20 Z" fill="white"/>'
+        '<path d="M20 12 L28 20 L20 28 L12 20 Z" fill="#1a8fc4"/>'
+        "</svg>"
+    )
+
     _PAGE_STYLE = """
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-               display: flex; justify-content: center; align-items: center;
-               min-height: 100vh; margin: 0; background: #f5f5f5; }
-        .card { background: white; padding: 2rem; border-radius: 8px;
-                 box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 100%; max-width: 400px; }
-        h1 { margin: 0 0 1.5rem; font-size: 1.5rem; text-align: center; }
-        label { display: block; margin-bottom: 0.25rem; font-weight: 500; }
-        input { width: 100%; padding: 0.5rem; margin-bottom: 1rem;
-                 border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
-        button { width: 100%; padding: 0.75rem; background: #007bff; color: white;
-                  border: none; border-radius: 4px; font-size: 1rem; cursor: pointer; }
-        button:hover { background: #0056b3; }
-        .error { color:#dc3545; margin-bottom:1rem; padding:0.75rem;
-                  background:#f8d7da; border-radius:4px; }
-        .info { color:#0c5460; margin-bottom:1rem; padding:0.75rem;
-                 background:#d1ecf1; border-radius:4px; text-align:center; }
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               display: flex; flex-direction: column; justify-content: center; align-items: center;
+               min-height: 100vh; margin: 0; background: #f7f8fa; color: #2c3e50; }
+        .card { background: white; padding: 2.5rem 2rem 2rem; border-radius: 12px;
+                box-shadow: 0 4px 24px rgba(0,0,0,0.08); width: 100%; max-width: 420px; }
+        .logo { text-align: center; margin-bottom: 0.5rem; }
+        h1 { margin: 0 0 0.25rem; font-size: 1.35rem; text-align: center; color: #1a1a2e; }
+        .subtitle { text-align: center; color: #6b7280; font-size: 0.9rem; margin-bottom: 1.5rem; }
+        label { display: block; margin-bottom: 0.3rem; font-weight: 600; font-size: 0.85rem;
+                color: #374151; }
+        input[type="email"], input[type="password"], input[type="text"] {
+            width: 100%; padding: 0.65rem 0.75rem; margin-bottom: 1rem;
+            border: 1.5px solid #d1d5db; border-radius: 6px; font-size: 0.95rem;
+            transition: border-color 0.2s; outline: none; }
+        input:focus { border-color: #1a8fc4; box-shadow: 0 0 0 3px rgba(26,143,196,0.12); }
+        button { width: 100%; padding: 0.75rem; background: #1a8fc4; color: white;
+                 border: none; border-radius: 6px; font-size: 1rem; font-weight: 600;
+                 cursor: pointer; transition: background 0.2s; }
+        button:hover { background: #157aab; }
+        button:active { background: #12688f; }
+        .error { color: #991b1b; margin-bottom: 1rem; padding: 0.75rem 1rem;
+                 background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px;
+                 font-size: 0.9rem; }
+        .info { color: #1e40af; margin-bottom: 1rem; padding: 0.75rem 1rem;
+                background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;
+                text-align: center; font-size: 0.9rem; }
+        .privacy { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #e5e7eb;
+                   text-align: center; font-size: 0.8rem; color: #6b7280; line-height: 1.5; }
+        .privacy svg { vertical-align: middle; margin-right: 0.25rem; }
+        .step { display: inline-block; background: #e0f2fe; color: #0369a1; font-size: 0.75rem;
+                font-weight: 700; padding: 0.2rem 0.6rem; border-radius: 10px;
+                margin-bottom: 0.75rem; }
     """
+
+    _LOCK_ICON = (
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>'
+        '<path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+    )
 
     async def get_login_page(self, state: str, error: str = "") -> Response:
         """Render the Garmin Connect login form."""
         error_html = f'<div class="error">{error}</div>' if error else ""
 
         html = f"""<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>Garmin MCP - Sign In</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8">
     <style>{self._PAGE_STYLE}</style>
 </head>
 <body>
     <div class="card">
-        <h1>Sign in with Garmin Connect</h1>
+        <div class="logo">{self._GARMIN_LOGO_SVG}</div>
+        <h1>Connect to Garmin</h1>
+        <p class="subtitle">Sign in with your Garmin Connect account to grant access to your fitness data.</p>
         {error_html}
         <form method="POST" action="/login/callback">
             <input type="hidden" name="state" value="{state}">
             <label for="email">Garmin Connect Email</label>
-            <input type="email" id="email" name="email" required autofocus>
+            <input type="email" id="email" name="email" required autofocus
+                   placeholder="you@example.com">
             <label for="password">Password</label>
-            <input type="password" id="password" name="password" required>
-            <button type="submit">Sign In</button>
+            <input type="password" id="password" name="password" required
+                   placeholder="Your Garmin password">
+            <button type="submit">Sign In with Garmin</button>
         </form>
+        <div class="privacy">
+            {self._LOCK_ICON} Your credentials are used only to authenticate with Garmin
+            and are <strong>never stored</strong> on this server. Only secure session tokens are kept.
+        </div>
     </div>
 </body>
 </html>"""
@@ -601,16 +643,22 @@ class GarminOAuthProvider(
         error_html = f'<div class="error">{error}</div>' if error else ""
 
         html = f"""<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <title>Garmin MCP - Verification</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8">
     <style>{self._PAGE_STYLE}</style>
 </head>
 <body>
     <div class="card">
-        <h1>Two-Factor Authentication</h1>
-        <div class="info">A verification code has been sent to your email or phone.</div>
+        <div class="logo">{self._GARMIN_LOGO_SVG}</div>
+        <h1>Verify Your Identity</h1>
+        <p class="subtitle">One more step to secure your account.</p>
+        <div class="info">
+            Garmin has sent a verification code to your email or phone.
+            Check your inbox and enter the code below.
+        </div>
         {error_html}
         <form method="POST" action="/login/mfa/callback">
             <input type="hidden" name="state" value="{state}">
@@ -618,9 +666,14 @@ class GarminOAuthProvider(
             <input type="text" id="mfa_code" name="mfa_code"
                    inputmode="numeric" pattern="[0-9]*" maxlength="7"
                    autocomplete="one-time-code" required autofocus
-                   placeholder="Enter 6-digit code">
-            <button type="submit">Verify</button>
+                   placeholder="Enter 6-digit code"
+                   style="text-align:center; font-size:1.5rem; letter-spacing:0.3rem; padding:0.75rem;">
+            <button type="submit">Verify &amp; Connect</button>
         </form>
+        <div class="privacy">
+            {self._LOCK_ICON} This code is sent directly by Garmin.
+            We <strong>never</strong> have access to it after verification.
+        </div>
     </div>
 </body>
 </html>"""
