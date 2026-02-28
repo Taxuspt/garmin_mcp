@@ -8,6 +8,7 @@ with support for 2FA via a second web page.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -16,6 +17,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Optional
 
 from mcp.server.auth.provider import (
@@ -76,16 +78,22 @@ class GarminOAuthProvider(
         conn = self._get_conn()
         try:
             # Check if old schema exists (with username/password_hash columns)
-            cols = {
+            # Migrate users table if old schema (username/password_hash)
+            user_cols = {
                 row[1]
                 for row in conn.execute("PRAGMA table_info(users)").fetchall()
             }
-            if "username" in cols:
-                # Migrate: drop old table, recreate with new schema
-                conn.executescript(
-                    """
-                    DROP TABLE IF EXISTS users;
-                    """
+            if "username" in user_cols:
+                conn.executescript("DROP TABLE IF EXISTS users;")
+
+            # Migrate auth_codes table if missing client_state column
+            ac_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(auth_codes)").fetchall()
+            }
+            if ac_cols and "client_state" not in ac_cols:
+                conn.execute(
+                    "ALTER TABLE auth_codes ADD COLUMN client_state TEXT"
                 )
 
             conn.executescript(
@@ -107,6 +115,7 @@ class GarminOAuthProvider(
                     code_challenge TEXT NOT NULL,
                     redirect_uri TEXT NOT NULL,
                     redirect_uri_provided_explicitly INTEGER NOT NULL DEFAULT 1,
+                    client_state TEXT,
                     expires_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS access_tokens (
@@ -160,7 +169,32 @@ class GarminOAuthProvider(
                 (state,),
             ).fetchone()
 
-            if not row or row["expires_at"] < time.time():
+            if not row:
+                # Check if the state exists but already has a user_id (double submit)
+                used = conn.execute(
+                    "SELECT code FROM auth_codes WHERE code = ?", (state,)
+                ).fetchone()
+                if used:
+                    logger.warning(
+                        "Auth state %s already consumed (user_id set)", state[:8]
+                    )
+                else:
+                    logger.warning("Auth state %s not found in DB", state[:8])
+                return HTMLResponse(
+                    "<h1>Authorization expired</h1><p>Please try again.</p>",
+                    status_code=400,
+                )
+
+            if row["expires_at"] < time.time():
+                logger.warning(
+                    "Auth state %s expired: created at %.0f, "
+                    "expired at %.0f, now %.0f (%.0fs late)",
+                    state[:8],
+                    row["expires_at"] - 900,
+                    row["expires_at"],
+                    time.time(),
+                    time.time() - row["expires_at"],
+                )
                 return HTMLResponse(
                     "<h1>Authorization expired</h1><p>Please try again.</p>",
                     status_code=400,
@@ -172,8 +206,8 @@ class GarminOAuthProvider(
             conn.execute(
                 """INSERT INTO auth_codes
                    (code, client_id, user_id, scopes, code_challenge, redirect_uri,
-                    redirect_uri_provided_explicitly, expires_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    redirect_uri_provided_explicitly, client_state, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     auth_code,
                     row["client_id"],
@@ -182,6 +216,7 @@ class GarminOAuthProvider(
                     row["code_challenge"],
                     row["redirect_uri"],
                     row["redirect_uri_provided_explicitly"],
+                    row["client_state"],
                     time.time() + 300,  # 5 min to exchange
                 ),
             )
@@ -191,10 +226,13 @@ class GarminOAuthProvider(
             conn.commit()
 
             redirect_uri = row["redirect_uri"]
+            client_state = row["client_state"]
         finally:
             conn.close()
 
-        redirect_url = construct_redirect_uri(redirect_uri, code=auth_code)
+        redirect_url = construct_redirect_uri(
+            redirect_uri, code=auth_code, state=client_state
+        )
         return RedirectResponse(url=redirect_url, status_code=302)
 
     def _cleanup_expired_mfa(self) -> None:
@@ -243,8 +281,8 @@ class GarminOAuthProvider(
             conn.execute(
                 """INSERT INTO auth_codes
                    (code, client_id, user_id, scopes, code_challenge, redirect_uri,
-                    redirect_uri_provided_explicitly, expires_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    redirect_uri_provided_explicitly, client_state, expires_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     state_token,
                     client.client_id,
@@ -253,7 +291,8 @@ class GarminOAuthProvider(
                     params.code_challenge,
                     str(params.redirect_uri),
                     1 if params.redirect_uri_provided_explicitly else 0,
-                    time.time() + 600,  # 10 min to complete login
+                    params.state,
+                    time.time() + 900,  # 15 min to complete login
                 ),
             )
             conn.commit()
@@ -512,7 +551,11 @@ class GarminOAuthProvider(
         try:
             from garth import sso as garth_sso
 
-            result = garth_sso.login(email, password, return_on_mfa=True)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                partial(garth_sso.login, email, password, return_on_mfa=True),
+            )
         except Exception as e:
             logger.warning("Garmin login failed for %s: %s", email, e)
             return await self.get_login_page(
@@ -605,8 +648,10 @@ class GarminOAuthProvider(
         try:
             from garth import sso as garth_sso
 
-            oauth1_token, oauth2_token = garth_sso.resume_login(
-                pending.client_state, mfa_code
+            loop = asyncio.get_running_loop()
+            oauth1_token, oauth2_token = await loop.run_in_executor(
+                None,
+                partial(garth_sso.resume_login, pending.client_state, mfa_code),
             )
         except Exception as e:
             logger.warning("MFA verification failed: %s", e)
