@@ -346,6 +346,35 @@ def register_tools(app):
             return f"Error uploading workout: {str(e)}"
 
     @app.tool()
+    async def delete_workout(workout_id: int) -> str:
+        """Delete a workout from Garmin Connect
+
+        Permanently removes a workout from your Garmin Connect workout library.
+
+        Args:
+            workout_id: ID of the workout to delete (get IDs from get_workouts)
+        """
+        try:
+            url = f"{garmin_client.garmin_workouts}/workout/{workout_id}"
+            response = garmin_client.garth.delete("connectapi", url, api=True)
+
+            if response.status_code == 204 or response.status_code == 200:
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "message": f"Workout {workout_id} deleted successfully"
+                }, indent=2)
+            else:
+                return json.dumps({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "http_status": response.status_code,
+                    "message": f"Failed to delete workout: HTTP {response.status_code}"
+                }, indent=2)
+        except Exception as e:
+            return f"Error deleting workout: {str(e)}"
+
+    @app.tool()
     async def get_scheduled_workouts(start_date: str, end_date: str) -> str:
         """Get scheduled workouts between two dates with curated summary list
 
