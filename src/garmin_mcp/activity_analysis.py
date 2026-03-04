@@ -6,8 +6,10 @@ Exposes data not available through the REST API:
 - Advanced cycling dynamics (platform center offset, power phase, left/right balance per record)
 - Full per-second time series (power, cadence, HR, speed, altitude, GPS)
 """
+import gzip
 import io
 import json
+import zipfile
 from typing import Optional
 
 try:
@@ -88,8 +90,31 @@ def _semicircles_to_degrees(value) -> Optional[float]:
 # Parsing logic
 # ---------------------------------------------------------------------------
 
+def _extract_fit_bytes(raw: bytes) -> bytes:
+    """Extract raw FIT bytes from whatever Garmin's download endpoint returns.
+
+    Garmin's ORIGINAL format download returns a ZIP archive containing one or
+    more .fit files. Handle that, plus fall back for gzip and raw FIT.
+    """
+    # ZIP archive (Garmin ORIGINAL format — most common)
+    if raw[:2] == b'PK':
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            fit_names = [n for n in zf.namelist() if n.lower().endswith('.fit')]
+            if not fit_names:
+                raise ValueError("ZIP archive contains no .fit files")
+            return zf.read(fit_names[0])
+
+    # Gzip-compressed FIT
+    if raw[:2] == b'\x1f\x8b':
+        return gzip.decompress(raw)
+
+    # Raw FIT (starts with header size byte 0x0c or 0x0e)
+    return raw
+
+
 def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     """Parse a FIT file and extract structured cycling data."""
+    fit_bytes = _extract_fit_bytes(fit_bytes)
     fitfile = fitparse.FitFile(io.BytesIO(fit_bytes))
 
     session = {}
@@ -440,13 +465,32 @@ def register_tools(app):
             if not fit_bytes:
                 return f"No FIT data returned for activity {activity_id}"
 
-            parsed = _parse_fit(bytes(fit_bytes), include_records=include_records)
+            raw = bytes(fit_bytes)
+            first16 = raw[:16].hex()
+            first200_text = raw[:200].decode("utf-8", errors="replace")
+
+            try:
+                parsed = _parse_fit(raw, include_records=include_records)
+            except Exception as parse_err:
+                return json.dumps({
+                    "error": str(parse_err),
+                    "debug": {
+                        "total_bytes": len(raw),
+                        "first_16_bytes_hex": first16,
+                        "first_200_bytes_text": first200_text,
+                        "hint": (
+                            "1f8b = gzip, 504b = ZIP, 0e10/0c10 = raw FIT, "
+                            "3c or 7b = HTML/JSON error from Garmin"
+                        ),
+                    }
+                }, indent=2)
+
             parsed["activity_id"] = activity_id
             parsed["include_records"] = include_records
 
             return json.dumps(parsed, indent=2, default=str)
 
         except Exception as e:
-            return f"Error parsing FIT data for activity {activity_id}: {str(e)}"
+            return f"Error downloading FIT data for activity {activity_id}: {str(e)}"
 
     return app
