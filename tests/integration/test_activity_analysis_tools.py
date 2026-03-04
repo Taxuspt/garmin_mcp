@@ -79,7 +79,7 @@ async def test_get_activity_fit_data_empty_response(app_with_activity_analysis, 
     )
 
     assert result is not None
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     assert "No FIT data" in text
 
 
@@ -93,7 +93,7 @@ async def test_get_activity_fit_data_none_response(app_with_activity_analysis, m
     )
 
     assert result is not None
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     assert "No FIT data" in text or "Error" in text
 
 
@@ -107,7 +107,7 @@ async def test_get_activity_fit_data_error_handling(app_with_activity_analysis, 
     )
 
     assert result is not None
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     assert "Error" in text
 
 
@@ -139,7 +139,7 @@ async def test_get_activity_fit_data_session_fields(app_with_activity_analysis, 
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     assert data["session"]["sport"] == "cycling"
@@ -184,7 +184,7 @@ async def test_get_activity_fit_data_shift_events(app_with_activity_analysis, mo
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     assert len(data["shifts"]) == 1
@@ -215,7 +215,7 @@ async def test_get_activity_fit_data_proactive_shift(app_with_activity_analysis,
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     assert data["shifts"][0]["quality"] == "proactive"
@@ -242,7 +242,7 @@ async def test_get_activity_fit_data_shift_summary(app_with_activity_analysis, m
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     summary = data["shift_summary"]
@@ -271,7 +271,7 @@ async def test_get_activity_fit_data_records_excluded_by_default(app_with_activi
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
     assert "records" not in data
 
@@ -302,7 +302,7 @@ async def test_get_activity_fit_data_records_included_when_requested(app_with_ac
             {"activity_id": ACTIVITY_ID, "include_records": True}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     assert "records" in data
@@ -336,7 +336,7 @@ async def test_get_activity_fit_data_power_balance(app_with_activity_analysis, m
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     assert data["session"]["avg_left_power_pct"] == 47.0
@@ -360,7 +360,7 @@ async def test_get_activity_fit_data_no_shifts(app_with_activity_analysis, mock_
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     assert data["shift_summary"]["total_shifts"] == 0
@@ -389,7 +389,7 @@ async def test_get_activity_fit_data_variability_index_session(app_with_activity
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
     assert "variability_index" in data["session"]
     assert data["session"]["variability_index"] == round(210 / 175, 3)
@@ -412,7 +412,7 @@ async def test_get_activity_fit_data_variability_index_lap(app_with_activity_ana
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
     assert len(data["laps"]) == 1
     assert data["laps"][0]["variability_index"] == round(240 / 200, 3)
@@ -441,7 +441,7 @@ async def test_get_activity_fit_data_lap_torque_and_smoothness(app_with_activity
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
     lap = data["laps"][0]
     assert lap["avg_left_torque_effectiveness_pct"] == 82.5
@@ -483,7 +483,7 @@ async def test_get_activity_fit_data_shift_terrain_classification(app_with_activ
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     # Each shift should have grade_at_shift_pct
