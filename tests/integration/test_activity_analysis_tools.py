@@ -389,7 +389,7 @@ async def test_get_activity_fit_data_variability_index_session(app_with_activity
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
     assert "variability_index" in data["session"]
     assert data["session"]["variability_index"] == round(210 / 175, 3)
@@ -412,7 +412,7 @@ async def test_get_activity_fit_data_variability_index_lap(app_with_activity_ana
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
     assert len(data["laps"]) == 1
     assert data["laps"][0]["variability_index"] == round(240 / 200, 3)
@@ -441,7 +441,7 @@ async def test_get_activity_fit_data_lap_torque_and_smoothness(app_with_activity
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
     lap = data["laps"][0]
     assert lap["avg_left_torque_effectiveness_pct"] == 82.5
@@ -483,7 +483,7 @@ async def test_get_activity_fit_data_shift_terrain_classification(app_with_activ
             "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
         )
 
-    text = result[0].text if hasattr(result[0], "text") else str(result)
+    text = result[0][0].text
     data = json.loads(text)
 
     # Each shift should have grade_at_shift_pct
