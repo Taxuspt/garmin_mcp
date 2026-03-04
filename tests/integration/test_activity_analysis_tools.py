@@ -9,6 +9,14 @@ from unittest.mock import Mock, patch, MagicMock
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import activity_analysis
+from garmin_mcp.activity_analysis import (
+    _compute_power_duration_curve,
+    _detect_climbs,
+    _compute_hr_drift,
+    _compute_temperature_stats,
+    _grade_analysis,
+    _compute_shift_summary,
+)
 
 
 ACTIVITY_ID = 22041393449
@@ -358,3 +366,307 @@ async def test_get_activity_fit_data_no_shifts(app_with_activity_analysis, mock_
     assert data["shift_summary"]["total_shifts"] == 0
     assert "note" in data["shift_summary"]
     assert data["shifts"] == []
+
+
+# ---------------------------------------------------------------------------
+# Variability Index
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_variability_index_session(app_with_activity_analysis, mock_garmin_client):
+    """Variability Index computed for session when NP and avg_power are present"""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "normalized_power": 210,
+        "avg_power": 175,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([session_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    text = result[0].text if hasattr(result[0], "text") else str(result)
+    data = json.loads(text)
+    assert "variability_index" in data["session"]
+    assert data["session"]["variability_index"] == round(210 / 175, 3)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_variability_index_lap(app_with_activity_analysis, mock_garmin_client):
+    """Variability Index computed per lap"""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    lap_msg = _make_mock_fit_message("lap", {
+        "normalized_power": 240,
+        "avg_power": 200,
+        "total_elapsed_time": 1800.0,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([lap_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    text = result[0].text if hasattr(result[0], "text") else str(result)
+    data = json.loads(text)
+    assert len(data["laps"]) == 1
+    assert data["laps"][0]["variability_index"] == round(240 / 200, 3)
+
+
+# ---------------------------------------------------------------------------
+# Lap torque effectiveness + pedal smoothness
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_lap_torque_and_smoothness(app_with_activity_analysis, mock_garmin_client):
+    """Torque effectiveness and pedal smoothness included in lap data"""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    lap_msg = _make_mock_fit_message("lap", {
+        "avg_left_torque_effectiveness": 82.5,
+        "avg_right_torque_effectiveness": 79.0,
+        "avg_left_pedal_smoothness": 31.2,
+        "avg_right_pedal_smoothness": 28.4,
+        "total_elapsed_time": 3600.0,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([lap_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    text = result[0].text if hasattr(result[0], "text") else str(result)
+    data = json.loads(text)
+    lap = data["laps"][0]
+    assert lap["avg_left_torque_effectiveness_pct"] == 82.5
+    assert lap["avg_right_torque_effectiveness_pct"] == 79.0
+    assert lap["avg_left_pedal_smoothness_pct"] == 31.2
+    assert lap["avg_right_pedal_smoothness_pct"] == 28.4
+
+
+# ---------------------------------------------------------------------------
+# Shift-by-terrain
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_shift_terrain_classification(app_with_activity_analysis, mock_garmin_client):
+    """Shifts tagged with grade and summarized by terrain"""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    # Record with climbing grade
+    record_climb = _make_mock_fit_message("record", {"cadence": 75, "grade": 5.5})
+    gear_data = (53 << 24) | (17 << 16) | (2 << 8) | 4
+    shift_climb = _make_mock_fit_message("event", {
+        "event": "rear_gear_change",
+        "gear_change_data": gear_data,
+        "timestamp": "2024-03-02 14:20:00",
+    })
+    # Record on flat
+    record_flat = _make_mock_fit_message("record", {"cadence": 90, "grade": 1.0})
+    shift_flat = _make_mock_fit_message("event", {
+        "event": "rear_gear_change",
+        "gear_change_data": gear_data,
+        "timestamp": "2024-03-02 14:21:00",
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([
+            record_climb, shift_climb, record_flat, shift_flat
+        ])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    text = result[0].text if hasattr(result[0], "text") else str(result)
+    data = json.loads(text)
+
+    # Each shift should have grade_at_shift_pct
+    assert data["shifts"][0]["grade_at_shift_pct"] == 5.5
+    assert data["shifts"][1]["grade_at_shift_pct"] == 1.0
+
+    # by_terrain should appear in shift_summary
+    assert "by_terrain" in data["shift_summary"]
+    assert "climbing" in data["shift_summary"]["by_terrain"]
+    assert "flat" in data["shift_summary"]["by_terrain"]
+
+
+# ---------------------------------------------------------------------------
+# Power Duration Curve (unit tests)
+# ---------------------------------------------------------------------------
+
+def test_power_duration_curve_basic():
+    """PDC computes correct best power for each duration"""
+    # Synthetic: 120 records, first 10 are at 500W, rest at 100W
+    records = [{"power_w": 500}] * 10 + [{"power_w": 100}] * 110
+    pdc = _compute_power_duration_curve(records)
+    assert pdc is not None
+    # 5s best should be 500W
+    assert pdc["5s"] == 500
+    # 1min best (60s) — can't have 60 consecutive 500W records, so best is mix
+    assert pdc["1min"] < 500
+
+
+def test_power_duration_curve_empty():
+    """PDC returns None when no power data"""
+    records = [{"cadence_rpm": 80}] * 100  # no power_w
+    pdc = _compute_power_duration_curve(records)
+    assert pdc is None
+
+
+def test_power_duration_curve_short_ride():
+    """PDC skips durations longer than the ride"""
+    records = [{"power_w": 300}] * 30  # 30 seconds
+    pdc = _compute_power_duration_curve(records)
+    assert pdc is not None
+    assert "5s" in pdc
+    assert "1min" not in pdc  # 60s > 30 records
+
+
+def test_power_duration_curve_sliding_window():
+    """PDC sliding window finds best window, not just the start"""
+    # Best 5s is in the middle
+    records = (
+        [{"power_w": 100}] * 10 +
+        [{"power_w": 400}] * 5 +
+        [{"power_w": 100}] * 10
+    )
+    pdc = _compute_power_duration_curve(records)
+    assert pdc["5s"] == 400
+
+
+# ---------------------------------------------------------------------------
+# Climb detection + VAM (unit tests)
+# ---------------------------------------------------------------------------
+
+def _make_records(grade, power, cadence, hr, speed, altitude_start, count):
+    """Build synthetic per-second records for climb testing."""
+    records = []
+    alt = altitude_start
+    for i in range(count):
+        alt += speed * grade / 100  # approximate altitude gain
+        records.append({
+            "grade_pct": grade,
+            "power_w": power,
+            "cadence_rpm": cadence,
+            "heart_rate_bpm": hr,
+            "speed_mps": speed,
+            "altitude_m": alt,
+            "timestamp": f"2024-03-02 14:{i // 60:02d}:{i % 60:02d}",
+        })
+    return records
+
+
+def test_detect_climbs_basic():
+    """Climb detection identifies sustained positive grade segment"""
+    # 200 seconds at 5% grade (should produce ~50m gain at 5 m/s)
+    climbing = _make_records(grade=5.0, power=280, cadence=75, hr=160, speed=5.0, altitude_start=100, count=200)
+    flat = _make_records(grade=0.5, power=180, cadence=90, hr=140, speed=8.0, altitude_start=200, count=100)
+    records = climbing + flat
+
+    climbs = _detect_climbs(records, min_elevation_gain_m=30, min_avg_grade_pct=3.0, min_duration_s=60)
+    assert len(climbs) >= 1
+    c = climbs[0]
+    assert c["avg_grade_pct"] == 5.0
+    assert c["avg_power_w"] == 280
+    assert "vam_m_per_hr" in c
+
+
+def test_detect_climbs_none_when_flat():
+    """No climbs detected on a flat ride"""
+    flat = _make_records(grade=1.0, power=200, cadence=90, hr=140, speed=9.0, altitude_start=50, count=300)
+    climbs = _detect_climbs(flat)
+    assert climbs == []
+
+
+def test_detect_climbs_vam_calculation():
+    """VAM calculation is correct: (elevation_gain / duration) * 3600"""
+    # 300 seconds at 5 m/s, 5% grade → gain ≈ 75m
+    records = _make_records(grade=5.0, power=280, cadence=75, hr=155, speed=5.0, altitude_start=0, count=300)
+    climbs = _detect_climbs(records, min_elevation_gain_m=30, min_duration_s=60)
+    assert len(climbs) >= 1
+    # VAM should be roughly (75 / 300) * 3600 = 900 m/hr (approximate)
+    assert climbs[0].get("vam_m_per_hr", 0) > 500
+
+
+# ---------------------------------------------------------------------------
+# HR drift (unit tests)
+# ---------------------------------------------------------------------------
+
+def test_hr_drift_significant():
+    """Detects significant HR drift (decoupling) when second half HR is elevated"""
+    # First half: 250W at 140 bpm → ratio 1.786
+    # Second half: 250W at 165 bpm → ratio 1.515 → drift = (1.515-1.786)/1.786 = -15%
+    first_half = [{"power_w": 250, "heart_rate_bpm": 140}] * 1900
+    second_half = [{"power_w": 250, "heart_rate_bpm": 165}] * 1900
+    records = first_half + second_half
+    drift = _compute_hr_drift(records)
+    assert drift is not None
+    assert drift["hr_drift_pct"] < -10  # significant negative drift
+    assert drift["interpretation"] == "significant_decoupling"
+
+
+def test_hr_drift_well_coupled():
+    """Well-coupled ride shows minimal HR drift"""
+    records = [{"power_w": 200, "heart_rate_bpm": 145}] * 4000
+    drift = _compute_hr_drift(records)
+    assert drift is not None
+    assert abs(drift["hr_drift_pct"]) < 5
+    assert drift["interpretation"] == "well_coupled"
+
+
+def test_hr_drift_skipped_for_short_rides():
+    """HR drift not computed for rides under 60 minutes"""
+    records = [{"power_w": 200, "heart_rate_bpm": 145}] * 1000  # ~17 min
+    drift = _compute_hr_drift(records)
+    assert drift is None
+
+
+# ---------------------------------------------------------------------------
+# Temperature stats (unit tests)
+# ---------------------------------------------------------------------------
+
+def test_temperature_stats_basic():
+    """Temperature stats computed correctly"""
+    records = (
+        [{"temperature_c": 15, "heart_rate_bpm": 140, "power_w": 220}] * 50 +
+        [{"temperature_c": 30, "heart_rate_bpm": 160, "power_w": 210}] * 50
+    )
+    stats = _compute_temperature_stats(records)
+    assert stats is not None
+    assert stats["min_temp_c"] == 15
+    assert stats["max_temp_c"] == 30
+    assert stats["temp_range_c"] == 15.0
+
+
+def test_temperature_stats_none_when_no_data():
+    """Returns None when no temperature data"""
+    records = [{"power_w": 200, "heart_rate_bpm": 145}] * 50
+    assert _compute_temperature_stats(records) is None
+
+
+# ---------------------------------------------------------------------------
+# Grade analysis (unit tests)
+# ---------------------------------------------------------------------------
+
+def test_grade_analysis_bins_correctly():
+    """Grade analysis bins records into correct terrain buckets"""
+    records = (
+        [{"grade_pct": 0.5, "power_w": 180, "cadence_rpm": 90, "heart_rate_bpm": 140}] * 60 +
+        [{"grade_pct": 4.5, "power_w": 280, "cadence_rpm": 75, "heart_rate_bpm": 165}] * 60 +
+        [{"grade_pct": 7.5, "power_w": 320, "cadence_rpm": 65, "heart_rate_bpm": 175}] * 60 +
+        [{"grade_pct": -4.0, "power_w": 50, "cadence_rpm": 95, "heart_rate_bpm": 120}] * 60
+    )
+    result = _grade_analysis(records)
+    assert result is not None
+    assert "flat" in result
+    assert "gentle" in result
+    assert "moderate" in result
+    assert "descending" in result
+    # Steeper terrain should have higher avg power
+    assert result["gentle"]["avg_power_w"] < result["moderate"]["avg_power_w"]
