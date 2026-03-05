@@ -15,6 +15,35 @@ def configure(client):
     garmin_client = client
 
 
+def _fix_hr_zone_step(step: dict) -> None:
+    """Fix a common mistake where HR zone targets use targetValueOne instead of zoneNumber.
+
+    When targetType is heart.rate.zone, Garmin expects zoneNumber (1-5).
+    If targetValueOne is set to a small integer (1-5) and zoneNumber is missing,
+    this is almost certainly a zone number, not an absolute HR value.
+    """
+    target_type = step.get('targetType', {})
+    target_key = target_type.get('workoutTargetTypeKey', '')
+
+    if target_key == 'heart.rate.zone' and 'zoneNumber' not in step:
+        zone = step.get('targetValueOne')
+        if zone is not None and 1 <= zone <= 5:
+            step['zoneNumber'] = int(zone)
+            step.pop('targetValueOne', None)
+            step.pop('targetValueTwo', None)
+
+    # Recurse into nested steps (RepeatGroupDTO)
+    for nested in step.get('workoutSteps', []):
+        _fix_hr_zone_step(nested)
+
+
+def _fix_hr_zone_steps(workout_data: dict) -> None:
+    """Walk all workout steps and fix HR zone target mistakes."""
+    for segment in workout_data.get('workoutSegments', []):
+        for step in segment.get('workoutSteps', []):
+            _fix_hr_zone_step(step)
+
+
 def _curate_workout_summary(workout: dict) -> dict:
     """Extract essential workout metadata for list views"""
     sport_type = workout.get('sportType', {})
@@ -304,6 +333,9 @@ def register_tools(app):
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
         - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
 
+        IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
+        targetValueOne/targetValueTwo are only for absolute value ranges (e.g. pace in m/s, power in watts).
+
         **Available Templates:**
         Instead of building workout JSON from scratch, you can use these MCP resources as starting points:
         - workout://templates/simple-run - Basic warmup/run/cooldown structure
@@ -315,7 +347,7 @@ def register_tools(app):
         Access these resources using your MCP client's resource reading capability, modify the template
         as needed, and pass the resulting JSON as the workout_data parameter.
 
-        Example workout structure:
+        Example workout structure with HR zone target:
         {
             "workoutName": "My Workout",
             "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
@@ -325,10 +357,11 @@ def register_tools(app):
                 "workoutSteps": [{
                     "type": "ExecutableStepDTO",
                     "stepOrder": 1,
-                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                    "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                     "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                    "endConditionValue": 300.0,
-                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                    "endConditionValue": 1200.0,
+                    "targetType": {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"},
+                    "zoneNumber": 3
                 }]
             }]
         }
@@ -337,6 +370,9 @@ def register_tools(app):
             workout_data: Dictionary containing workout structure (name, sport type, segments, etc.)
         """
         try:
+            # Fix common mistake: HR zone targets using targetValueOne instead of zoneNumber
+            _fix_hr_zone_steps(workout_data)
+
             # Pass dict directly - library handles conversion
             result = garmin_client.upload_workout(workout_data)
 
