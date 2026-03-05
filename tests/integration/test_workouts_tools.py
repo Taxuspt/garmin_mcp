@@ -314,6 +314,101 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
     assert workouts[1]["activity_id"] == 987654
 
 
+# Delete workout tests
+@pytest.mark.asyncio
+async def test_delete_workout_success_204(app_with_workouts, mock_garmin_client):
+    """Test delete_workout tool with 204 response"""
+    import json as json_module
+    from unittest.mock import MagicMock
+
+    # Setup mock for garth.delete call
+    mock_response = MagicMock()
+    mock_response.status_code = 204
+    mock_garmin_client.garth.delete.return_value = mock_response
+
+    # Call tool
+    workout_id = 123456
+    result = await app_with_workouts.call_tool(
+        "delete_workout",
+        {"workout_id": workout_id}
+    )
+
+    # Verify
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["workout_id"] == 123456
+    assert "deleted successfully" in result_data["message"]
+
+
+@pytest.mark.asyncio
+async def test_delete_workout_success_200(app_with_workouts, mock_garmin_client):
+    """Test delete_workout tool with 200 response"""
+    import json as json_module
+    from unittest.mock import MagicMock
+
+    # Setup mock for garth.delete call
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_garmin_client.garth.delete.return_value = mock_response
+
+    # Call tool
+    workout_id = 789012
+    result = await app_with_workouts.call_tool(
+        "delete_workout",
+        {"workout_id": workout_id}
+    )
+
+    # Verify
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["workout_id"] == 789012
+
+
+@pytest.mark.asyncio
+async def test_delete_workout_failure(app_with_workouts, mock_garmin_client):
+    """Test delete_workout tool when deletion fails (non-200/204 status)"""
+    import json as json_module
+    from unittest.mock import MagicMock
+
+    # Setup mock for garth.delete call with error status
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+    mock_garmin_client.garth.delete.return_value = mock_response
+
+    # Call tool
+    workout_id = 999999
+    result = await app_with_workouts.call_tool(
+        "delete_workout",
+        {"workout_id": workout_id}
+    )
+
+    # Verify
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert result_data["workout_id"] == 999999
+    assert result_data["http_status"] == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_workout_exception(app_with_workouts, mock_garmin_client):
+    """Test delete_workout tool when an exception is raised"""
+    # Setup mock to raise exception
+    mock_garmin_client.garth.delete.side_effect = Exception("Network error")
+
+    # Call tool
+    result = await app_with_workouts.call_tool(
+        "delete_workout",
+        {"workout_id": 123456}
+    )
+
+    # Verify error is handled gracefully
+    assert result is not None
+    assert "Error deleting workout" in result[0][0].text
+
+
 # Error handling tests
 @pytest.mark.asyncio
 async def test_get_workouts_no_data(app_with_workouts, mock_garmin_client):
