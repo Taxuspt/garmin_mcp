@@ -323,6 +323,25 @@ def register_tools(app):
             return f"Error retrieving activity heart rate time zone data: {str(e)}"
 
     @app.tool()
+    async def get_activity_power_in_timezones(activity_id: int) -> str:
+        """Get power distribution across training zones for an activity.
+
+        Returns time spent in each power zone with watt thresholds and duration.
+        Requires a power meter. Zones are based on the athlete's FTP configured in Garmin Connect.
+
+        Args:
+            activity_id: ID of the activity to retrieve power zone data for
+        """
+        try:
+            power_zones = garmin_client.get_activity_power_in_timezones(activity_id)
+            if not power_zones:
+                return f"No power zone data found for activity {activity_id}. Ensure the activity was recorded with a power meter."
+
+            return json.dumps(power_zones, indent=2)
+        except Exception as e:
+            return f"Error retrieving activity power zone data: {str(e)}"
+
+    @app.tool()
     async def get_activity_gear(activity_id: int) -> str:
         """Get gear data used for an activity
 
