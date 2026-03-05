@@ -61,14 +61,18 @@ MOCK_ACTIVITY_SPLITS = {
             "distance": 1000.0,
             "duration": 360.0,
             "averageHR": 142,
-            "averageSpeed": 2.78
+            "averageSpeed": 2.78,
+            "elevationGain": 25.5,
+            "elevationLoss": 10.2
         },
         {
             "lapIndex": 2,
             "distance": 1000.0,
             "duration": 350.0,
             "averageHR": 145,
-            "averageSpeed": 2.86
+            "averageSpeed": 2.86,
+            "elevationGain": 15.0,
+            "elevationLoss": 30.8
         }
     ]
 }

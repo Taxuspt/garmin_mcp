@@ -117,6 +117,35 @@ async def test_get_activity_splits_tool(app_with_activity_management, mock_garmi
 
 
 @pytest.mark.asyncio
+async def test_get_activity_splits_elevation_fields(app_with_activity_management, mock_garmin_client):
+    """Test get_activity_splits tool includes elevation gain and loss"""
+    import json
+
+    # Setup mock
+    mock_garmin_client.get_activity_splits.return_value = MOCK_ACTIVITY_SPLITS
+
+    # Call tool
+    activity_id = 12345678901
+    result = await app_with_activity_management.call_tool(
+        "get_activity_splits",
+        {"activity_id": activity_id}
+    )
+
+    # Parse and verify elevation fields
+    data = json.loads(result[0][0].text)
+    assert "laps" in data
+    assert len(data["laps"]) == 2
+
+    # First lap elevation
+    assert data["laps"][0]["elevation_gain_meters"] == 25.5
+    assert data["laps"][0]["elevation_loss_meters"] == 10.2
+
+    # Second lap elevation
+    assert data["laps"][1]["elevation_gain_meters"] == 15.0
+    assert data["laps"][1]["elevation_loss_meters"] == 30.8
+
+
+@pytest.mark.asyncio
 async def test_get_activity_typed_splits_tool(app_with_activity_management, mock_garmin_client):
     """Test get_activity_typed_splits tool returns typed splits"""
     # Setup mock
