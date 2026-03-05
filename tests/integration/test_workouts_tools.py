@@ -234,7 +234,7 @@ async def test_upload_workout_fixes_hr_zone_target(app_with_workouts, mock_garmi
     assert "targetValueOne" not in step
     assert "targetValueTwo" not in step
 
-    result_data = json_module.loads(result[0].text)
+    result_data = json_module.loads(result[0][0].text)
     assert result_data["status"] == "success"
 
 
@@ -292,7 +292,7 @@ async def test_upload_workout_fixes_hr_zone_in_repeat_group(app_with_workouts, m
     assert "targetValueOne" not in interval_step
     assert "targetValueTwo" not in interval_step
 
-    result_data = json_module.loads(result[0].text)
+    result_data = json_module.loads(result[0][0].text)
     assert result_data["status"] == "success"
 
 
