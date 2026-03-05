@@ -95,7 +95,7 @@ async def test_get_endurance_score_tool(app_with_training, mock_garmin_client):
     mock_garmin_client.get_endurance_score.assert_called_once_with("2024-01-08", "2024-01-15")
 
     # Parse the result and verify content
-    data = json.loads(result[0].text)
+    data = json.loads(result[0][0].text)
 
     # Check period summary
     assert data["period_avg_score"] == 5631
@@ -260,7 +260,7 @@ async def test_get_lactate_threshold_tool_latest(app_with_training, mock_garmin_
     mock_garmin_client.get_lactate_threshold.assert_called_once_with(latest=True)
 
     # Verify output structure
-    data = json.loads(result[0].text)
+    data = json.loads(result[0][0].text)
     assert data["lactate_threshold_speed_mps"] == 0.32222132
     assert data["lactate_threshold_heart_rate_bpm"] == 169
     assert data["functional_threshold_power_watts"] == 334
@@ -289,7 +289,7 @@ async def test_get_lactate_threshold_tool_range(app_with_training, mock_garmin_c
     )
 
     # Verify output structure
-    data = json.loads(result[0].text)
+    data = json.loads(result[0][0].text)
     assert data["start_date"] == "2024-01-08"
     assert data["end_date"] == "2024-01-15"
     assert "speed_history" in data
