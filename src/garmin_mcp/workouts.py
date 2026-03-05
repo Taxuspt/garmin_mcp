@@ -304,6 +304,17 @@ def register_tools(app):
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
         - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
 
+        **Available Templates:**
+        Instead of building workout JSON from scratch, you can use these MCP resources as starting points:
+        - workout://templates/simple-run - Basic warmup/run/cooldown structure
+        - workout://templates/interval-running - Interval training with repeat groups
+        - workout://templates/tempo-run - Tempo run with heart rate zone targets
+        - workout://templates/strength-circuit - Strength training circuit structure
+        - workout://reference/structure - Complete JSON structure reference with all fields
+
+        Access these resources using your MCP client's resource reading capability, modify the template
+        as needed, and pass the resulting JSON as the workout_data parameter.
+
         Example workout structure:
         {
             "workoutName": "My Workout",
