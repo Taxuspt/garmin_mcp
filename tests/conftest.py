@@ -15,27 +15,6 @@ def mock_garmin_client():
     # Configure mock to have all the methods we need
     # By default, methods return None (can be overridden in tests)
     client.get_activities = Mock(return_value=[])
-    client.get_stats = Mock(return_value={})
-    client.get_user_summary = Mock(return_value={})
-    client.get_body_composition = Mock(return_value={})
-    client.get_stats_and_body = Mock(return_value={})
-    client.get_steps_data = Mock(return_value={})
-    client.get_daily_steps = Mock(return_value={})
-    client.get_training_readiness = Mock(return_value={})
-    client.get_body_battery = Mock(return_value={})
-    client.get_body_battery_events = Mock(return_value={})
-    client.get_blood_pressure = Mock(return_value={})
-    client.get_floors = Mock(return_value={})
-    client.get_training_status = Mock(return_value={})
-    client.get_rhr_day = Mock(return_value={})
-    client.get_heart_rates = Mock(return_value={})
-    client.get_hydration_data = Mock(return_value={})
-    client.get_sleep_data = Mock(return_value={})
-    client.get_stress_data = Mock(return_value={})
-    client.get_respiration_data = Mock(return_value={})
-    client.get_spo2_data = Mock(return_value={})
-    client.get_all_day_stress = Mock(return_value={})
-    client.get_all_day_events = Mock(return_value={})
 
     return client
 
@@ -79,93 +58,12 @@ def sample_activity():
     }
 
 
-@pytest.fixture
-def sample_steps_data():
-    """Sample steps data matching Garmin API response format"""
-    return {
-        "steps": 10000,
-        "dailyStepGoal": 8000,
-        "stepGoalDistance": 10000,
-        "totalDistance": 7500,
-        "wellnessDistanceUnit": "meter"
-    }
-
-
-@pytest.fixture
-def sample_sleep_data():
-    """Sample sleep data matching Garmin API response format"""
-    return {
-        "dailySleepDTO": {
-            "sleepTimeSeconds": 28800,  # 8 hours
-            "napTimeSeconds": 0,
-            "sleepStartTimestampGMT": 1705276800000,
-            "sleepEndTimestampGMT": 1705305600000,
-            "deepSleepSeconds": 7200,
-            "lightSleepSeconds": 14400,
-            "remSleepSeconds": 7200,
-            "awakeSleepSeconds": 0,
-            "awakeCount": 2,
-            "restlessMomentsCount": 15,
-            "avgSleepStress": 15,
-            "restingHeartRate": 55,
-            "sleepScores": {
-                "overall": {
-                    "value": 85,
-                    "qualifierKey": "GOOD",
-                    "optimalStart": 75,
-                    "optimalEnd": 100
-                }
-            }
-        },
-        "wellnessSpO2SleepSummaryDTO": {
-            "averageSpo2": 96,
-            "lowestSpo2": 93
-        },
-        "avgOvernightHrv": 45
-    }
-
-
-@pytest.fixture
-def sample_heart_rate_data():
-    """Sample heart rate data matching Garmin API response format"""
-    return {
-        "restingHeartRate": 55,
-        "maxHeartRate": 180,
-        "minHeartRate": 45,
-        "lastSevenDaysAvgRestingHeartRate": 57
-    }
-
-
-@pytest.fixture
-def sample_body_battery_data():
-    """Sample body battery data matching Garmin API response format"""
-    return [{
-        "startTimestampGMT": 1705276800000,
-        "endTimestampGMT": 1705363200000,
-        "chargedValue": 100,
-        "drainedValue": 25,
-        "bodyBatteryMostRecentValue": 75
-    }]
-
-
-@pytest.fixture
-def sample_training_status():
-    """Sample training status data matching Garmin API response format"""
-    return {
-        "trainingStatusKey": "PRODUCTIVE",
-        "load7Day": 250,
-        "load4Week": 1000,
-        "vo2MaxValue": 52.5,
-        "fitnessAge": 25
-    }
-
-
 def create_test_app(module, mock_client):
     """
     Helper function to create a FastMCP app with a specific module registered
 
     Args:
-        module: The module to register (e.g., health_wellness)
+        module: The module to register (e.g., activity_management, workouts)
         mock_client: Mock Garmin client to configure the module with
 
     Returns:
@@ -187,7 +85,7 @@ def app_factory(mock_garmin_client):
     Factory fixture to create FastMCP apps with different modules
 
     Usage:
-        app = app_factory(health_wellness)
+        app = app_factory(activity_management)
     """
     def _create_app(module):
         return create_test_app(module, mock_garmin_client)

@@ -10,44 +10,27 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 - List recent activities with pagination support
 - Get detailed activity information
-- Access health metrics (steps, heart rate, sleep, stress, respiration)
-- View body composition data
-- Track training status and readiness
-- Manage gear and equipment
 - Access workouts and training plans
-- Weekly health aggregates (steps, stress, intensity minutes)
+- Browse workout templates
 
 ### Tool Coverage
 
-This MCP server implements **96+ tools** covering ~89% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
+This MCP server implements tools for the following domains:
 
 - ✅ Activity Management (14 tools)
-- ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
-- ✅ Training & Performance (9 tools)
 - ✅ Workouts (8 tools)
-- ✅ Devices (7 tools)
-- ✅ Gear Management (5 tools)
-- ✅ Weight Tracking (5 tools)
-- ✅ Challenges & Badges (10 tools)
-- ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
-- ✅ Women's Health (3 tools)
-- ✅ User Profile (3 tools)
+- ✅ Workout Templates (MCP resources)
 
-### Intentionally Skipped Endpoints
+### OAuth Scope Notes
 
-Some endpoints are not implemented due to performance or complexity considerations:
+This server uses the `garminconnect` / `garth` library for authentication, which relies on
+Garmin's SSO OAuth tokens. The token grants access to the Garmin Connect API — scopes are
+not user-configurable in the underlying library, but least-privilege access has been applied
+by design:
 
-**High Data Volume:**
-- `get_activity_details()` - Returns large GPS tracks and chart data (50KB-500KB). Use `get_activity()` for summaries instead.
-
-**Specialized Workout Formats:**
-- `upload_running_workout()`, `upload_cycling_workout()`, `upload_swimming_workout()` - Sport-specific workout uploads. Use `upload_workout()` for general workouts.
-
-**Maintenance & Destructive Operations:**
-- `delete_activity()`, `delete_blood_pressure()` - Destructive operations require careful consideration.
-- Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
-
-If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
+- **Activity Management** — read-only operations (list and retrieve activities)
+- **Workout Templates** — read-only access (browse built-in templates as MCP resources)
+- **Workouts** — read and write operations required (listing, uploading, scheduling, deleting workouts)
 
 ## Setup
 
@@ -537,7 +520,7 @@ uv run pytest tests/integration/
 uv run pytest tests/integration/ -v
 
 # Run a specific test module
-uv run pytest tests/integration/test_health_wellness_tools.py -v
+uv run pytest tests/integration/test_activity_management_tools.py -v
 
 # Run end-to-end tests (requires real Garmin credentials)
 uv run pytest tests/e2e/ -m e2e -v
@@ -545,5 +528,5 @@ uv run pytest tests/e2e/ -m e2e -v
 
 ### Test Structure
 
-- **Integration tests** (130 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
+- **Integration tests** (33 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
 - **End-to-end tests** (4 tests): Test with real MCP server and Garmin API (requires valid credentials)
