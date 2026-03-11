@@ -11,20 +11,10 @@ from mcp.server.fastmcp import FastMCP
 from garth.exc import GarthHTTPError
 from garminconnect import Garmin, GarminConnectAuthenticationError
 
-# Import all modules
+# Import required modules
 from garmin_mcp import activity_management
-from garmin_mcp import health_wellness
-from garmin_mcp import user_profile
-from garmin_mcp import devices
-from garmin_mcp import gear_management
-from garmin_mcp import weight_management
-from garmin_mcp import challenges
-from garmin_mcp import training
 from garmin_mcp import workouts
 from garmin_mcp import workout_templates
-from garmin_mcp import data_management
-from garmin_mcp import womens_health
-from garmin_mcp import nutrition
 
 
 def is_interactive_terminal() -> bool:
@@ -212,36 +202,16 @@ def main():
 
     print("Garmin Connect client initialized successfully.", file=sys.stderr)
 
-    # Configure all modules with the Garmin client
+    # Configure required modules with the Garmin client
     activity_management.configure(garmin_client)
-    health_wellness.configure(garmin_client)
-    user_profile.configure(garmin_client)
-    devices.configure(garmin_client)
-    gear_management.configure(garmin_client)
-    weight_management.configure(garmin_client)
-    challenges.configure(garmin_client)
-    training.configure(garmin_client)
     workouts.configure(garmin_client)
-    data_management.configure(garmin_client)
-    womens_health.configure(garmin_client)
-    nutrition.configure(garmin_client)
 
     # Create the MCP app
     app = FastMCP("Garmin Connect v1.0")
 
-    # Register tools from all modules
+    # Register tools from required modules
     app = activity_management.register_tools(app)
-    app = health_wellness.register_tools(app)
-    app = user_profile.register_tools(app)
-    app = devices.register_tools(app)
-    app = gear_management.register_tools(app)
-    app = weight_management.register_tools(app)
-    app = challenges.register_tools(app)
-    app = training.register_tools(app)
     app = workouts.register_tools(app)
-    app = data_management.register_tools(app)
-    app = womens_health.register_tools(app)
-    app = nutrition.register_tools(app)
 
     # Register resources (workout templates)
     app = workout_templates.register_resources(app)
