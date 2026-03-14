@@ -16,14 +16,17 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - Manage gear and equipment
 - Access workouts and training plans
 - Weekly health aggregates (steps, stress, intensity minutes)
+- Advanced cycling analytics: power zones, FIT file analysis, DI2 electronic shift intelligence
+- Training load trend (CTL/ATL/TSB), HRV trend, VO2 max trend, respiration rate trend
+- Power Duration Curve, climb detection with VAM, cardiac drift (aerobic decoupling), W/kg calculations
 
 ### Tool Coverage
 
-This MCP server implements **96+ tools** covering ~89% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
+This MCP server implements **102+ tools** covering ~88% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
 
-- ✅ Activity Management (14 tools)
+- ✅ Activity Management (15 tools)
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
-- ✅ Training & Performance (9 tools)
+- ✅ Training & Performance (13 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
 - ✅ Workouts (8 tools)
 - ✅ Devices (7 tools)
 - ✅ Gear Management (5 tools)
@@ -32,6 +35,9 @@ This MCP server implements **96+ tools** covering ~89% of the [python-garminconn
 - ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (3 tools)
+- ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
+
+> **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
 
 ### Intentionally Skipped Endpoints
 
@@ -382,6 +388,12 @@ Once connected in Claude, you can ask questions like:
 - "What was my sleep like last night?"
 - "How many steps did I take yesterday?"
 - "Show me the details of my latest run"
+- "Analyze my last ride's power zones and compare to my training zones"
+- "Show me my CTL, ATL, and TSB trend for the last 6 weeks"
+- "What was my power duration curve from yesterday's ride? Estimate my FTP."
+- "Analyze the FIT data from my last cycling activity — how was my shifting quality on the climbs?"
+- "Show me my HRV trend for the last 2 weeks and flag any recovery concerns"
+- "What's my season best 20-minute power and when did I set it?"
 
 ## Troubleshooting
 
@@ -545,5 +557,5 @@ uv run pytest tests/e2e/ -m e2e -v
 
 ### Test Structure
 
-- **Integration tests** (130 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
+- **Integration tests** (181 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
 - **End-to-end tests** (4 tests): Test with real MCP server and Garmin API (requires valid credentials)
