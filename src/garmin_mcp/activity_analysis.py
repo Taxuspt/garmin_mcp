@@ -15,6 +15,7 @@ import gzip
 import io
 import json
 import zipfile
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 try:
@@ -58,14 +59,25 @@ def _decode_gear_change(data: int) -> dict:
     }
 
 
-def _decode_left_right_balance(value) -> Optional[float]:
-    """Decode Garmin's left_right_balance field to left power percentage."""
+def _decode_left_right_balance(value, is_100: bool = False) -> Optional[float]:
+    """Decode Garmin's left_right_balance field to left power percentage.
+
+    FIT has two formats:
+    - left_right_balance (uint8): bit 7 = right, bits 0-6 = percentage
+    - left_right_balance_100 / avg_left_right_balance (uint16): bit 15 = right, bits 0-14 = pct*100
+
+    Set is_100=True for session/lap avg_left_right_balance fields.
+    """
     if value is None:
         return None
     try:
         int_val = int(value)
-        right_dominant = bool(int_val & 0x8000)
-        pct = (int_val & 0x7FFF) / 100.0
+        if is_100:
+            right_dominant = bool(int_val & 0x8000)
+            pct = (int_val & 0x7FFF) / 100.0
+        else:
+            right_dominant = bool(int_val & 0x80)
+            pct = float(int_val & 0x7F)
         if right_dominant:
             return round(100.0 - pct, 1)
         return round(pct, 1)
@@ -489,16 +501,26 @@ def _compute_shift_summary(shifts: list) -> dict:
     gear_usage: dict = {}
     cadences_at_shift = []
 
-    # Burst detection: 3+ shifts within ~6 consecutive events
+    # Burst detection: 3+ shifts within a 10-second window
     panic_bursts = 0
     burst_i = 0
     while burst_i < len(shifts):
-        window = [shifts[burst_i]]
-        for j in range(burst_i + 1, min(burst_i + 6, len(shifts))):
-            window.append(shifts[j])
-        if len(window) >= 3:
+        ts_i = shifts[burst_i].get("timestamp", "")
+        cluster = [burst_i]
+        for j in range(burst_i + 1, len(shifts)):
+            ts_j = shifts[j].get("timestamp", "")
+            try:
+                dt_i = datetime.fromisoformat(ts_i)
+                dt_j = datetime.fromisoformat(ts_j)
+                if (dt_j - dt_i).total_seconds() <= 10.0:
+                    cluster.append(j)
+                else:
+                    break
+            except (ValueError, TypeError):
+                break
+        if len(cluster) >= 3:
             panic_bursts += 1
-            burst_i += len(window)
+            burst_i = cluster[-1] + 1
         else:
             burst_i += 1
 
@@ -632,7 +654,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "avg_right_pedal_smoothness_pct": _get_field(message, "avg_right_pedal_smoothness"),
             }
             balance_raw = _get_field(message, "avg_left_right_balance")
-            session["avg_left_power_pct"] = _decode_left_right_balance(balance_raw)
+            session["avg_left_power_pct"] = _decode_left_right_balance(balance_raw, is_100=True)
             if session["avg_left_power_pct"] is not None:
                 session["avg_right_power_pct"] = round(100.0 - session["avg_left_power_pct"], 1)
             session = {k: v for k, v in session.items() if v is not None}
@@ -661,7 +683,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "total_descent_m": _get_field(message, "total_descent"),
             }
             balance_raw = _get_field(message, "avg_left_right_balance")
-            left_pct = _decode_left_right_balance(balance_raw)
+            left_pct = _decode_left_right_balance(balance_raw, is_100=True)
             if left_pct is not None:
                 lap["avg_left_power_pct"] = left_pct
                 lap["avg_right_power_pct"] = round(100.0 - left_pct, 1)
@@ -738,8 +760,8 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "power_w": _get_field(message, "power"),
                 "cadence_rpm": cadence,
                 "heart_rate_bpm": _get_field(message, "heart_rate"),
-                "speed_mps": _get_field(message, "speed"),
-                "altitude_m": _get_field(message, "altitude"),
+                "speed_mps": _get_field(message, "enhanced_speed", "speed"),
+                "altitude_m": _get_field(message, "enhanced_altitude", "altitude"),
                 "grade_pct": grade,
                 "temperature_c": _get_field(message, "temperature"),
                 "lat_deg": _semicircles_to_degrees(_get_field(message, "position_lat")),
