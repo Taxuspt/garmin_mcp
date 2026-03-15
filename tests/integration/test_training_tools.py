@@ -1,7 +1,7 @@
 """
 Integration tests for training module MCP tools
 
-Tests all 8 training tools using FastMCP integration with mocked Garmin API responses.
+Tests training tools using FastMCP integration with mocked Garmin API responses.
 """
 import pytest
 from unittest.mock import Mock
@@ -331,3 +331,117 @@ async def test_get_training_effect_exception(app_with_training, mock_garmin_clie
 
     # Verify error is handled gracefully
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_get_hrv_trend_tool(app_with_training, mock_garmin_client):
+    """Test get_hrv_trend tool returns HRV data over a date range"""
+    # Setup mock to return HRV data for each day
+    mock_garmin_client.get_hrv_data.return_value = MOCK_HRV_DATA
+
+    # Call tool
+    result = await app_with_training.call_tool(
+        "get_hrv_trend",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    # Verify
+    assert result is not None
+    assert mock_garmin_client.get_hrv_data.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_get_hrv_trend_no_data(app_with_training, mock_garmin_client):
+    """Test get_hrv_trend tool when no HRV data found"""
+    mock_garmin_client.get_hrv_data.return_value = None
+
+    result = await app_with_training.call_tool(
+        "get_hrv_trend",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    assert result is not None
+    # Should contain message about no data found
+
+
+@pytest.mark.asyncio
+async def test_get_hrv_trend_range_too_large(app_with_training, mock_garmin_client):
+    """Test get_hrv_trend tool rejects ranges over 90 days"""
+    result = await app_with_training.call_tool(
+        "get_hrv_trend",
+        {"start_date": "2024-01-01", "end_date": "2024-06-01"}
+    )
+
+    assert result is not None
+    # Should contain message about range being too large
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_trend_tool(app_with_training, mock_garmin_client):
+    """Test get_training_status_trend tool returns data over a date range"""
+    mock_garmin_client.get_training_status.return_value = MOCK_TRAINING_STATUS
+
+    result = await app_with_training.call_tool(
+        "get_training_status_trend",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    assert result is not None
+    assert mock_garmin_client.get_training_status.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_trend_no_data(app_with_training, mock_garmin_client):
+    """Test get_training_status_trend tool when no data found"""
+    mock_garmin_client.get_training_status.return_value = None
+
+    result = await app_with_training.call_tool(
+        "get_training_status_trend",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    assert result is not None
+    # Should contain message about no data found
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_trend_range_too_large(app_with_training, mock_garmin_client):
+    """Test get_training_status_trend tool rejects ranges over 90 days"""
+    result = await app_with_training.call_tool(
+        "get_training_status_trend",
+        {"start_date": "2024-01-01", "end_date": "2024-06-01"}
+    )
+
+    assert result is not None
+    # Should contain message about range being too large
+
+
+@pytest.mark.asyncio
+async def test_get_max_metrics_tool(app_with_training, mock_garmin_client):
+    """Test get_max_metrics tool returns max performance metrics"""
+    mock_garmin_client.get_max_metrics.return_value = {
+        "generic": {"vo2MaxValue": 52.5, "vo2MaxPreciseValue": 52.48},
+        "cycling": {"vo2MaxValue": 55.0},
+    }
+
+    result = await app_with_training.call_tool(
+        "get_max_metrics",
+        {"date": "2024-01-15"}
+    )
+
+    assert result is not None
+    mock_garmin_client.get_max_metrics.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_max_metrics_no_data(app_with_training, mock_garmin_client):
+    """Test get_max_metrics tool when no data found"""
+    mock_garmin_client.get_max_metrics.return_value = None
+
+    result = await app_with_training.call_tool(
+        "get_max_metrics",
+        {"date": "2024-01-15"}
+    )
+
+    assert result is not None
+    # Should contain message about no data found

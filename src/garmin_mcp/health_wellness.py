@@ -633,6 +633,57 @@ def register_tools(app):
             return f"Error retrieving respiration summary: {str(e)}"
 
     @app.tool()
+    async def get_respiration_trend(start_date: str, end_date: str) -> str:
+        """Get respiration rate trend over a date range
+
+        Returns daily respiration summaries for trend analysis.
+        Useful for detecting changes in respiratory health or fitness over time.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        try:
+            start = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            if (end - start).days >= 90:
+                return "Date range too large. Please use a range of 90 days or less."
+
+            trend = []
+            current = start
+            while current <= end:
+                date_str = current.strftime("%Y-%m-%d")
+                try:
+                    # Note: get_respiration_data returns full timeseries (~20KB) but
+                    # we only extract summary fields. The garminconnect library does
+                    # not expose a separate summary-only endpoint for respiration.
+                    resp_data = garmin_client.get_respiration_data(date_str)
+                    if resp_data:
+                        entry = {
+                            "date": date_str,
+                            "lowest_breaths_per_min": resp_data.get("lowestRespirationValue"),
+                            "highest_breaths_per_min": resp_data.get("highestRespirationValue"),
+                            "avg_waking_breaths_per_min": resp_data.get("avgWakingRespirationValue"),
+                            "avg_sleep_breaths_per_min": resp_data.get("avgSleepRespirationValue"),
+                        }
+                        entry = {k: v for k, v in entry.items() if v is not None}
+                        # Skip entries that only have the date (no actual data)
+                        if len(entry) > 1:
+                            trend.append(entry)
+                except Exception:
+                    pass  # Skip days with no data
+                current += datetime.timedelta(days=1)
+
+            if not trend:
+                return f"No respiration data found between {start_date} and {end_date}."
+
+            return json.dumps({"days": len(trend), "trend": trend}, indent=2)
+        except ValueError:
+            return "Invalid date format. Please use YYYY-MM-DD."
+        except Exception as e:
+            return f"Error retrieving respiration trend: {str(e)}"
+
+    @app.tool()
     async def get_spo2_data(date: str) -> str:
         """Get SpO2 (blood oxygen) data
 

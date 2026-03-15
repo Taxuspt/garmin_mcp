@@ -628,3 +628,52 @@ async def test_get_sleep_data_exception(app_with_health_wellness, mock_garmin_cl
     # Verify error is handled gracefully
     assert result is not None
     # The tool should return an error message, not crash
+
+
+@pytest.mark.asyncio
+async def test_get_respiration_trend_tool(app_with_health_wellness, mock_garmin_client):
+    """Test get_respiration_trend tool returns data over a date range"""
+    # Setup mock
+    mock_garmin_client.get_respiration_data.return_value = {
+        "calendarDate": "2024-01-15",
+        "lowestRespirationValue": 12,
+        "highestRespirationValue": 22,
+        "avgWakingRespirationValue": 16,
+        "avgSleepRespirationValue": 14,
+    }
+
+    # Call tool
+    result = await app_with_health_wellness.call_tool(
+        "get_respiration_trend",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    # Verify
+    assert result is not None
+    assert mock_garmin_client.get_respiration_data.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_get_respiration_trend_no_data(app_with_health_wellness, mock_garmin_client):
+    """Test get_respiration_trend tool when no data found"""
+    mock_garmin_client.get_respiration_data.return_value = None
+
+    result = await app_with_health_wellness.call_tool(
+        "get_respiration_trend",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    assert result is not None
+    # Should contain message about no data found
+
+
+@pytest.mark.asyncio
+async def test_get_respiration_trend_range_too_large(app_with_health_wellness, mock_garmin_client):
+    """Test get_respiration_trend tool rejects ranges over 90 days"""
+    result = await app_with_health_wellness.call_tool(
+        "get_respiration_trend",
+        {"start_date": "2024-01-01", "end_date": "2024-06-01"}
+    )
+
+    assert result is not None
+    # Should contain message about range being too large

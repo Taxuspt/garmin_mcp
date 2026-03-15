@@ -399,6 +399,55 @@ def register_tools(app):
             return f"Error retrieving HRV data: {str(e)}"
 
     @app.tool()
+    async def get_hrv_trend(start_date: str, end_date: str) -> str:
+        """Get HRV trend over a date range
+
+        Returns daily HRV summaries for trend analysis (e.g. 7-day or 30-day
+        rolling view). Useful for monitoring training load and recovery over time.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        try:
+            start = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            if (end - start).days >= 90:
+                return "Date range too large. Please use a range of 90 days or less."
+
+            trend = []
+            current = start
+            while current <= end:
+                date_str = current.strftime("%Y-%m-%d")
+                try:
+                    hrv_data = garmin_client.get_hrv_data(date_str)
+                    if hrv_data:
+                        summary = hrv_data.get("hrvSummary", {})
+                        entry = {
+                            "date": date_str,
+                            "last_night_avg_hrv_ms": summary.get("lastNightAvg"),
+                            "last_night_5min_high_hrv_ms": summary.get("lastNight5MinHigh"),
+                            "weekly_avg_hrv_ms": summary.get("weeklyAvg"),
+                            "status": summary.get("status"),
+                        }
+                        entry = {k: v for k, v in entry.items() if v is not None}
+                        # Skip entries that only have the date (no actual data)
+                        if len(entry) > 1:
+                            trend.append(entry)
+                except Exception:
+                    pass  # Skip days with no data
+                current += datetime.timedelta(days=1)
+
+            if not trend:
+                return f"No HRV data found between {start_date} and {end_date}."
+
+            return json.dumps({"days": len(trend), "trend": trend}, indent=2)
+        except ValueError:
+            return "Invalid date format. Please use YYYY-MM-DD."
+        except Exception as e:
+            return f"Error retrieving HRV trend: {str(e)}"
+
+    @app.tool()
     async def get_fitnessage_data(date: str, details: bool = False) -> str:
         """Get fitness age data
 
@@ -551,6 +600,85 @@ def register_tools(app):
             return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving training status data: {str(e)}"
+
+    @app.tool()
+    async def get_training_status_trend(start_date: str, end_date: str) -> str:
+        """Get training status trend over a date range
+
+        Returns daily VO2 max, training load, and acute/chronic workload ratio
+        for trend analysis. Useful for monitoring fitness progression and
+        training load management over weeks or months.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        try:
+            start = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            if (end - start).days >= 90:
+                return "Date range too large. Please use a range of 90 days or less."
+
+            trend = []
+            current = start
+            while current <= end:
+                date_str = current.strftime("%Y-%m-%d")
+                try:
+                    status = garmin_client.get_training_status(date_str)
+                    if status:
+                        recent_status = status.get("mostRecentTrainingStatus", {})
+                        latest_data = recent_status.get("latestTrainingStatusData", {})
+                        device_data = {}
+                        for device_id, data in latest_data.items():
+                            device_data = data
+                            break
+
+                        acwr_data = device_data.get("acuteTrainingLoadDTO", {})
+                        vo2_data = status.get("mostRecentVO2Max", {}).get("generic", {})
+
+                        entry = {
+                            "date": date_str,
+                            "vo2_max": vo2_data.get("vo2MaxValue"),
+                            "training_status": device_data.get("trainingStatus"),
+                            "acute_load": acwr_data.get("dailyTrainingLoadAcute"),
+                            "chronic_load": acwr_data.get("dailyTrainingLoadChronic"),
+                            "load_ratio": acwr_data.get("dailyAcuteChronicWorkloadRatio"),
+                        }
+                        entry = {k: v for k, v in entry.items() if v is not None}
+                        # Skip entries that only have the date (no actual data)
+                        if len(entry) > 1:
+                            trend.append(entry)
+                except Exception:
+                    pass  # Skip days with no data
+                current += datetime.timedelta(days=1)
+
+            if not trend:
+                return f"No training status data found between {start_date} and {end_date}."
+
+            return json.dumps({"days": len(trend), "trend": trend}, indent=2)
+        except ValueError:
+            return "Invalid date format. Please use YYYY-MM-DD."
+        except Exception as e:
+            return f"Error retrieving training status trend: {str(e)}"
+
+    @app.tool()
+    async def get_max_metrics(date: str) -> str:
+        """Get max performance metrics (VO2 max, running metrics, cycling metrics)
+
+        Returns detailed max metrics including VO2 max for different sport types,
+        running dynamics, and cycling power data if available.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            metrics = garmin_client.get_max_metrics(date)
+            if not metrics:
+                return f"No max metrics data found for {date}."
+
+            return json.dumps(metrics, indent=2)
+        except Exception as e:
+            return f"Error retrieving max metrics: {str(e)}"
 
     @app.tool()
     async def get_lactate_threshold(
