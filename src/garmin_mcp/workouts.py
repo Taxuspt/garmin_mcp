@@ -104,6 +104,17 @@ def _curate_workout_step(step: dict) -> dict:
         if step.get('zoneNumber'):
             curated['target_zone'] = step.get('zoneNumber')
 
+    # Strength training exercise info
+    if step.get('category'):
+        curated['category'] = step.get('category')
+    if step.get('exerciseName'):
+        curated['exercise_name'] = step.get('exerciseName')
+    if step.get('weightValue') is not None:
+        curated['weight_value'] = step.get('weightValue')
+        weight_unit = step.get('weightUnit', {})
+        if weight_unit and weight_unit.get('unitKey'):
+            curated['weight_unit'] = weight_unit.get('unitKey')
+
     # Repeat info for repeat steps
     if step.get('type') == 'RepeatGroupDTO':
         curated['repeat_count'] = step.get('numberOfIterations')
