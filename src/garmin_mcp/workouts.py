@@ -104,6 +104,17 @@ def _curate_workout_step(step: dict) -> dict:
         if step.get('zoneNumber'):
             curated['target_zone'] = step.get('zoneNumber')
 
+    # Strength training exercise info
+    if step.get('category'):
+        curated['category'] = step.get('category')
+    if step.get('exerciseName'):
+        curated['exercise_name'] = step.get('exerciseName')
+    if step.get('weightValue') is not None:
+        curated['weight_value'] = step.get('weightValue')
+        weight_unit = step.get('weightUnit', {})
+        if weight_unit and weight_unit.get('unitKey'):
+            curated['weight_unit'] = weight_unit.get('unitKey')
+
     # Repeat info for repeat steps
     if step.get('type') == 'RepeatGroupDTO':
         curated['repeat_count'] = step.get('numberOfIterations')
@@ -336,18 +347,45 @@ def register_tools(app):
         IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
         targetValueOne/targetValueTwo are only for absolute value ranges (e.g. pace in m/s, power in watts).
 
+        IMPORTANT: Sport type IDs for workouts (different from activity API!):
+        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 11 = walking
+
         **Available Templates:**
         Instead of building workout JSON from scratch, you can use these MCP resources as starting points:
         - workout://templates/simple-run - Basic warmup/run/cooldown structure
         - workout://templates/interval-running - Interval training with repeat groups
         - workout://templates/tempo-run - Tempo run with heart rate zone targets
-        - workout://templates/strength-circuit - Strength training circuit structure
+        - workout://templates/strength-circuit - Strength training with exercises, reps, rest
         - workout://reference/structure - Complete JSON structure reference with all fields
 
         Access these resources using your MCP client's resource reading capability, modify the template
         as needed, and pass the resulting JSON as the workout_data parameter.
 
-        Example workout structure with HR zone target:
+        **Strength training workouts** require these additional fields on each exercise step:
+        - "category": exercise category (e.g. "BENCH_PRESS", "PULL_UP", "CURL", "SHOULDER_PRESS",
+          "ROW", "SQUAT", "DEADLIFT", "TRICEPS_EXTENSION", "PLANK", "LUNGE", "CARDIO")
+        - "exerciseName": specific exercise (e.g. "BARBELL_BENCH_PRESS", "PULL_UP",
+          "DUMBBELL_BICEPS_CURL", "DUMBBELL_SHOULDER_PRESS", "BENT_OVER_ROW_WITH_DUMBELL",
+          "BODY_WEIGHT_DIP", "BARBELL_SQUAT", "BARBELL_DEADLIFT")
+        - "weightValue" (optional): weight as number (e.g. 24.0)
+        - "weightUnit" (optional): {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
+        Use endCondition reps (conditionTypeId: 10) for exercises, rest (stepTypeId: 5) between sets.
+
+        Example strength exercise step:
+        {
+            "type": "ExecutableStepDTO",
+            "stepOrder": 1,
+            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+            "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+            "endConditionValue": 10.0,
+            "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+            "category": "BENCH_PRESS",
+            "exerciseName": "BARBELL_BENCH_PRESS",
+            "weightValue": 60.0,
+            "weightUnit": {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
+        }
+
+        Example running workout with HR zone target:
         {
             "workoutName": "My Workout",
             "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},

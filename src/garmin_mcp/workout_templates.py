@@ -146,20 +146,22 @@ TEMPO_RUN_TEMPLATE = {
 
 STRENGTH_CIRCUIT_TEMPLATE = {
     "workoutName": "Strength Circuit",
-    "description": "Strength training circuit: warmup, 3x circuit (work + rest), cooldown",
-    "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+    "description": "Strength training circuit: warmup, 3x(bench press 10 reps + 2min rest), 3x(pull-ups 8 reps + 2min rest), cooldown",
+    "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
     "workoutSegments": [{
         "segmentOrder": 1,
-        "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
         "workoutSteps": [
             {
                 "type": "ExecutableStepDTO",
                 "stepOrder": 1,
                 "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
                 "description": "Warmup 5 min",
-                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                "endConditionValue": 300.0,
-                "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                "endCondition": {"conditionTypeId": 1, "conditionTypeKey": "lap.button"},
+                "endConditionValue": 10.0,
+                "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+                "category": "CARDIO",
+                "exerciseName": ""
             },
             {
                 "type": "RepeatGroupDTO",
@@ -170,15 +172,44 @@ STRENGTH_CIRCUIT_TEMPLATE = {
                         "type": "ExecutableStepDTO",
                         "stepOrder": 1,
                         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-                        "description": "Circuit work 10 min",
-                        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                        "endConditionValue": 600.0,
-                        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                        "description": "Bench Press 10 reps",
+                        "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+                        "endConditionValue": 10.0,
+                        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+                        "category": "BENCH_PRESS",
+                        "exerciseName": "BARBELL_BENCH_PRESS"
                     },
                     {
                         "type": "ExecutableStepDTO",
                         "stepOrder": 2,
-                        "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
+                        "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
+                        "description": "Rest 2 min",
+                        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                        "endConditionValue": 120.0,
+                        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                    }
+                ]
+            },
+            {
+                "type": "RepeatGroupDTO",
+                "stepOrder": 3,
+                "numberOfIterations": 3,
+                "workoutSteps": [
+                    {
+                        "type": "ExecutableStepDTO",
+                        "stepOrder": 1,
+                        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                        "description": "Pull-ups 8 reps",
+                        "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+                        "endConditionValue": 8.0,
+                        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+                        "category": "PULL_UP",
+                        "exerciseName": "PULL_UP"
+                    },
+                    {
+                        "type": "ExecutableStepDTO",
+                        "stepOrder": 2,
+                        "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
                         "description": "Rest 2 min",
                         "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
                         "endConditionValue": 120.0,
@@ -188,7 +219,7 @@ STRENGTH_CIRCUIT_TEMPLATE = {
             },
             {
                 "type": "ExecutableStepDTO",
-                "stepOrder": 3,
+                "stepOrder": 4,
                 "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
                 "description": "Cooldown stretch 5 min",
                 "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -209,14 +240,17 @@ WORKOUT_STRUCTURE_REFERENCE = {
     "stepType_values": {
         "1": {"stepTypeKey": "warmup", "description": "Warmup phase"},
         "2": {"stepTypeKey": "cooldown", "description": "Cooldown phase"},
-        "3": {"stepTypeKey": "interval", "description": "Work/effort interval"},
-        "4": {"stepTypeKey": "recovery", "description": "Recovery between intervals"},
-        "5": {"stepTypeKey": "rest", "description": "Complete rest"}
+        "3": {"stepTypeKey": "interval", "description": "Work/effort interval (use for exercises in strength workouts)"},
+        "4": {"stepTypeKey": "recovery", "description": "Recovery between intervals (active recovery)"},
+        "5": {"stepTypeKey": "rest", "description": "Complete rest (use for rest between sets in strength workouts)"},
+        "6": {"stepTypeKey": "repeat", "description": "Repeat group step type (used internally by RepeatGroupDTO)"}
     },
     "endCondition_values": {
-        "1": {"conditionTypeKey": "lap.button", "description": "Manual lap press"},
+        "1": {"conditionTypeKey": "lap.button", "description": "Manual lap press (use for warmup/cooldown in strength workouts)"},
         "2": {"conditionTypeKey": "time", "description": "Duration in seconds"},
-        "3": {"conditionTypeKey": "distance", "description": "Distance in meters"}
+        "3": {"conditionTypeKey": "distance", "description": "Distance in meters"},
+        "7": {"conditionTypeKey": "iterations", "description": "Number of iterations (used internally by RepeatGroupDTO)"},
+        "10": {"conditionTypeKey": "reps", "description": "Number of repetitions (use for strength exercises)"}
     },
     "targetType_values": {
         "1": {"workoutTargetTypeKey": "no.target", "description": "No specific target"},
@@ -226,9 +260,16 @@ WORKOUT_STRUCTURE_REFERENCE = {
     "sportType_values": {
         "1": {"sportTypeKey": "running"},
         "2": {"sportTypeKey": "cycling"},
-        "4": {"sportTypeKey": "strength_training"},
-        "5": {"sportTypeKey": "cardio"},
+        "5": {"sportTypeKey": "strength_training"},
+        "6": {"sportTypeKey": "cardio"},
         "11": {"sportTypeKey": "walking"}
+    },
+    "strength_training_fields": {
+        "description": "Additional fields for strength training workout steps (ExecutableStepDTO)",
+        "category": "Exercise category (e.g., BENCH_PRESS, PULL_UP, CURL, SHOULDER_PRESS, ROW, SQUAT, DEADLIFT, TRICEPS_EXTENSION, PLANK, LUNGE, CARDIO)",
+        "exerciseName": "Specific exercise name (e.g., BARBELL_BENCH_PRESS, PULL_UP, DUMBBELL_BICEPS_CURL, DUMBBELL_SHOULDER_PRESS, BENT_OVER_ROW_WITH_DUMBELL, BODY_WEIGHT_DIP)",
+        "weightValue": "Weight value as number (e.g., 24.0)",
+        "weightUnit": "Weight unit object: {\"unitId\": 8, \"unitKey\": \"kilogram\", \"factor\": 1000.0}"
     }
 }
 
