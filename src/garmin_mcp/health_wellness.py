@@ -887,4 +887,119 @@ def register_tools(app):
         except Exception as e:
             return f"Error retrieving morning training readiness: {str(e)}"
 
+    @app.tool()
+    async def get_health_status(ctx: Context, date: str) -> str:
+        """Get health status summary comparing sleep metrics against your normal ranges
+
+        Returns health status for the given date with metrics including:
+        - Heart Rate Variability (HRV) in ms
+        - Respiration rate in breaths per minute
+        - Resting Heart Rate in bpm
+        - Skin Temperature deviation in degrees Celsius
+        - Pulse Oximeter (SpO2) percentage
+
+        Each metric includes the measured value, your normal baseline range,
+        status (IN_RANGE, ABOVE, or BELOW), and a percentile within the range.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            client = get_client(ctx)
+            data = client.connectapi(
+                f"/healthstatus-service/healthstatus/summary/{date}"
+            )
+            if not data:
+                return f"No health status data found for {date}"
+
+            # Map API metric types to readable names
+            metric_names = {
+                "HRV": "heart_rate_variability_ms",
+                "HR": "heart_rate_bpm",
+                "SPO2": "pulse_oximeter_percent",
+                "SKIN_TEMP_C": "skin_temperature_celsius",
+                "RESPIRATION": "respiration_brpm",
+            }
+
+            summary = {
+                "date": data.get("calendarDate"),
+                "outlier_count": data.get("outliersCount"),
+            }
+
+            for metric in data.get("metrics", []):
+                metric_type = metric.get("type", "")
+                name = metric_names.get(metric_type, metric_type.lower())
+                entry = {
+                    "value": metric.get("value"),
+                    "status": metric.get("status"),
+                    "baseline_low": metric.get("baselineLowerLimit"),
+                    "baseline_high": metric.get("baselineUpperLimit"),
+                    "percentile": metric.get("percentage"),
+                }
+                # Remove None values from entry
+                entry = {k: v for k, v in entry.items() if v is not None}
+                summary[name] = entry
+
+            # Remove None values
+            summary = {k: v for k, v in summary.items() if v is not None}
+
+            return json.dumps(summary, indent=2)
+        except Exception as e:
+            return f"Error retrieving health status: {str(e)}"
+
+    @app.tool()
+    async def get_health_status_range(ctx: Context, start_date: str, end_date: str) -> str:
+        """Get health status summaries for a date range
+
+        Returns daily health status data for each day in the range, with metrics
+        including HRV, respiration, heart rate, skin temperature, and SpO2.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        try:
+            client = get_client(ctx)
+            data = client.connectapi(
+                f"/healthstatus-service/healthstatus/summary/{start_date}/{end_date}"
+            )
+            if not data:
+                return f"No health status data found between {start_date} and {end_date}"
+
+            # Map API metric types to readable names
+            metric_names = {
+                "HRV": "heart_rate_variability_ms",
+                "HR": "heart_rate_bpm",
+                "SPO2": "pulse_oximeter_percent",
+                "SKIN_TEMP_C": "skin_temperature_celsius",
+                "RESPIRATION": "respiration_brpm",
+            }
+
+            curated_days = []
+            for day in data:
+                day_summary = {
+                    "date": day.get("calendarDate"),
+                    "outlier_count": day.get("outliersCount"),
+                }
+
+                for metric in day.get("metrics", []):
+                    metric_type = metric.get("type", "")
+                    name = metric_names.get(metric_type, metric_type.lower())
+                    entry = {
+                        "value": metric.get("value"),
+                        "status": metric.get("status"),
+                        "baseline_low": metric.get("baselineLowerLimit"),
+                        "baseline_high": metric.get("baselineUpperLimit"),
+                        "percentile": metric.get("percentage"),
+                    }
+                    entry = {k: v for k, v in entry.items() if v is not None}
+                    day_summary[name] = entry
+
+                day_summary = {k: v for k, v in day_summary.items() if v is not None}
+                curated_days.append(day_summary)
+
+            return json.dumps(curated_days, indent=2)
+        except Exception as e:
+            return f"Error retrieving health status range: {str(e)}"
+
     return app
