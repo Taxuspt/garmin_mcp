@@ -14,11 +14,13 @@ dependencies = [
     "requests==2.32.4",
     "mcp>=1.23.0",
     "garth>=0.5.17,<0.6.0",
+    "playwright>=1.40.0",
 ]
 
 [project.scripts]
 garmin-mcp = "garmin_mcp:main"
 garmin-mcp-auth = "garmin_mcp.auth_cli:main"
+
 
 [tool.uv]
 dev-dependencies = [
