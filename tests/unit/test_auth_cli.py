@@ -9,11 +9,14 @@ from unittest.mock import Mock, patch, call
 import pytest
 
 from garmin_mcp.auth_cli import (
-    get_mfa,
-    get_credentials,
+    _build_oauth1_auth_header,
+    _exchange_via_playwright,
+    _exchange_with_retry_and_fallback,
     authenticate,
-    verify_tokens,
+    get_credentials,
+    get_mfa,
     main,
+    verify_tokens,
 )
 
 
@@ -420,3 +423,206 @@ class TestAuthenticateIsCn:
             is_cn=False,
             prompt_mfa=get_mfa,
         )
+
+
+class TestBuildOAuth1AuthHeader:
+    """Tests for _build_oauth1_auth_header."""
+
+    def test_returns_string_starting_with_oauth(self):
+        header = _build_oauth1_auth_header(
+            "GET", "https://example.com/resource", "consumer_key", "consumer_secret"
+        )
+        assert isinstance(header, str)
+        assert header.startswith("OAuth ")
+
+    def test_contains_required_oauth_fields(self):
+        header = _build_oauth1_auth_header(
+            "GET", "https://example.com/resource", "key", "secret"
+        )
+        assert "oauth_signature=" in header
+        assert "oauth_consumer_key=" in header
+        assert "oauth_nonce=" in header
+        assert "oauth_timestamp=" in header
+
+    def test_includes_resource_owner_when_provided(self):
+        header = _build_oauth1_auth_header(
+            "POST",
+            "https://example.com/resource",
+            "ck",
+            "cs",
+            resource_owner_key="tok",
+            resource_owner_secret="toksecret",
+        )
+        assert "oauth_token=" in header
+
+    def test_get_and_post_produce_different_signatures(self):
+        url = "https://example.com/resource"
+        h_get = _build_oauth1_auth_header("GET", url, "ck", "cs")
+        h_post = _build_oauth1_auth_header("POST", url, "ck", "cs")
+        assert h_get != h_post
+
+
+class TestExchangeWithRetryAndFallback:
+    """Tests for _exchange_with_retry_and_fallback."""
+
+    def _make_mock_tokens(self):
+        return Mock(name="oauth1"), Mock(name="oauth2")
+
+    @patch("garth.sso.exchange")
+    @patch("garth.sso.get_oauth1_token")
+    def test_success_on_first_attempt_no_sleep(self, mock_get_oauth1, mock_exchange):
+        oauth1, oauth2 = self._make_mock_tokens()
+        mock_get_oauth1.return_value = oauth1
+        mock_exchange.return_value = oauth2
+
+        with patch("time.sleep") as mock_sleep:
+            result = _exchange_with_retry_and_fallback("ticket", Mock(), Mock())
+
+        assert result == (oauth1, oauth2)
+        mock_sleep.assert_not_called()
+
+    @patch("garth.sso.exchange")
+    @patch("garth.sso.get_oauth1_token")
+    def test_retries_on_429_with_waits(self, mock_get_oauth1, mock_exchange):
+        oauth1, oauth2 = self._make_mock_tokens()
+        mock_get_oauth1.side_effect = [
+            Exception("HTTP 429 Too Many Requests"),
+            Exception("too many 429 error responses"),
+            oauth1,
+        ]
+        mock_exchange.return_value = oauth2
+
+        with patch("time.sleep") as mock_sleep:
+            result = _exchange_with_retry_and_fallback("ticket", Mock(), Mock())
+
+        assert result == (oauth1, oauth2)
+        assert mock_sleep.call_count == 2
+        assert mock_sleep.call_args_list[0] == call(30)
+        assert mock_sleep.call_args_list[1] == call(60)
+
+    @patch("garth.sso.get_oauth1_token")
+    def test_non_429_error_raises_immediately_without_sleep(self, mock_get_oauth1):
+        mock_get_oauth1.side_effect = ValueError("Invalid credentials")
+
+        with patch("time.sleep") as mock_sleep:
+            with pytest.raises(ValueError, match="Invalid credentials"):
+                _exchange_with_retry_and_fallback("ticket", Mock(), Mock())
+
+        mock_sleep.assert_not_called()
+
+    @patch("garmin_mcp.auth_cli._exchange_via_playwright")
+    @patch("garth.sso.get_oauth1_token")
+    def test_falls_back_to_playwright_after_all_retries(
+        self, mock_get_oauth1, mock_playwright_exchange
+    ):
+        oauth1, oauth2 = self._make_mock_tokens()
+        mock_get_oauth1.side_effect = Exception("too many 429 error responses")
+        mock_playwright_exchange.return_value = (oauth1, oauth2)
+
+        mock_client = Mock()
+        mock_client.domain = "garmin.com"
+
+        with patch("time.sleep"):
+            result = _exchange_with_retry_and_fallback("ticket", mock_client, Mock())
+
+        assert result == (oauth1, oauth2)
+        mock_playwright_exchange.assert_called_once()
+
+    @patch("garmin_mcp.auth_cli._exchange_via_playwright")
+    @patch("garth.sso.get_oauth1_token")
+    def test_raises_runtime_error_when_playwright_also_fails(
+        self, mock_get_oauth1, mock_playwright_exchange
+    ):
+        mock_get_oauth1.side_effect = Exception("too many 429 error responses")
+        mock_playwright_exchange.side_effect = RuntimeError("browser also 429")
+
+        mock_client = Mock()
+        mock_client.domain = "garmin.com"
+
+        with patch("time.sleep"):
+            with pytest.raises(RuntimeError, match="Token exchange failed"):
+                _exchange_with_retry_and_fallback("ticket", mock_client, Mock())
+
+
+class TestExchangeViaPlaywright:
+    """Tests for _exchange_via_playwright."""
+
+    def _make_mock_context(self, resp1_text, resp2_json, resp1_ok=True, resp2_ok=True):
+        mock_context = Mock()
+        mock_resp1 = Mock()
+        mock_resp1.ok = resp1_ok
+        mock_resp1.status = 200 if resp1_ok else 429
+        mock_resp1.text.return_value = resp1_text
+
+        mock_resp2 = Mock()
+        mock_resp2.ok = resp2_ok
+        mock_resp2.status = 200 if resp2_ok else 500
+        mock_resp2.json.return_value = resp2_json
+
+        mock_context.request.get.return_value = mock_resp1
+        mock_context.request.post.return_value = mock_resp2
+        return mock_context
+
+    @patch("garmin_mcp.auth_cli._build_oauth1_auth_header", return_value="OAuth xxx")
+    @patch("garmin_mcp.auth_cli._fetch_oauth_consumer", return_value=("ck", "cs"))
+    def test_successful_exchange_returns_tokens(self, mock_consumer, mock_header):
+        resp1_text = "oauth_token=tok&oauth_token_secret=sec"
+        resp2_data = {
+            "access_token": "at",
+            "refresh_token": "rt",
+            "token_type": "Bearer",
+            "scope": "CONNECT",
+            "jti": "jti",
+            "expires_in": 3600,
+            "refresh_token_expires_in": 7776000,
+        }
+        mock_context = self._make_mock_context(resp1_text, resp2_data)
+
+        from garth.auth_tokens import OAuth1Token, OAuth2Token
+
+        oauth1, oauth2 = _exchange_via_playwright("ST-ticket", "garmin.com", mock_context)
+
+        assert isinstance(oauth1, OAuth1Token)
+        assert isinstance(oauth2, OAuth2Token)
+        assert oauth1.oauth_token == "tok"
+        assert oauth1.oauth_token_secret == "sec"
+
+    @patch("garmin_mcp.auth_cli._build_oauth1_auth_header", return_value="OAuth xxx")
+    @patch("garmin_mcp.auth_cli._fetch_oauth_consumer", return_value=("ck", "cs"))
+    def test_raises_on_preauth_failure(self, mock_consumer, mock_header):
+        mock_context = self._make_mock_context("", {}, resp1_ok=False)
+
+        with pytest.raises(RuntimeError, match="Playwright preauthorized request failed"):
+            _exchange_via_playwright("ST-ticket", "garmin.com", mock_context)
+
+    @patch("garmin_mcp.auth_cli._build_oauth1_auth_header", return_value="OAuth xxx")
+    @patch("garmin_mcp.auth_cli._fetch_oauth_consumer", return_value=("ck", "cs"))
+    def test_raises_on_exchange_failure(self, mock_consumer, mock_header):
+        resp1_text = "oauth_token=tok&oauth_token_secret=sec"
+        mock_context = self._make_mock_context(resp1_text, {}, resp2_ok=False)
+
+        with pytest.raises(RuntimeError, match="Playwright exchange request failed"):
+            _exchange_via_playwright("ST-ticket", "garmin.com", mock_context)
+
+    @patch("garmin_mcp.auth_cli._build_oauth1_auth_header", return_value="OAuth xxx")
+    @patch("garmin_mcp.auth_cli._fetch_oauth_consumer", return_value=("ck", "cs"))
+    def test_correct_urls_used(self, mock_consumer, mock_header):
+        resp1_text = "oauth_token=tok&oauth_token_secret=sec"
+        resp2_data = {
+            "access_token": "at",
+            "refresh_token": "rt",
+            "token_type": "Bearer",
+            "scope": "CONNECT",
+            "jti": "jti",
+            "expires_in": 3600,
+            "refresh_token_expires_in": 7776000,
+        }
+        mock_context = self._make_mock_context(resp1_text, resp2_data)
+
+        _exchange_via_playwright("ST-abc", "garmin.com", mock_context)
+
+        get_url = mock_context.request.get.call_args[0][0]
+        post_url = mock_context.request.post.call_args[0][0]
+        assert "ST-abc" in get_url
+        assert "connectapi.garmin.com" in get_url
+        assert "exchange/user/2.0" in post_url
