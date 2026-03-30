@@ -122,8 +122,63 @@ def _exchange_via_playwright(ticket: str, domain: str, playwright_context) -> tu
     return oauth1, oauth2
 
 
-def _exchange_with_retry_and_fallback(ticket: str, client, playwright_context) -> tuple:
-    """Try direct OAuth token exchange with backoff retries, falling back to Playwright."""
+def _capture_tokens_via_web_app(domain: str, context, page) -> tuple:
+    """Navigate to Garmin Connect web app and capture OAuth tokens via response interception.
+
+    The browser context already has SSO session cookies from the login step.
+    The web app re-authenticates server-side (Garmin's servers exchange the SSO
+    ticket — not the user's IP), then the browser makes API calls. We intercept
+    all network responses with context.on("response"), which captures everything
+    regardless of CORS.
+    """
+    from urllib.parse import parse_qs
+
+    from garth.auth_tokens import OAuth1Token, OAuth2Token
+    from garth.sso import set_expirations
+
+    captured: dict = {}
+
+    def on_response(response):
+        url = response.url
+        if f"connectapi.{domain}/oauth-service/oauth" not in url:
+            return
+        try:
+            if "preauthorized" in url and response.status == 200:
+                parsed = parse_qs(response.text())
+                if "oauth_token" in parsed:
+                    captured["oauth1"] = {k: v[0] for k, v in parsed.items()}
+            elif "exchange" in url and response.status == 200:
+                data = response.json()
+                if "access_token" in data:
+                    captured["oauth2"] = data
+        except Exception:
+            pass  # Response body not yet fully available; next response may succeed
+
+    context.on("response", on_response)
+
+    web_url = f"https://connect.{domain}/modern/home"
+    print("  Navigating to Garmin Connect web app to bypass rate-limited endpoint...")
+    try:
+        page.goto(web_url, wait_until="networkidle", timeout=120_000)
+    except Exception:
+        pass  # networkidle timeout is acceptable — tokens may already be captured
+
+    context.remove_listener("response", on_response)
+
+    if "oauth1" not in captured or "oauth2" not in captured:
+        missing = [k for k in ("oauth1", "oauth2") if k not in captured]
+        raise RuntimeError(
+            f"Web app token interception did not capture: {missing}.\n"
+            "  The web app may use a different auth flow on this account."
+        )
+
+    oauth1 = OAuth1Token(domain=domain, **captured["oauth1"])
+    oauth2 = OAuth2Token(**set_expirations(captured["oauth2"]))
+    return oauth1, oauth2
+
+
+def _exchange_with_retry_and_fallback(ticket: str, client, playwright_context, page) -> tuple:
+    """Try direct OAuth token exchange with backoff retries, then web app interception."""
     from garth.sso import exchange as exchange_oauth
     from garth.sso import get_oauth1_token
 
@@ -143,14 +198,20 @@ def _exchange_with_retry_and_fallback(ticket: str, client, playwright_context) -
                 continue
             raise  # non-429 errors propagate immediately
 
-    print("  All direct attempts failed — trying browser context fallback...")
+    print("  All direct attempts failed — navigating to web app to intercept tokens...")
     try:
-        return _exchange_via_playwright(ticket, client.domain, playwright_context)
-    except Exception as pw_err:
-        raise RuntimeError(
-            f"Token exchange failed via direct requests and browser fallback.\n"
-            f"  Direct error: {last_error}\n  Browser error: {pw_err}"
-        ) from pw_err
+        return _capture_tokens_via_web_app(client.domain, playwright_context, page)
+    except Exception as web_err:
+        # Last resort: Playwright context.request (may also 429 but worth trying)
+        try:
+            return _exchange_via_playwright(ticket, client.domain, playwright_context)
+        except Exception as pw_err:
+            raise RuntimeError(
+                f"Token exchange failed via all methods.\n"
+                f"  Direct error: {last_error}\n"
+                f"  Web app error: {web_err}\n"
+                f"  Browser context error: {pw_err}"
+            ) from pw_err
 
 
 def get_mfa() -> str:
@@ -302,7 +363,7 @@ def _browser_login_and_exchange(
 
         try:
             # Browser stays open so context.request can be used as fallback
-            oauth1, oauth2 = _exchange_with_retry_and_fallback(ticket, garth_client, context)
+            oauth1, oauth2 = _exchange_with_retry_and_fallback(ticket, garth_client, context, page)
         finally:
             browser.close()
 
