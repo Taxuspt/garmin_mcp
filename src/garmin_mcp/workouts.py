@@ -393,6 +393,54 @@ def register_tools(app):
             return f"Error uploading workout: {str(e)}"
 
     @app.tool()
+    async def upload_workouts(workouts: list[dict]) -> str:
+        """Upload multiple workouts from JSON data in a single call
+
+        Creates multiple new workouts in Garmin Connect. Each item in the list
+        uses the same structure as upload_workout.
+
+        IMPORTANT: Step types must use Garmin's DTO format:
+        - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
+        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
+
+        IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
+
+        Args:
+            workouts: List of workout dictionaries, each containing workout structure
+                      (name, sport type, segments, etc.) — same format as upload_workout.
+        """
+        results = []
+        for workout_data in workouts:
+            try:
+                _fix_hr_zone_steps(workout_data)
+                result = garmin_client.upload_workout(workout_data)
+                if isinstance(result, dict):
+                    entry = {
+                        "status": "success",
+                        "workout_id": result.get('workoutId'),
+                        "name": result.get('workoutName'),
+                        "message": "Workout uploaded successfully"
+                    }
+                    results.append({k: v for k, v in entry.items() if v is not None})
+                else:
+                    results.append({"status": "success", "message": "Workout uploaded successfully"})
+            except Exception as e:
+                results.append({
+                    "status": "error",
+                    "name": workout_data.get('workoutName'),
+                    "message": f"Error uploading workout: {str(e)}"
+                })
+
+        total = len(results)
+        succeeded = sum(1 for r in results if r["status"] == "success")
+        return json.dumps({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": total - succeeded,
+            "results": results
+        }, indent=2)
+
+    @app.tool()
     async def delete_workout(workout_id: int) -> str:
         """Delete a workout from Garmin Connect
 
@@ -420,6 +468,50 @@ def register_tools(app):
                 }, indent=2)
         except Exception as e:
             return f"Error deleting workout: {str(e)}"
+
+    @app.tool()
+    async def delete_workouts(workout_ids: list[int]) -> str:
+        """Delete multiple workouts from Garmin Connect in a single call
+
+        Permanently removes multiple workouts from your Garmin Connect workout library.
+
+        Args:
+            workout_ids: List of workout IDs to delete (get IDs from get_workouts)
+        """
+        results = []
+        for workout_id in workout_ids:
+            try:
+                url = f"{garmin_client.garmin_workouts}/workout/{workout_id}"
+                response = garmin_client.garth.delete("connectapi", url, api=True)
+
+                if response.status_code in (200, 204):
+                    results.append({
+                        "status": "success",
+                        "workout_id": workout_id,
+                        "message": f"Workout {workout_id} deleted successfully"
+                    })
+                else:
+                    results.append({
+                        "status": "failed",
+                        "workout_id": workout_id,
+                        "http_status": response.status_code,
+                        "message": f"Failed to delete workout: HTTP {response.status_code}"
+                    })
+            except Exception as e:
+                results.append({
+                    "status": "error",
+                    "workout_id": workout_id,
+                    "message": f"Error deleting workout: {str(e)}"
+                })
+
+        total = len(results)
+        succeeded = sum(1 for r in results if r["status"] == "success")
+        return json.dumps({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": total - succeeded,
+            "results": results
+        }, indent=2)
 
     @app.tool()
     async def get_scheduled_workouts(start_date: str, end_date: str) -> str:
@@ -550,5 +642,108 @@ def register_tools(app):
                 }, indent=2)
         except Exception as e:
             return f"Error scheduling workout: {str(e)}"
+
+    @app.tool()
+    async def schedule_workouts(schedules: list[dict]) -> str:
+        """Schedule multiple workouts to specific calendar dates
+
+        This adds workouts to your Garmin Connect calendar in a single call.
+        Each item can either reference an existing workout by ID, or provide
+        inline workout_data to upload-and-schedule in one step.
+
+        Args:
+            schedules: List of workout schedules, each with:
+                - calendar_date (str): Date to schedule the workout in YYYY-MM-DD format (required)
+                - workout_id (int): ID of an existing workout to schedule (required unless workout_data is provided)
+                - workout_data (dict): Inline workout JSON to upload first, then schedule (optional).
+                  When provided, workout_id is not required. Uses the same structure as upload_workout.
+
+        Examples:
+            Schedule existing workouts by ID:
+            [{"workout_id": 123456, "calendar_date": "2024-01-15"},
+             {"workout_id": 789012, "calendar_date": "2024-01-17"}]
+
+            Upload and schedule inline:
+            [{"calendar_date": "2024-01-15", "workout_data": {"workoutName": "Easy Run", ...}},
+             {"workout_id": 789012, "calendar_date": "2024-01-17"}]
+        """
+        results = []
+        for item in schedules:
+            workout_id = item.get("workout_id")
+            calendar_date = item.get("calendar_date")
+            workout_data = item.get("workout_data")
+
+            if calendar_date is None:
+                results.append({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": "Missing required field: calendar_date"
+                })
+                continue
+
+            if workout_id is None and workout_data is None:
+                results.append({
+                    "status": "failed",
+                    "workout_id": None,
+                    "scheduled_date": calendar_date,
+                    "message": "Missing required fields: provide either workout_id or workout_data"
+                })
+                continue
+
+            try:
+                workout_name = None
+
+                if workout_data is not None:
+                    # Upload the workout first, then use the returned ID to schedule
+                    _fix_hr_zone_steps(workout_data)
+                    upload_result = garmin_client.upload_workout(workout_data)
+                    if not isinstance(upload_result, dict) or upload_result.get('workoutId') is None:
+                        results.append({
+                            "status": "failed",
+                            "scheduled_date": calendar_date,
+                            "message": "Upload succeeded but no workout_id returned"
+                        })
+                        continue
+                    workout_id = upload_result['workoutId']
+                    workout_name = upload_result.get('workoutName')
+
+                url = f"workout-service/schedule/{workout_id}"
+                response = garmin_client.garth.post("connectapi", url, json={"date": calendar_date})
+
+                if response.status_code == 200:
+                    entry = {
+                        "status": "success",
+                        "workout_id": workout_id,
+                        "scheduled_date": calendar_date,
+                        "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
+                    }
+                    if workout_name:
+                        entry["workout_name"] = workout_name
+                    results.append(entry)
+                else:
+                    results.append({
+                        "status": "failed",
+                        "workout_id": workout_id,
+                        "scheduled_date": calendar_date,
+                        "http_status": response.status_code,
+                        "message": f"Failed to schedule workout: HTTP {response.status_code}"
+                    })
+            except Exception as e:
+                results.append({
+                    "status": "error",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": f"Error scheduling workout: {str(e)}"
+                })
+
+        total = len(results)
+        succeeded = sum(1 for r in results if r["status"] == "success")
+        return json.dumps({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": total - succeeded,
+            "results": results
+        }, indent=2)
 
     return app
