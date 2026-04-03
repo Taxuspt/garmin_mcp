@@ -18,9 +18,12 @@ def configure(client):
 def _fix_hr_zone_step(step: dict) -> None:
     """Fix a common mistake where HR zone targets use targetValueOne instead of zoneNumber.
 
-    When targetType is heart.rate.zone, Garmin expects zoneNumber (1-5).
-    If targetValueOne is set to a small integer (1-5) and zoneNumber is missing,
-    this is almost certainly a zone number, not an absolute HR value.
+    When targetType is heart.rate.zone and a named zone is intended, Garmin expects
+    zoneNumber (1-5). If targetValueOne is set to a small integer (1-5) and zoneNumber
+    is missing, this is almost certainly a zone number, not an absolute HR value.
+
+    Custom HR bpm ranges (e.g. targetValueOne=105, targetValueTwo=143) are left
+    unchanged — these are legitimate custom heart rate targets in Garmin Connect.
     """
     target_type = step.get('targetType', {})
     target_key = target_type.get('workoutTargetTypeKey', '')
@@ -333,8 +336,17 @@ def register_tools(app):
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
         - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
 
-        IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
-        targetValueOne/targetValueTwo are only for absolute value ranges (e.g. pace in m/s, power in watts).
+        IMPORTANT: Heart rate targets come in two forms:
+        - Named zone (e.g. Zone 2): set targetType to "heart.rate.zone" and use "zoneNumber" (1-5).
+          Do NOT put the zone number in targetValueOne.
+        - Custom HR range (e.g. 105-143 bpm): set targetType to "heart.rate.zone" and use
+          "targetValueOne" (low bpm) / "targetValueTwo" (high bpm). Do NOT set "zoneNumber".
+          This matches Garmin Connect's "Custom" heart rate target.
+        For non-HR targets (pace, power, cadence), use targetValueOne/targetValueTwo directly.
+
+        Note: a safety check converts targetValueOne 1-5 to zoneNumber when zoneNumber is missing,
+        to catch the common mistake of putting a zone index in targetValueOne. Typical bpm values
+        (e.g. 105, 143) are not affected.
 
         **Available Templates:**
         Instead of building workout JSON from scratch, you can use these MCP resources as starting points:
