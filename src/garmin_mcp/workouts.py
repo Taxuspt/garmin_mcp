@@ -1,18 +1,130 @@
 """
 Workout-related functions for Garmin Connect MCP Server
 """
+import copy
 import json
 import datetime
+import unicodedata
+import urllib.request
 from typing import Any, Dict, List, Optional, Union
 
 # The garmin_client will be set by the main file
 garmin_client = None
+_exercise_catalog_cache: dict | None = None
+_exercise_translations_cache: dict[str, dict[str, str]] = {}
+
+EXERCISE_CATALOG_URL = "https://connect.garmin.com/web-data/exercises/Exercises.json"
+EXERCISE_TRANSLATIONS_URLS = {
+    "en": "https://connect.garmin.com/web-translations/exercise_types/exercise_types.properties",
+    "es": "https://connect.garmin.com/web-translations/exercise_types/exercise_types_es.properties",
+}
 
 
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
     garmin_client = client
+
+
+def _normalize_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value.lower())
+    stripped = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return " ".join(stripped.replace("_", " ").split())
+
+
+def _load_json_url(url: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(request) as response:
+        return json.load(response)
+
+
+def _load_text_url(url: str) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(request) as response:
+        return response.read().decode("utf-8")
+
+
+def _get_exercise_catalog() -> dict:
+    global _exercise_catalog_cache
+    if _exercise_catalog_cache is None:
+        _exercise_catalog_cache = _load_json_url(EXERCISE_CATALOG_URL)
+    return _exercise_catalog_cache
+
+
+def _parse_properties(text: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        mapping[key.strip()] = value.strip()
+    return mapping
+
+
+def _get_exercise_translations(lang: str) -> dict[str, str]:
+    if lang not in _exercise_translations_cache:
+        url = EXERCISE_TRANSLATIONS_URLS[lang]
+        _exercise_translations_cache[lang] = _parse_properties(_load_text_url(url))
+    return _exercise_translations_cache[lang]
+
+
+def _exercise_translation_key(category: str, exercise_name: str) -> str:
+    return f"{category}_{exercise_name}"
+
+
+def _humanize_key(value: str) -> str:
+    return value.replace("_", " ").title()
+
+
+def _search_exercise_catalog(query: str, limit: int = 20) -> list[dict[str, Any]]:
+    catalog = _get_exercise_catalog()
+    translations_en = _get_exercise_translations("en")
+    translations_es = _get_exercise_translations("es")
+    normalized_query = _normalize_text(query)
+    results: list[dict[str, Any]] = []
+
+    for category, category_data in catalog.get("categories", {}).items():
+        exercises = category_data.get("exercises", {})
+        for exercise_name in exercises.keys():
+            translation_key = _exercise_translation_key(category, exercise_name)
+            display_name_en = translations_en.get(translation_key, _humanize_key(exercise_name))
+            display_name_es = translations_es.get(translation_key)
+            haystack = [
+                _normalize_text(category),
+                _normalize_text(exercise_name),
+                _normalize_text(display_name_en),
+            ]
+            if display_name_es:
+                haystack.append(_normalize_text(display_name_es))
+
+            if not any(normalized_query in candidate for candidate in haystack):
+                continue
+
+            score = 0
+            for candidate in haystack:
+                if candidate == normalized_query:
+                    score = max(score, 100)
+                elif candidate.startswith(normalized_query):
+                    score = max(score, 75)
+                else:
+                    score = max(score, 50)
+
+            results.append(
+                {
+                    "category": category,
+                    "exercise_name": exercise_name,
+                    "display_name_en": display_name_en,
+                    "display_name_es": display_name_es,
+                    "score": score,
+                }
+            )
+
+    results.sort(key=lambda item: (-item["score"], item["category"], item["exercise_name"]))
+    return results[:limit]
 
 
 def _fix_hr_zone_step(step: dict) -> None:
@@ -22,7 +134,7 @@ def _fix_hr_zone_step(step: dict) -> None:
     If targetValueOne is set to a small integer (1-5) and zoneNumber is missing,
     this is almost certainly a zone number, not an absolute HR value.
     """
-    target_type = step.get('targetType', {})
+    target_type = step.get('targetType') or {}
     target_key = target_type.get('workoutTargetTypeKey', '')
 
     if target_key == 'heart.rate.zone' and 'zoneNumber' not in step:
@@ -42,6 +154,148 @@ def _fix_hr_zone_steps(workout_data: dict) -> None:
     for segment in workout_data.get('workoutSegments', []):
         for step in segment.get('workoutSteps', []):
             _fix_hr_zone_step(step)
+
+
+def _validate_strength_step(step: dict, errors: list[str], path: str) -> None:
+    """Validate Garmin strength steps and recurse through nested steps."""
+    step_type = step.get("type")
+    target_type = step.get("targetType") or {}
+    exercise_name = step.get("exerciseName")
+    category = step.get("category")
+    end_condition = step.get("endCondition") or {}
+
+    if step_type == "ExecutableStepDTO":
+        if exercise_name and not category:
+            errors.append(f"{path}: exerciseName requires category for strength workouts")
+        if category and not exercise_name:
+            errors.append(f"{path}: category requires exerciseName for strength workouts")
+        if (exercise_name or category) and end_condition.get("conditionTypeKey") == "distance":
+            errors.append(f"{path}: strength exercise steps must use reps, not distance")
+        if target_type and target_type.get("workoutTargetTypeKey") == "no.target":
+            # no.target is valid; avoid carrying extra validation assumptions here
+            pass
+
+    for index, nested in enumerate(step.get("workoutSteps", []), start=1):
+        _validate_strength_step(nested, errors, f"{path}.workoutSteps[{index}]")
+
+
+def _validate_strength_workout(workout_data: dict) -> None:
+    """Guard against malformed strength workout uploads that Garmin accepts poorly."""
+    sport_type = workout_data.get("sportType") or {}
+    if sport_type.get("sportTypeKey") != "strength_training":
+        return
+
+    errors: list[str] = []
+    for segment_index, segment in enumerate(workout_data.get("workoutSegments", []), start=1):
+        for step_index, step in enumerate(segment.get("workoutSteps", []), start=1):
+            _validate_strength_step(step, errors, f"segment[{segment_index}].workoutSteps[{step_index}]")
+
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
+def _collect_strength_steps(step: dict, steps: list[dict[str, Any]]) -> None:
+    if step.get("type") == "ExecutableStepDTO" and (step.get("exerciseName") or step.get("category")):
+        entry = {
+            "order": step.get("stepOrder"),
+            "category": step.get("category"),
+            "exercise_name": step.get("exerciseName"),
+            "description": step.get("description"),
+            "end_condition": (step.get("endCondition") or {}).get("conditionTypeKey"),
+            "end_condition_value": step.get("endConditionValue"),
+        }
+        steps.append({k: v for k, v in entry.items() if v is not None})
+
+    for nested in step.get("workoutSteps", []):
+        _collect_strength_steps(nested, steps)
+
+
+def _summarize_workout_payload(workout_data: dict) -> dict[str, Any]:
+    sport_type = workout_data.get("sportType") or {}
+    segments = workout_data.get("workoutSegments", [])
+    strength_steps: list[dict[str, Any]] = []
+    top_level_steps = 0
+
+    for segment in segments:
+        steps = segment.get("workoutSteps", [])
+        top_level_steps += len(steps)
+        for step in steps:
+            _collect_strength_steps(step, strength_steps)
+
+    return {
+        "name": workout_data.get("workoutName"),
+        "sport": sport_type.get("sportTypeKey"),
+        "segment_count": len(segments),
+        "top_level_step_count": top_level_steps,
+        "strength_step_count": len(strength_steps),
+        "strength_steps": strength_steps,
+    }
+
+
+def _normalize_weekday(value: str) -> int:
+    normalized = _normalize_text(value)
+    weekdays = {
+        "monday": 0,
+        "mon": 0,
+        "lunes": 0,
+        "tuesday": 1,
+        "tue": 1,
+        "martes": 1,
+        "wednesday": 2,
+        "wed": 2,
+        "miercoles": 2,
+        "miércoles": 2,
+        "thursday": 3,
+        "thu": 3,
+        "jueves": 3,
+        "friday": 4,
+        "fri": 4,
+        "viernes": 4,
+        "saturday": 5,
+        "sat": 5,
+        "sabado": 5,
+        "sábado": 5,
+        "sunday": 6,
+        "sun": 6,
+        "domingo": 6,
+    }
+    if normalized not in weekdays:
+        raise ValueError(f"Unsupported weekday: {value}")
+    return weekdays[normalized]
+
+
+def _generate_recurring_dates(
+    start_date: str,
+    end_date: str,
+    weekdays: list[str],
+    interval_weeks: int = 1,
+    exclude_dates: list[str] | None = None,
+) -> list[str]:
+    start = datetime.date.fromisoformat(start_date)
+    end = datetime.date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("end_date must be on or after start_date")
+    if interval_weeks < 1:
+        raise ValueError("interval_weeks must be at least 1")
+
+    weekday_values = {_normalize_weekday(day) for day in weekdays}
+    excluded = set(exclude_dates or [])
+    anchor = start - datetime.timedelta(days=start.weekday())
+    scheduled: list[str] = []
+    current = start
+
+    while current <= end:
+        current_week_anchor = current - datetime.timedelta(days=current.weekday())
+        week_offset = (current_week_anchor - anchor).days // 7
+        if (
+            current.weekday() in weekday_values
+            and week_offset % interval_weeks == 0
+            and current.isoformat() not in excluded
+        ):
+            scheduled.append(current.isoformat())
+        current += datetime.timedelta(days=1)
+
+    return scheduled
 
 
 def _curate_workout_summary(workout: dict) -> dict:
@@ -73,9 +327,10 @@ def _curate_workout_summary(workout: dict) -> dict:
 
 def _curate_workout_step(step: dict) -> dict:
     """Extract essential workout step information"""
-    step_type = step.get('stepType', {})
-    end_condition = step.get('endCondition', {})
-    target_type = step.get('targetType', {})
+    step_type = step.get('stepType') or {}
+    end_condition = step.get('endCondition') or {}
+    target_type = step.get('targetType') or {}
+    weight_unit = step.get('weightUnit') or {}
 
     curated = {
         "order": step.get('stepOrder'),
@@ -107,6 +362,20 @@ def _curate_workout_step(step: dict) -> dict:
     # Repeat info for repeat steps
     if step.get('type') == 'RepeatGroupDTO':
         curated['repeat_count'] = step.get('numberOfIterations')
+        nested_steps = step.get('workoutSteps', [])
+        if nested_steps:
+            curated['steps'] = [_curate_workout_step(nested) for nested in nested_steps]
+            curated['step_count'] = len(nested_steps)
+
+    # Strength-specific fields
+    if step.get('category'):
+        curated['category'] = step.get('category')
+    if step.get('exerciseName'):
+        curated['exercise_name'] = step.get('exerciseName')
+    if step.get('weightValue') is not None:
+        curated['weight_value'] = step.get('weightValue')
+    if weight_unit.get('unitKey'):
+        curated['weight_unit'] = weight_unit.get('unitKey')
 
     return {k: v for k, v in curated.items() if v is not None}
 
@@ -196,6 +465,7 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
     is_completed = scheduled.get('associatedActivityId') is not None
 
     summary = {
+        "scheduled_workout_id": scheduled.get('scheduledWorkoutId'),
         "date": scheduled.get('scheduleDate'),
         "workout_uuid": scheduled.get('workoutUuid'),
         "workout_id": scheduled.get('workoutId'),
@@ -324,6 +594,66 @@ def register_tools(app):
             return f"Error downloading workout: {str(e)}"
 
     @app.tool()
+    async def search_exercise_catalog(query: str, limit: int = 20) -> str:
+        """Search Garmin's exercise catalog by human query.
+
+        Supports English keys and Garmin's public Spanish exercise translations.
+
+        Args:
+            query: Search string such as "sentadilla" or "pull up"
+            limit: Maximum number of results to return
+        """
+        try:
+            matches = _search_exercise_catalog(query, limit=limit)
+            return json.dumps(
+                {
+                    "query": query,
+                    "count": len(matches),
+                    "matches": matches,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error searching exercise catalog: {str(e)}"
+
+    @app.tool()
+    async def validate_workout_payload(workout_data: dict) -> str:
+        """Dry-run validation for a workout payload without uploading it.
+
+        Useful for confirming a Garmin strength workout is fully defined before upload.
+
+        Args:
+            workout_data: Dictionary containing workout structure to validate
+        """
+        try:
+            normalized = copy.deepcopy(workout_data)
+            _fix_hr_zone_steps(normalized)
+            _validate_strength_workout(normalized)
+            summary = _summarize_workout_payload(normalized)
+            return json.dumps(
+                {
+                    "valid": True,
+                    "errors": [],
+                    "summary": summary,
+                    "normalized_workout_data": normalized,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        except Exception as e:
+            summary = _summarize_workout_payload(workout_data)
+            return json.dumps(
+                {
+                    "valid": False,
+                    "errors": [str(e)],
+                    "summary": summary,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+    @app.tool()
     async def upload_workout(workout_data: dict) -> str:
         """Upload a workout from JSON data
 
@@ -372,6 +702,7 @@ def register_tools(app):
         try:
             # Fix common mistake: HR zone targets using targetValueOne instead of zoneNumber
             _fix_hr_zone_steps(workout_data)
+            _validate_strength_workout(workout_data)
 
             # Pass dict directly - library handles conversion
             result = garmin_client.upload_workout(workout_data)
@@ -550,5 +881,181 @@ def register_tools(app):
                 }, indent=2)
         except Exception as e:
             return f"Error scheduling workout: {str(e)}"
+
+    @app.tool()
+    async def unschedule_workout(scheduled_workout_id: int) -> str:
+        """Remove a scheduled workout from the Garmin calendar.
+
+        This only removes the calendar instance. It does not delete the workout
+        template from your workout library.
+
+        Args:
+            scheduled_workout_id: Scheduled workout ID from get_scheduled_workouts
+        """
+        try:
+            url = f"workout-service/schedule/{scheduled_workout_id}"
+            response = garmin_client.garth.delete("connectapi", url, api=True)
+
+            if response.status_code == 204 or response.status_code == 200:
+                return json.dumps({
+                    "status": "success",
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "message": f"Successfully unscheduled workout {scheduled_workout_id}"
+                }, indent=2)
+            else:
+                return json.dumps({
+                    "status": "failed",
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "http_status": response.status_code,
+                    "message": f"Failed to unschedule workout: HTTP {response.status_code}"
+                }, indent=2)
+        except Exception as e:
+            return f"Error unscheduling workout: {str(e)}"
+
+    @app.tool()
+    async def unschedule_workout_on_date(
+        workout_id: int,
+        calendar_date: str,
+    ) -> str:
+        """Unschedule a workout template occurrence for a specific date.
+
+        This resolves the Garmin scheduled workout instance for the given date
+        and then removes it from the calendar.
+
+        Args:
+            workout_id: Workout library ID
+            calendar_date: Date in YYYY-MM-DD format
+        """
+        try:
+            query = {
+                "query": f'query{{workoutScheduleSummariesScalar(startDate:"{calendar_date}", endDate:"{calendar_date}")}}'
+            }
+            result = garmin_client.query_garmin_graphql(query)
+            if not result or "data" not in result:
+                return "No scheduled workouts found or error querying data."
+
+            scheduled = result.get("data", {}).get("workoutScheduleSummariesScalar", [])
+            match = next(
+                (
+                    item for item in scheduled
+                    if item.get("workoutId") == workout_id and item.get("scheduleDate") == calendar_date
+                ),
+                None,
+            )
+
+            if not match:
+                return json.dumps({
+                    "status": "not_found",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": "No scheduled workout matched the given workout_id and date"
+                }, indent=2)
+
+            scheduled_workout_id = match.get("scheduledWorkoutId")
+            if not scheduled_workout_id:
+                return json.dumps({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": "Matched workout is missing scheduledWorkoutId"
+                }, indent=2)
+
+            url = f"workout-service/schedule/{scheduled_workout_id}"
+            response = garmin_client.garth.delete("connectapi", url, api=True)
+
+            if response.status_code == 204 or response.status_code == 200:
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": f"Successfully unscheduled workout {workout_id} on {calendar_date}"
+                }, indent=2)
+
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "scheduled_workout_id": scheduled_workout_id,
+                "scheduled_date": calendar_date,
+                "http_status": response.status_code,
+                "message": f"Failed to unschedule workout: HTTP {response.status_code}"
+            }, indent=2)
+        except Exception as e:
+            return f"Error unscheduling workout on date: {str(e)}"
+
+    @app.tool()
+    async def schedule_workout_recurring(
+        workout_id: int,
+        start_date: str,
+        end_date: str,
+        weekdays: list[str],
+        interval_weeks: int = 1,
+        exclude_dates: Optional[list[str]] = None,
+        dry_run: bool = False,
+    ) -> str:
+        """Schedule a workout repeatedly across a date range.
+
+        Generates matching dates between start_date and end_date for the given weekdays.
+        When dry_run is true, returns the dates without scheduling them.
+
+        Args:
+            workout_id: Workout ID from get_workouts
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            weekdays: Weekdays such as ["monday", "thursday"] or ["lunes", "jueves"]
+            interval_weeks: Schedule every N weeks (default 1)
+            exclude_dates: Optional list of YYYY-MM-DD dates to skip
+            dry_run: If true, do not call Garmin; just return the generated dates
+        """
+        try:
+            dates = _generate_recurring_dates(
+                start_date=start_date,
+                end_date=end_date,
+                weekdays=weekdays,
+                interval_weeks=interval_weeks,
+                exclude_dates=exclude_dates,
+            )
+
+            if dry_run:
+                return json.dumps(
+                    {
+                        "status": "dry_run",
+                        "workout_id": workout_id,
+                        "count": len(dates),
+                        "dates": dates,
+                    },
+                    indent=2,
+                )
+
+            scheduled = []
+            for calendar_date in dates:
+                url = f"workout-service/schedule/{workout_id}"
+                response = garmin_client.garth.post(
+                    "connectapi",
+                    url,
+                    json={"date": calendar_date},
+                )
+                scheduled.append(
+                    {
+                        "date": calendar_date,
+                        "http_status": response.status_code,
+                        "scheduled": response.status_code == 200,
+                    }
+                )
+
+            failures = [entry for entry in scheduled if not entry["scheduled"]]
+            status = "success" if not failures else "partial_failure"
+            return json.dumps(
+                {
+                    "status": status,
+                    "workout_id": workout_id,
+                    "count": len(scheduled),
+                    "scheduled_dates": scheduled,
+                    "failed_count": len(failures),
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error scheduling recurring workout: {str(e)}"
 
     return app

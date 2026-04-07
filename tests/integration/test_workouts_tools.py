@@ -85,6 +85,77 @@ async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_workout_by_id_handles_null_target_type_and_nested_strength_steps(
+    app_with_workouts, mock_garmin_client
+):
+    """Real Garmin strength workouts often have null targetType and nested repeat-group steps."""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 555,
+        "workoutName": "Strength Pilot",
+        "sportType": {"sportTypeKey": "strength_training"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeKey": "strength_training"},
+            "workoutSteps": [
+                {
+                    "type": "ExecutableStepDTO",
+                    "stepOrder": 1,
+                    "stepType": {"stepTypeKey": "warmup"},
+                    "description": "Warmup",
+                    "targetType": None,
+                },
+                {
+                    "type": "RepeatGroupDTO",
+                    "stepOrder": 2,
+                    "stepType": {"stepTypeKey": "repeat"},
+                    "numberOfIterations": 3,
+                    "workoutSteps": [
+                        {
+                            "type": "ExecutableStepDTO",
+                            "stepOrder": 1,
+                            "stepType": {"stepTypeKey": "interval"},
+                            "endCondition": {"conditionTypeKey": "reps"},
+                            "endConditionValue": 12.0,
+                            "targetType": None,
+                            "category": "SQUAT",
+                            "exerciseName": "AIR_SQUAT",
+                        },
+                        {
+                            "type": "ExecutableStepDTO",
+                            "stepOrder": 2,
+                            "stepType": {"stepTypeKey": "rest"},
+                            "description": "Rest",
+                            "endCondition": {"conditionTypeKey": "time"},
+                            "endConditionValue": 90.0,
+                            "targetType": {"workoutTargetTypeKey": "no.target"},
+                        },
+                    ],
+                },
+            ],
+        }],
+    }
+
+    result = await app_with_workouts.call_tool(
+        "get_workout_by_id",
+        {"workout_id": 555}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    repeat_group = result_data["segments"][0]["steps"][1]
+    nested_step = repeat_group["steps"][0]
+
+    assert result_data["sport"] == "strength_training"
+    assert repeat_group["repeat_count"] == 3
+    assert repeat_group["step_count"] == 2
+    assert nested_step["exercise_name"] == "AIR_SQUAT"
+    assert nested_step["category"] == "SQUAT"
+    assert nested_step["end_condition"] == "reps"
+    assert nested_step["end_condition_value"] == 12.0
+
+
+@pytest.mark.asyncio
 async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
     """Test get_workout_by_id tool with UUID (training plan workout)"""
     import json as json_module
@@ -297,6 +368,219 @@ async def test_upload_workout_fixes_hr_zone_in_repeat_group(app_with_workouts, m
 
 
 @pytest.mark.asyncio
+async def test_search_exercise_catalog_tool_supports_spanish_query(
+    app_with_workouts, monkeypatch
+):
+    """Exercise lookup should search Garmin catalog keys and translated display names."""
+    import json as json_module
+
+    monkeypatch.setattr(
+        workouts,
+        "_exercise_catalog_cache",
+        {
+            "categories": {
+                "SQUAT": {"exercises": {"AIR_SQUAT": {}, "BACK_SQUAT": {}}},
+                "PULL_UP": {"exercises": {"BAND_ASSISTED_PULL_UP": {}}},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        workouts,
+        "_exercise_translations_cache",
+        {
+            "en": {
+                "SQUAT_AIR_SQUAT": "Air Squat",
+                "SQUAT_BACK_SQUAT": "Back Squat",
+                "PULL_UP_BAND_ASSISTED_PULL_UP": "Band Assisted Pull Up",
+            },
+            "es": {
+                "SQUAT_AIR_SQUAT": "Sentadilla con peso corporal",
+                "SQUAT_BACK_SQUAT": "Sentadilla trasera",
+                "PULL_UP_BAND_ASSISTED_PULL_UP": "Dominada asistida con banda",
+            },
+        },
+    )
+
+    result = await app_with_workouts.call_tool(
+        "search_exercise_catalog",
+        {"query": "sentadilla", "limit": 10},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["count"] == 2
+    assert result_data["matches"][0]["category"] == "SQUAT"
+    assert result_data["matches"][0]["exercise_name"] == "AIR_SQUAT"
+    assert result_data["matches"][0]["display_name_es"] == "Sentadilla con peso corporal"
+
+
+@pytest.mark.asyncio
+async def test_validate_workout_payload_tool_returns_normalized_strength_summary(
+    app_with_workouts,
+):
+    """Dry-run validation should normalize and summarize a valid strength payload."""
+    import json as json_module
+
+    workout_data = {
+        "workoutName": "Validation Pilot",
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+            "workoutSteps": [{
+                "type": "RepeatGroupDTO",
+                "stepOrder": 1,
+                "numberOfIterations": 3,
+                "workoutSteps": [
+                    {
+                        "type": "ExecutableStepDTO",
+                        "stepOrder": 1,
+                        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                        "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+                        "endConditionValue": 12,
+                        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+                        "category": "SQUAT",
+                        "exerciseName": "AIR_SQUAT",
+                    }
+                ],
+            }]
+        }]
+    }
+
+    result = await app_with_workouts.call_tool(
+        "validate_workout_payload",
+        {"workout_data": workout_data}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["valid"] is True
+    assert result_data["errors"] == []
+    assert result_data["summary"]["sport"] == "strength_training"
+    assert result_data["summary"]["strength_step_count"] == 1
+    normalized_step = result_data["normalized_workout_data"]["workoutSegments"][0]["workoutSteps"][0]["workoutSteps"][0]
+    assert normalized_step["exerciseName"] == "AIR_SQUAT"
+    assert normalized_step["category"] == "SQUAT"
+
+
+@pytest.mark.asyncio
+async def test_validate_workout_payload_tool_reports_strength_errors(
+    app_with_workouts,
+):
+    """Dry-run validation should reject malformed strength exercise definitions."""
+    import json as json_module
+
+    workout_data = {
+        "workoutName": "Broken Validation Pilot",
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "distance"},
+                "endConditionValue": 10,
+                "exerciseName": "AIR_SQUAT",
+            }]
+        }]
+    }
+
+    result = await app_with_workouts.call_tool(
+        "validate_workout_payload",
+        {"workout_data": workout_data}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["valid"] is False
+    assert "exerciseName requires category" in result_data["errors"][0]
+    assert result_data["summary"]["strength_step_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_rejects_strength_exercise_without_category(
+    app_with_workouts, mock_garmin_client
+):
+    """Garmin ignores strength exerciseName unless category is also present."""
+    workout_data = {
+        "workoutName": "Broken Strength",
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+                "endConditionValue": 10,
+                "exerciseName": "AIR_SQUAT",
+            }]
+        }]
+    }
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data}
+    )
+
+    assert "exerciseName requires category" in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_accepts_strength_exercise_with_category_and_reps(
+    app_with_workouts, mock_garmin_client
+):
+    """Strength uploads should preserve Garmin's exercise catalog fields."""
+    import json as json_module
+
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 777,
+        "workoutName": "Strength Pilot",
+    }
+
+    workout_data = {
+        "workoutName": "Strength Pilot",
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+            "workoutSteps": [{
+                "type": "RepeatGroupDTO",
+                "stepOrder": 1,
+                "numberOfIterations": 3,
+                "workoutSteps": [
+                    {
+                        "type": "ExecutableStepDTO",
+                        "stepOrder": 1,
+                        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                        "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+                        "endConditionValue": 12,
+                        "category": "SQUAT",
+                        "exerciseName": "AIR_SQUAT",
+                    }
+                ],
+            }]
+        }]
+    }
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data}
+    )
+
+    called_data = mock_garmin_client.upload_workout.call_args[0][0]
+    nested_step = called_data["workoutSegments"][0]["workoutSteps"][0]["workoutSteps"][0]
+
+    assert nested_step["category"] == "SQUAT"
+    assert nested_step["exerciseName"] == "AIR_SQUAT"
+    assert nested_step["endCondition"]["conditionTypeKey"] == "reps"
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+
+
+@pytest.mark.asyncio
 async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client):
     """Test get_scheduled_workouts tool - uses GraphQL query"""
     import json as json_module
@@ -306,6 +590,7 @@ async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client
         "data": {
             "workoutScheduleSummariesScalar": [
                 {
+                    "scheduledWorkoutId": 999001,
                     "workoutUuid": "abc-123-def",
                     "workoutId": 123456,
                     "workoutName": "5K Tempo Run",
@@ -331,6 +616,7 @@ async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client
     result_data = json_module.loads(result[0][0].text)
     assert result_data["count"] == 1
     workout = result_data["scheduled_workouts"][0]
+    assert workout["scheduled_workout_id"] == 999001
     assert workout["name"] == "5K Tempo Run"
     assert workout["sport"] == "running"
     assert workout["completed"] is False
@@ -340,6 +626,150 @@ async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client
     # Verify
     assert result is not None
     mock_garmin_client.query_garmin_graphql.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_unschedule_workout_tool_success(app_with_workouts, mock_garmin_client):
+    """Unschedule should delete a scheduled workout instance, not the library workout."""
+    import json as json_module
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.status_code = 204
+    mock_garmin_client.garth.delete.return_value = mock_response
+
+    result = await app_with_workouts.call_tool(
+        "unschedule_workout",
+        {"scheduled_workout_id": 999001}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["scheduled_workout_id"] == 999001
+    mock_garmin_client.garth.delete.assert_called_once_with(
+        "connectapi",
+        "workout-service/schedule/999001",
+        api=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unschedule_workout_on_date_tool_success(app_with_workouts, mock_garmin_client):
+    """Unschedule on date should resolve scheduledWorkoutId from daily schedule data."""
+    import json as json_module
+    from unittest.mock import MagicMock
+
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "workoutScheduleSummariesScalar": [
+                {
+                    "scheduledWorkoutId": 1610547179,
+                    "workoutId": 123456,
+                    "workoutName": "5K Tempo Run",
+                    "workoutType": "running",
+                    "scheduleDate": "2024-01-15",
+                    "associatedActivityId": None,
+                }
+            ]
+        }
+    }
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_garmin_client.garth.delete.return_value = mock_response
+
+    result = await app_with_workouts.call_tool(
+        "unschedule_workout_on_date",
+        {"workout_id": 123456, "calendar_date": "2024-01-15"}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["scheduled_workout_id"] == 1610547179
+    mock_garmin_client.garth.delete.assert_called_once_with(
+        "connectapi",
+        "workout-service/schedule/1610547179",
+        api=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unschedule_workout_on_date_tool_not_found(app_with_workouts, mock_garmin_client):
+    """Unschedule on date should report not_found when the workout/date pair is absent."""
+    import json as json_module
+
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "workoutScheduleSummariesScalar": []
+        }
+    }
+
+    result = await app_with_workouts.call_tool(
+        "unschedule_workout_on_date",
+        {"workout_id": 123456, "calendar_date": "2024-01-15"}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "not_found"
+    mock_garmin_client.garth.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_schedule_workout_recurring_tool_dry_run(app_with_workouts):
+    """Recurring scheduling should generate the expected dates without API calls in dry-run mode."""
+    import json as json_module
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workout_recurring",
+        {
+            "workout_id": 123456,
+            "start_date": "2026-04-06",
+            "end_date": "2026-04-20",
+            "weekdays": ["lunes", "jueves"],
+            "exclude_dates": ["2026-04-13"],
+            "dry_run": True,
+        }
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "dry_run"
+    assert result_data["dates"] == ["2026-04-06", "2026-04-09", "2026-04-16", "2026-04-20"]
+
+
+@pytest.mark.asyncio
+async def test_schedule_workout_recurring_tool_posts_each_date(
+    app_with_workouts, mock_garmin_client
+):
+    """Recurring scheduling should POST one request per generated Garmin calendar date."""
+    import json as json_module
+
+    response = Mock()
+    response.status_code = 200
+    mock_garmin_client.garth.post.return_value = response
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workout_recurring",
+        {
+            "workout_id": 123456,
+            "start_date": "2026-04-06",
+            "end_date": "2026-04-19",
+            "weekdays": ["monday", "thursday"],
+        }
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["count"] == 4
+    assert mock_garmin_client.garth.post.call_count == 4
+    mock_garmin_client.garth.post.assert_any_call(
+        "connectapi",
+        "workout-service/schedule/123456",
+        json={"date": "2026-04-06"},
+    )
+    mock_garmin_client.garth.post.assert_any_call(
+        "connectapi",
+        "workout-service/schedule/123456",
+        json={"date": "2026-04-16"},
+    )
 
 
 @pytest.mark.asyncio

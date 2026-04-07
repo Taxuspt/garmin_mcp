@@ -145,43 +145,47 @@ TEMPO_RUN_TEMPLATE = {
 }
 
 STRENGTH_CIRCUIT_TEMPLATE = {
-    "workoutName": "Strength Circuit",
-    "description": "Strength training circuit: warmup, 3x circuit (work + rest), cooldown",
-    "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+    "workoutName": "Strength Pilot",
+    "description": "Strength workout with Garmin exercise metadata: warmup, 3x air squat + rest, cooldown",
+    "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training", "displayOrder": 5},
     "workoutSegments": [{
         "segmentOrder": 1,
-        "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training", "displayOrder": 5},
         "workoutSteps": [
             {
                 "type": "ExecutableStepDTO",
                 "stepOrder": 1,
                 "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
-                "description": "Warmup 5 min",
-                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                "endConditionValue": 300.0,
+                "description": "Warmup",
+                "endCondition": {"conditionTypeId": 1, "conditionTypeKey": "lap.button", "displayOrder": 1, "displayable": True},
                 "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
             },
             {
                 "type": "RepeatGroupDTO",
                 "stepOrder": 2,
                 "numberOfIterations": 3,
+                "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat", "displayOrder": 6},
+                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations", "displayOrder": 7, "displayable": False},
+                "endConditionValue": 3.0,
                 "workoutSteps": [
                     {
                         "type": "ExecutableStepDTO",
                         "stepOrder": 1,
                         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-                        "description": "Circuit work 10 min",
-                        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                        "endConditionValue": 600.0,
-                        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                        "description": "Air squat",
+                        "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps", "displayOrder": 10, "displayable": True},
+                        "endConditionValue": 12.0,
+                        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+                        "category": "SQUAT",
+                        "exerciseName": "AIR_SQUAT"
                     },
                     {
                         "type": "ExecutableStepDTO",
                         "stepOrder": 2,
-                        "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
-                        "description": "Rest 2 min",
-                        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                        "endConditionValue": 120.0,
+                        "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
+                        "description": "Rest",
+                        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": True},
+                        "endConditionValue": 90.0,
                         "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
                     }
                 ]
@@ -190,9 +194,8 @@ STRENGTH_CIRCUIT_TEMPLATE = {
                 "type": "ExecutableStepDTO",
                 "stepOrder": 3,
                 "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
-                "description": "Cooldown stretch 5 min",
-                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                "endConditionValue": 300.0,
+                "description": "Cooldown",
+                "endCondition": {"conditionTypeId": 1, "conditionTypeKey": "lap.button", "displayOrder": 1, "displayable": True},
                 "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
             }
         ]
@@ -216,7 +219,8 @@ WORKOUT_STRUCTURE_REFERENCE = {
     "endCondition_values": {
         "1": {"conditionTypeKey": "lap.button", "description": "Manual lap press"},
         "2": {"conditionTypeKey": "time", "description": "Duration in seconds"},
-        "3": {"conditionTypeKey": "distance", "description": "Distance in meters"}
+        "3": {"conditionTypeKey": "distance", "description": "Distance in meters"},
+        "10": {"conditionTypeKey": "reps", "description": "Number of repetitions"}
     },
     "targetType_values": {
         "1": {"workoutTargetTypeKey": "no.target", "description": "No specific target"},
@@ -226,8 +230,7 @@ WORKOUT_STRUCTURE_REFERENCE = {
     "sportType_values": {
         "1": {"sportTypeKey": "running"},
         "2": {"sportTypeKey": "cycling"},
-        "4": {"sportTypeKey": "strength_training"},
-        "5": {"sportTypeKey": "cardio"},
+        "5": {"sportTypeKey": "strength_training"},
         "11": {"sportTypeKey": "walking"}
     }
 }
@@ -267,8 +270,8 @@ def register_resources(app):
     async def get_strength_template() -> str:
         """Strength training circuit template
 
-        Circuit-style strength workout with repeat groups.
-        3 rounds of 10min work + 2min rest.
+        Garmin-compatible strength workout template with a real exercise.
+        Demonstrates the required category + exerciseName + reps shape.
         """
         return json.dumps(STRENGTH_CIRCUIT_TEMPLATE, indent=2)
 
