@@ -367,11 +367,22 @@ async def test_update_custom_food_error(app_with_nutrition, mock_garmin_client):
     assert "Error updating custom food" in result[0][0].text
 
 
+MOCK_MEALS = {
+    "meals": [
+        {"mealId": 20249, "mealName": "BREAKFAST", "startTime": "06:00:00", "endTime": "09:00:00"},
+        {"mealId": 20250, "mealName": "LUNCH", "startTime": "11:00:00", "endTime": "14:00:00"},
+        {"mealId": 20251, "mealName": "DINNER", "startTime": "18:00:00", "endTime": "21:00:00"},
+        {"mealId": 20252, "mealName": "SNACKS"},
+    ]
+}
+
+
 # log_food tests
 
 @pytest.mark.asyncio
 async def test_log_food(app_with_nutrition, mock_garmin_client):
-    """Test log_food logs a food item to a meal"""
+    """Test log_food resolves meal ID and quick-adds a food entry"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"status": "ok"}
@@ -380,32 +391,40 @@ async def test_log_food(app_with_nutrition, mock_garmin_client):
         "log_food",
         {
             "meal_date": "2024-01-15",
-            "meal_time": "12:30:00",
-            "meal_id": 185360,
-            "food_id": "abc123",
-            "serving_id": "srv456",
-            "serving_qty": 3,
+            "meal_time": "12:30:00",  # within LUNCH window 11:00-14:00
+            "name": "Chicken Breast",
+            "calories": 200,
+            "carbs": 3,
+            "protein": 40,
+            "fat": 4,
         }
     )
     assert result is not None
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/nutrition-service/meals/2024-01-15"
+    )
     call_args = mock_garmin_client.garth.put.call_args
     assert call_args[0][0] == "connectapi"
-    assert call_args[0][1] == "/nutrition-service/food/logs"
+    assert call_args[0][1] == "/nutrition-service/food/logs/quickAdd"
     payload = call_args[1]["json"]
     assert payload["mealDate"] == "2024-01-15"
-    assert len(payload["foodLogItems"]) == 1
-    item = payload["foodLogItems"][0]
-    assert item["mealId"] == 185360
-    assert item["foodId"] == "abc123"
-    assert item["servingId"] == "srv456"
-    assert item["servingQty"] == 3
+    assert len(payload["quickAddItems"]) == 1
+    item = payload["quickAddItems"][0]
+    assert item["name"] == "Chicken Breast"
+    assert item["mealId"] == 20250  # LUNCH
+    assert item["calories"] == "200"
+    assert item["carbs"] == "3"
+    assert item["protein"] == "40"
+    assert item["fat"] == "4"
+    assert item["logCategory"] == "QUICK_ADD"
     assert item["action"] == "ADD"
-    assert item["mealTime"] == "12:30:00"
+    assert item["logId"] is None
 
 
 @pytest.mark.asyncio
-async def test_log_food_default_qty(app_with_nutrition, mock_garmin_client):
-    """Test log_food with default serving quantity of 1"""
+async def test_log_food_falls_back_to_snacks(app_with_nutrition, mock_garmin_client):
+    """Test log_food falls back to SNACKS when time doesn't match any window"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
     mock_resp = MagicMock()
     mock_resp.status_code = 204
     mock_garmin_client.garth.put.return_value = mock_resp
@@ -413,29 +432,233 @@ async def test_log_food_default_qty(app_with_nutrition, mock_garmin_client):
         "log_food",
         {
             "meal_date": "2024-01-15",
-            "meal_time": "08:00:00",
-            "meal_id": 185360,
-            "food_id": "abc123",
-            "serving_id": "srv456",
+            "meal_time": "10:00:00",  # between BREAKFAST and LUNCH, no match → SNACKS
+            "name": "Oats",
+            "calories": 150,
+            "carbs": 27,
+            "protein": 5,
+            "fat": 3,
         }
     )
     assert "Food logged successfully" in result[0][0].text
     payload = mock_garmin_client.garth.put.call_args[1]["json"]
-    assert payload["foodLogItems"][0]["servingQty"] == 1
+    assert payload["quickAddItems"][0]["mealId"] == 20252  # SNACKS
+    assert payload["quickAddItems"][0]["mealTime"] == "10:00:00"
 
 
 @pytest.mark.asyncio
 async def test_log_food_error(app_with_nutrition, mock_garmin_client):
-    """Test log_food handles errors"""
+    """Test log_food handles API errors"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
     mock_garmin_client.garth.put.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool(
         "log_food",
         {
             "meal_date": "2024-01-15",
             "meal_time": "12:00:00",
-            "meal_id": 185360,
+            "name": "Test",
+            "calories": 100,
+            "carbs": 10,
+            "protein": 5,
+            "fat": 2,
+        }
+    )
+    assert "Error logging food" in result[0][0].text
+
+
+# log_custom_food tests
+
+@pytest.mark.asyncio
+async def test_log_custom_food(app_with_nutrition, mock_garmin_client):
+    """Test log_custom_food auto-resolves meal_id and logs using food_id/serving_id"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"status": "ok"}
+    mock_garmin_client.garth.put.return_value = mock_resp
+    result = await app_with_nutrition.call_tool(
+        "log_custom_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:30:00",  # within LUNCH window 11:00-14:00
+            "food_id": "abc123",
+            "serving_id": "srv456",
+            "serving_qty": 3,
+        }
+    )
+    assert result is not None
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/nutrition-service/meals/2024-01-15"
+    )
+    call_args = mock_garmin_client.garth.put.call_args
+    assert call_args[0][0] == "connectapi"
+    assert call_args[0][1] == "/nutrition-service/food/logs"
+    payload = call_args[1]["json"]
+    assert payload["mealDate"] == "2024-01-15"
+    assert len(payload["foodLogItems"]) == 1
+    item = payload["foodLogItems"][0]
+    assert item["mealId"] == 20250  # LUNCH
+    assert item["foodId"] == "abc123"
+    assert item["servingId"] == "srv456"
+    assert item["servingQty"] == 3
+    assert item["logCategory"] == "REGULAR_LOG"
+    assert item["action"] == "ADD"
+    assert item["mealTime"] == "12:30:00"
+
+
+@pytest.mark.asyncio
+async def test_log_custom_food_falls_back_to_snacks(app_with_nutrition, mock_garmin_client):
+    """Test log_custom_food falls back to SNACKS when time doesn't match any window"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_resp = MagicMock()
+    mock_resp.status_code = 204
+    mock_garmin_client.garth.put.return_value = mock_resp
+    result = await app_with_nutrition.call_tool(
+        "log_custom_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "10:00:00",  # between BREAKFAST and LUNCH, no match → SNACKS
+            "food_id": "abc123",
+            "serving_id": "srv456",
+        }
+    )
+    assert "Food logged successfully" in result[0][0].text
+    payload = mock_garmin_client.garth.put.call_args[1]["json"]
+    assert payload["foodLogItems"][0]["mealId"] == 20252  # SNACKS
+    assert payload["foodLogItems"][0]["servingQty"] == 1
+
+
+@pytest.mark.asyncio
+async def test_log_custom_food_error(app_with_nutrition, mock_garmin_client):
+    """Test log_custom_food handles API errors"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.garth.put.side_effect = Exception("API error")
+    result = await app_with_nutrition.call_tool(
+        "log_custom_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
             "food_id": "abc123",
             "serving_id": "srv456",
         }
     )
     assert "Error logging food" in result[0][0].text
+
+
+# delete_food_log tests
+
+@pytest.mark.asyncio
+async def test_delete_food_log(app_with_nutrition, mock_garmin_client):
+    """Test delete_food_log removes a food log entry"""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 204
+    mock_garmin_client.garth.delete.return_value = mock_resp
+    result = await app_with_nutrition.call_tool(
+        "delete_food_log",
+        {"log_id": 99001}
+    )
+    assert "success" in result[0][0].text
+    assert "99001" in result[0][0].text
+    mock_garmin_client.garth.delete.assert_called_once_with(
+        "connectapi", "/nutrition-service/food/logs/99001", api=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_food_log_error(app_with_nutrition, mock_garmin_client):
+    """Test delete_food_log handles API errors"""
+    mock_garmin_client.garth.delete.side_effect = Exception("API error")
+    result = await app_with_nutrition.call_tool(
+        "delete_food_log",
+        {"log_id": 99001}
+    )
+    assert "Error deleting food log" in result[0][0].text
+
+
+# upsert_and_log tests
+
+MOCK_CUSTOM_FOODS = [
+    {
+        "foodMetaData": {"foodId": "food001", "foodName": "Greek Yogurt"},
+        "nutritionContents": [{"servingId": "srv001", "calories": "100"}],
+    }
+]
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_existing_food(app_with_nutrition, mock_garmin_client):
+    """Test upsert_and_log finds existing food and logs it without creating"""
+    mock_garmin_client.connectapi.side_effect = [
+        MOCK_CUSTOM_FOODS,  # search
+        MOCK_MEALS,         # meal resolution
+    ]
+    mock_resp = MagicMock()
+    mock_resp.status_code = 204
+    mock_garmin_client.garth.put.return_value = mock_resp
+    result = await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "08:30:00",  # within BREAKFAST window
+            "food_name": "Greek Yogurt",
+            "calories": 100,
+        }
+    )
+    assert "Food logged successfully" in result[0][0].text
+    # create_custom_food should NOT have been called
+    mock_garmin_client.garth.put.assert_called_once()
+    payload = mock_garmin_client.garth.put.call_args[1]["json"]
+    item = payload["foodLogItems"][0]
+    assert item["foodId"] == "food001"
+    assert item["servingId"] == "srv001"
+    assert item["mealId"] == 20249  # BREAKFAST
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_creates_new_food(app_with_nutrition, mock_garmin_client):
+    """Test upsert_and_log creates food when not found then logs it"""
+    created_food = {
+        "foodMetaData": {"foodId": "food999", "foodName": "New Food"},
+        "nutritionContents": [{"servingId": "srv999"}],
+    }
+    mock_garmin_client.connectapi.side_effect = [
+        [],           # search returns empty
+        MOCK_MEALS,   # meal resolution
+    ]
+    create_resp = MagicMock()
+    create_resp.status_code = 201
+    create_resp.json.return_value = created_food
+    log_resp = MagicMock()
+    log_resp.status_code = 204
+    mock_garmin_client.garth.put.side_effect = [create_resp, log_resp]
+    result = await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "food_name": "New Food",
+            "calories": 200,
+            "protein": 20,
+        }
+    )
+    assert "Food logged successfully" in result[0][0].text
+    assert mock_garmin_client.garth.put.call_count == 2
+    log_payload = mock_garmin_client.garth.put.call_args_list[1][1]["json"]
+    assert log_payload["foodLogItems"][0]["foodId"] == "food999"
+    assert log_payload["foodLogItems"][0]["servingId"] == "srv999"
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_error(app_with_nutrition, mock_garmin_client):
+    """Test upsert_and_log handles errors"""
+    mock_garmin_client.connectapi.side_effect = Exception("API error")
+    result = await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "food_name": "Test Food",
+            "calories": 100,
+        }
+    )
+    assert "Error in upsert_and_log" in result[0][0].text

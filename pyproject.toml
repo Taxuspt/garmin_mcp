@@ -28,5 +28,3 @@ dev-dependencies = [
     "pytest-timeout>=2.3.1",
 ]
 
-[tool.uv.sources]
-garmin-mcp = { workspace = true }
