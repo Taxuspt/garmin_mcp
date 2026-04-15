@@ -553,6 +553,34 @@ def register_tools(app):
             return f"Error retrieving training status data: {str(e)}"
 
     @app.tool()
+    async def get_cycling_ftp() -> str:
+        """Get the latest cycling Functional Threshold Power (FTP) data.
+
+        Returns the most recent cycling FTP estimate available from Garmin.
+        """
+        try:
+            ftp_data = garmin_client.get_cycling_ftp()
+
+            if not ftp_data:
+                return "No cycling FTP data found"
+
+            curated = {
+                "sport": ftp_data.get("sport"),
+                "functional_threshold_power_watts": ftp_data.get(
+                    "functionalThresholdPower"
+                ),
+                "calendar_date": ftp_data.get("calendarDate"),
+                "is_stale": ftp_data.get("isStale"),
+                "biometric_source_type": ftp_data.get("biometricSourceType"),
+            }
+
+            curated = {k: v for k, v in curated.items() if v is not None}
+
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving cycling FTP data: {str(e)}"
+
+    @app.tool()
     async def get_lactate_threshold(
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,

@@ -810,3 +810,14 @@ MOCK_LACTATE_THRESHOLD_RANGE = {
         {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 334.0, "updatedDate": "2024-01-15"},
     ],
 }
+
+MOCK_CYCLING_FTP = {
+    "userProfilePK": 12345678,
+    "version": 1710498600000,
+    "calendarDate": "2024-03-15T10:30:00.000",
+    "isStale": False,
+    "sequence": 1710498600000,
+    "sport": "CYCLING",
+    "functionalThresholdPower": 294,
+    "biometricSourceType": "CHANGE_LOG",
+}

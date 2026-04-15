@@ -13,17 +13,18 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - Access health metrics (steps, heart rate, sleep, stress, respiration)
 - View body composition data
 - Track training status and readiness
+- Access cycling FTP and lactate threshold metrics
 - Manage gear and equipment
 - Access workouts and training plans
 - Weekly health aggregates (steps, stress, intensity minutes)
 
 ### Tool Coverage
 
-This MCP server implements **96+ tools** covering ~89% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
+This MCP server implements **97+ tools** covering ~89% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
 
 - ✅ Activity Management (14 tools)
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
-- ✅ Training & Performance (9 tools)
+- ✅ Training & Performance (10 tools)
 - ✅ Workouts (8 tools)
 - ✅ Devices (7 tools)
 - ✅ Gear Management (5 tools)
