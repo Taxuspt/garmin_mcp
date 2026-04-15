@@ -224,11 +224,15 @@ def register_tools(app):
                     "start_time": lap.get('startTimeGMT'),
                     "distance_meters": lap.get('distance'),
                     "duration_seconds": lap.get('duration'),
+                    "moving_duration_seconds": lap.get('movingDuration'),
+                    "elapsed_duration_seconds": lap.get('elapsedDuration'),
                     "avg_speed_mps": lap.get('averageSpeed'),
+                    "avg_moving_speed_mps": lap.get('averageMovingSpeed'),
                     "max_speed_mps": lap.get('maxSpeed'),
                     "avg_hr_bpm": lap.get('averageHR'),
                     "max_hr_bpm": lap.get('maxHR'),
                     "calories": lap.get('calories'),
+                    "bmr_calories": lap.get('bmrCalories'),
                     "avg_cadence": lap.get('averageRunCadence'),
                     "avg_power_watts": lap.get('averagePower'),
                     "avg_swim_cadence": lap.get('averageSwimCadence'),
@@ -236,9 +240,11 @@ def register_tools(app):
                     "total_strokes": lap.get('totalNumberOfStrokes'),
                     "avg_strokes": lap.get('averageStrokes'),
                     "avg_swolf": lap.get('averageSWOLF'),
+                    "avg_stroke_distance": lap.get('averageStrokeDistance'),
                     "intensity_type": lap.get('intensityType'),
                     "elevation_gain_meters": lap.get('elevationGain'),
                     "elevation_loss_meters": lap.get('elevationLoss'),
+                    "workout_step_index": lap.get('wktStepIndex'),
                 }
 
                 length_dtos = lap.get('lengthDTOs', [])

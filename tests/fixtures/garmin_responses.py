@@ -85,9 +85,13 @@ MOCK_SWIM_ACTIVITY_SPLITS = {
             "startTimeGMT": "2026-04-14T17:19:08.0",
             "distance": 2024.0,
             "duration": 2995.565,
+            "movingDuration": 2995.565,
+            "elapsedDuration": 2995.565,
             "averageSpeed": 0.6759999990463257,
+            "averageMovingSpeed": 0.67566553875138,
             "maxSpeed": 0.7689999938011169,
             "calories": 552.0,
+            "bmrCalories": 85.0,
             "averageHR": 136.0,
             "maxHR": 152.0,
             "averageSwimCadence": 22.0,
@@ -95,6 +99,8 @@ MOCK_SWIM_ACTIVITY_SPLITS = {
             "totalNumberOfStrokes": 1104,
             "averageStrokes": 12.0,
             "averageSWOLF": 45.0,
+            "averageStrokeDistance": 0.0,
+            "wktStepIndex": 0,
             "lengthDTOs": [
                 {
                     "lengthIndex": 1,

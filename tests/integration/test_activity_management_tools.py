@@ -166,6 +166,12 @@ async def test_get_activity_splits_includes_swim_lengths(app_with_activity_manag
     assert data["laps"][0]["total_strokes"] == 1104
     assert data["laps"][0]["avg_strokes"] == 12.0
     assert data["laps"][0]["avg_swolf"] == 45.0
+    assert data["laps"][0]["moving_duration_seconds"] == 2995.565
+    assert data["laps"][0]["elapsed_duration_seconds"] == 2995.565
+    assert data["laps"][0]["avg_moving_speed_mps"] == 0.67566553875138
+    assert data["laps"][0]["bmr_calories"] == 85.0
+    assert data["laps"][0]["avg_stroke_distance"] == 0.0
+    assert data["laps"][0]["workout_step_index"] == 0
     assert len(data["laps"][0]["lengths"]) == 2
     assert data["laps"][0]["lengths"][0]["length_number"] == 1
     assert data["laps"][0]["lengths"][0]["distance_meters"] == 22.0
