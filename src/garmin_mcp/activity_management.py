@@ -231,10 +231,39 @@ def register_tools(app):
                     "calories": lap.get('calories'),
                     "avg_cadence": lap.get('averageRunCadence'),
                     "avg_power_watts": lap.get('averagePower'),
+                    "avg_swim_cadence": lap.get('averageSwimCadence'),
+                    "active_length_count": lap.get('numberOfActiveLengths'),
+                    "total_strokes": lap.get('totalNumberOfStrokes'),
+                    "avg_strokes": lap.get('averageStrokes'),
+                    "avg_swolf": lap.get('averageSWOLF'),
                     "intensity_type": lap.get('intensityType'),
                     "elevation_gain_meters": lap.get('elevationGain'),
                     "elevation_loss_meters": lap.get('elevationLoss'),
                 }
+
+                length_dtos = lap.get('lengthDTOs', [])
+                if length_dtos:
+                    lap_data["lengths"] = []
+                    for length in length_dtos:
+                        length_data = {
+                            "length_number": length.get('lengthIndex'),
+                            "start_time": length.get('startTimeGMT'),
+                            "distance_meters": length.get('distance'),
+                            "duration_seconds": length.get('duration'),
+                            "avg_speed_mps": length.get('averageSpeed'),
+                            "max_speed_mps": length.get('maxSpeed'),
+                            "calories": length.get('calories'),
+                            "avg_hr_bpm": length.get('averageHR'),
+                            "max_hr_bpm": length.get('maxHR'),
+                            "total_strokes": length.get('totalNumberOfStrokes'),
+                            "avg_swolf": length.get('averageSWOLF'),
+                            "stroke": length.get('swimStroke'),
+                        }
+                        length_data = {
+                            k: v for k, v in length_data.items() if v is not None
+                        }
+                        lap_data["lengths"].append(length_data)
+
                 # Remove None values
                 lap_data = {k: v for k, v in lap_data.items() if v is not None}
                 curated["laps"].append(lap_data)

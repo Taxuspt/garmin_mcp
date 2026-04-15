@@ -12,6 +12,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_ACTIVITIES,
     MOCK_ACTIVITY_DETAILS,
     MOCK_ACTIVITY_SPLITS,
+    MOCK_SWIM_ACTIVITY_SPLITS,
     MOCK_ACTIVITY_COUNT,
     MOCK_ACTIVITY_TYPES,
 )
@@ -143,6 +144,33 @@ async def test_get_activity_splits_elevation_fields(app_with_activity_management
     # Second lap elevation
     assert data["laps"][1]["elevation_gain_meters"] == 15.0
     assert data["laps"][1]["elevation_loss_meters"] == 30.8
+
+
+@pytest.mark.asyncio
+async def test_get_activity_splits_includes_swim_lengths(app_with_activity_management, mock_garmin_client):
+    """Test get_activity_splits tool preserves swim lap and nested length data."""
+    import json
+
+    mock_garmin_client.get_activity_splits.return_value = MOCK_SWIM_ACTIVITY_SPLITS
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity_splits",
+        {"activity_id": 22526515067}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activity_id"] == 22526515067
+    assert data["lap_count"] == 1
+    assert data["laps"][0]["avg_swim_cadence"] == 22.0
+    assert data["laps"][0]["active_length_count"] == 92
+    assert data["laps"][0]["total_strokes"] == 1104
+    assert data["laps"][0]["avg_strokes"] == 12.0
+    assert data["laps"][0]["avg_swolf"] == 45.0
+    assert len(data["laps"][0]["lengths"]) == 2
+    assert data["laps"][0]["lengths"][0]["length_number"] == 1
+    assert data["laps"][0]["lengths"][0]["distance_meters"] == 22.0
+    assert data["laps"][0]["lengths"][0]["duration_seconds"] == 31.0
+    assert data["laps"][0]["lengths"][0]["stroke"] == "FREESTYLE"
 
 
 @pytest.mark.asyncio
