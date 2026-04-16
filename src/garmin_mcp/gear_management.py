@@ -164,7 +164,7 @@ def register_tools(app):
             gear_uuid: UUID of the gear to add (get from get_gear)
         """
         try:
-            garmin_client.add_gear_to_activity(activity_id, gear_uuid)
+            garmin_client.add_gear_to_activity(gear_uuid, activity_id)
 
             return json.dumps(
                 {
@@ -189,7 +189,7 @@ def register_tools(app):
             gear_uuid: UUID of the gear to remove
         """
         try:
-            garmin_client.remove_gear_from_activity(activity_id, gear_uuid)
+            garmin_client.remove_gear_from_activity(gear_uuid, activity_id)
 
             return json.dumps(
                 {
