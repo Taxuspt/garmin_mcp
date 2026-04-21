@@ -20,3 +20,4 @@ docs/*
 .gitignore
 playground/*
 tests/fixtures/captured/*
+.claude/*

@@ -136,9 +136,9 @@ class TestAuthenticate:
 
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.dump = Mock()
+        mock_garmin_instance.client.dumps = Mock(return_value="base64data")
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
@@ -146,7 +146,7 @@ class TestAuthenticate:
             result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=True)
 
         assert result is True
-        mock_garmin_instance.login.assert_called_once()
+        assert mock_garmin_instance.login.call_count == 1
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
@@ -158,9 +158,9 @@ class TestAuthenticate:
 
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.dump = Mock()
+        mock_garmin_instance.client.dumps = Mock(return_value="base64data")
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
@@ -169,8 +169,7 @@ class TestAuthenticate:
             result = authenticate(tmpdir, base64_path, force_reauth=False)
 
             assert result is True
-            mock_garmin_instance.login.assert_called_once()
-            mock_garmin_instance.garth.dump.assert_called_once_with(tmpdir)
+            mock_garmin_instance.login.assert_called_once_with(tmpdir)
             mock_garmin_instance.get_full_name.assert_called_once()
 
             # Check base64 file was created (use expanded path)
@@ -375,9 +374,9 @@ class TestAuthenticateIsCn:
 
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.dump = Mock()
+        mock_garmin_instance.client.dumps = Mock(return_value="base64data")
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
@@ -403,9 +402,9 @@ class TestAuthenticateIsCn:
 
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.dump = Mock()
+        mock_garmin_instance.client.dumps = Mock(return_value="base64data")
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pip3 install garth requests readchar
+pip3 install garminconnect requests readchar
 
 export EMAIL=<your garmin email>
 export PASSWORD=<your garmin password>
@@ -16,8 +16,6 @@ from getpass import getpass
 
 import readchar
 import requests
-from garth.exc import GarthHTTPError
-
 from garminconnect import (
     Garmin,
     GarminConnectAuthenticationError,
@@ -206,7 +204,7 @@ def init_api(email, password):
         garmin = Garmin(is_cn=is_cn)
         garmin.login(tokenstore)
 
-    except (FileNotFoundError, GarthHTTPError, GarminConnectAuthenticationError):
+    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
         print(
             "Login tokens not present, login with your Garmin Connect credentials to generate them.\n"
@@ -220,14 +218,12 @@ def init_api(email, password):
             garmin = Garmin(
                 email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa
             )
-            garmin.login()
-            # Save Oauth1 and Oauth2 token files to directory for next login
-            garmin.garth.dump(tokenstore)
+            garmin.login(tokenstore)
             print(
                 f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n"
             )
-            # Encode Oauth1 and Oauth2 tokens to base64 string and safe to file for next login (alternative way)
-            token_base64 = garmin.garth.dumps()
+            # Encode Oauth1 and Oauth2 tokens to base64 string and save to file for next login (alternative way)
+            token_base64 = garmin.client.dumps()
             dir_path = os.path.expanduser(tokenstore_base64)
             with open(dir_path, "w") as token_file:
                 token_file.write(token_base64)
@@ -236,7 +232,7 @@ def init_api(email, password):
             )
         except (
             FileNotFoundError,
-            GarthHTTPError,
+            GarminConnectConnectionError,
             GarminConnectAuthenticationError,
             requests.exceptions.HTTPError,
         ) as err:

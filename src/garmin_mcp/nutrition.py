@@ -4,7 +4,7 @@ Nutrition/food logging functions for Garmin Connect MCP Server
 import json
 from typing import Optional
 
-from garth.exc import GarthHTTPError
+from garminconnect import GarminConnectConnectionError
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -200,17 +200,12 @@ def register_tools(app):
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
-            resp = garmin_client.garth.put(
-                "connectapi", url, json=payload, api=True
-            )
+            resp = garmin_client.client.put("connectapi", url, json=payload)
             if resp.status_code == 204:
                 return "Custom food created (no response data returned)."
             return json.dumps(resp.json(), indent=2)
-        except GarthHTTPError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
-            return f"Error creating custom food: {e} | Response: {body}"
+        except GarminConnectConnectionError as e:
+            return f"Error creating custom food: {e}"
         except Exception as e:
             return f"Error creating custom food: {str(e)}"
 
@@ -288,17 +283,12 @@ def register_tools(app):
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
-            resp = garmin_client.garth.put(
-                "connectapi", url, json=payload, api=True
-            )
+            resp = garmin_client.client.put("connectapi", url, json=payload)
             if resp.status_code == 204:
                 return "Custom food updated (no response data returned)."
             return json.dumps(resp.json(), indent=2)
-        except GarthHTTPError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
-            return f"Error updating custom food: {e} | Response: {body}"
+        except GarminConnectConnectionError as e:
+            return f"Error updating custom food: {e}"
         except Exception as e:
             return f"Error updating custom food: {str(e)}"
 
@@ -351,17 +341,12 @@ def register_tools(app):
                 ],
             }
             url = "/nutrition-service/food/logs"
-            resp = garmin_client.garth.put(
-                "connectapi", url, json=payload, api=True
-            )
+            resp = garmin_client.client.put("connectapi", url, json=payload)
             if resp.status_code == 204:
                 return "Food logged successfully."
             return json.dumps(resp.json(), indent=2)
-        except GarthHTTPError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
-            return f"Error logging food: {e} | Response: {body}"
+        except GarminConnectConnectionError as e:
+            return f"Error logging food: {e}"
         except Exception as e:
             return f"Error logging food: {str(e)}"
 
