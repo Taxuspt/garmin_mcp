@@ -1,8 +1,9 @@
 """
 Integration tests for activity_management module MCP tools
 
-Tests all 10 activity management tools using FastMCP integration with mocked Garmin API responses.
+Tests activity management tools using FastMCP integration with mocked Garmin API responses.
 """
+import json
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -96,6 +97,43 @@ async def test_get_activity_tool(app_with_activity_management, mock_garmin_clien
     # Verify
     assert result is not None
     mock_garmin_client.get_activity.assert_called_once_with(activity_id)
+
+
+@pytest.mark.asyncio
+async def test_set_activity_name_tool(app_with_activity_management, mock_garmin_client):
+    """Test set_activity_name tool updates activity name"""
+    activity_id = 12345678901
+    mock_garmin_client.set_activity_name.return_value = {}
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_name",
+        {"activity_id": activity_id, "activity_name": "Morning Run - Easy"},
+    )
+
+    assert result is not None
+    mock_garmin_client.set_activity_name.assert_called_once_with(
+        activity_id, "Morning Run - Easy"
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["activity_id"] == activity_id
+    assert data["activity_name"] == "Morning Run - Easy"
+
+
+@pytest.mark.asyncio
+async def test_set_activity_name_tool_rejects_blank_name(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test set_activity_name tool rejects blank names"""
+    result = await app_with_activity_management.call_tool(
+        "set_activity_name",
+        {"activity_id": 12345678901, "activity_name": "   "},
+    )
+
+    assert result is not None
+    mock_garmin_client.set_activity_name.assert_not_called()
+    assert result[0][0].text == "Activity name cannot be empty"
 
 
 @pytest.mark.asyncio
@@ -398,3 +436,17 @@ async def test_get_activity_not_found(app_with_activity_management, mock_garmin_
     # Verify helpful message is returned
     assert result is not None
     # Should indicate activity not found
+
+
+@pytest.mark.asyncio
+async def test_set_activity_name_exception(app_with_activity_management, mock_garmin_client):
+    """Test set_activity_name tool when API raises exception"""
+    mock_garmin_client.set_activity_name.side_effect = Exception("API Error")
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_name",
+        {"activity_id": 12345678901, "activity_name": "Morning Run"},
+    )
+
+    assert result is not None
+    assert result[0][0].text == "Error updating activity name: API Error"
