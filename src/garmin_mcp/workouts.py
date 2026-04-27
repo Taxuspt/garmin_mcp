@@ -81,7 +81,9 @@ def _curate_step_target(
     prefix: str = "",
 ) -> None:
     """Curate a workout target block, handling Garmin null target payloads safely."""
-    target_type = step.get(target_field) or {}
+    target_type = step.get(target_field)
+    if not isinstance(target_type, dict):
+        target_type = {}
     target_key = target_type.get('workoutTargetTypeKey')
 
     if not target_key or target_key == 'no.target':

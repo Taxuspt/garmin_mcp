@@ -132,6 +132,47 @@ async def test_get_workout_by_id_tool_handles_swim_secondary_targets(
 
 
 @pytest.mark.asyncio
+async def test_get_workout_by_id_tool_ignores_malformed_target_blocks(
+    app_with_workouts, mock_garmin_client
+):
+    """Test malformed Garmin target blocks do not crash workout curation."""
+    import json as json_module
+
+    malformed_workout = {
+        "workoutId": 123457,
+        "workoutName": "Malformed Swim Workout",
+        "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance"},
+                "endConditionValue": 100.0,
+                "targetType": "pace.zone",
+                "secondaryTargetType": [],
+            }]
+        }],
+    }
+    mock_garmin_client.get_workout_by_id.return_value = malformed_workout
+
+    result = await app_with_workouts.call_tool(
+        "get_workout_by_id",
+        {"workout_id": 123457}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    step = result_data["segments"][0]["steps"][0]
+    assert step["type"] == "warmup"
+    assert step["end_condition"] == "distance"
+    assert step["end_condition_value"] == 100.0
+    assert "target_type" not in step
+    assert "secondary_target_type" not in step
+
+
+@pytest.mark.asyncio
 async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
     """Test get_workout_by_id tool with UUID (training plan workout)"""
     import json as json_module
