@@ -623,6 +623,74 @@ MOCK_WORKOUT_DETAILS = {
     ]
 }
 
+MOCK_SWIM_WORKOUT_DETAILS = {
+    "workoutId": 1528077786,
+    "workoutName": "Long Swim - intermittent 1000m",
+    "description": "Example swim workout with Garmin secondary pace targets",
+    "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+    "estimatedDistanceInMeters": 3000.0,
+    "createdDate": "2026-04-06T12:37:29.0",
+    "updatedDate": "2026-04-07T09:59:49.0",
+    "workoutSegments": [
+        {
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+            "workoutSteps": [
+                {
+                    "type": "ExecutableStepDTO",
+                    "stepId": 12984228432,
+                    "stepOrder": 1,
+                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                    "description": "2:24-3:42/100m",
+                    "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance"},
+                    "endConditionValue": 500.0,
+                    "targetType": None,
+                    "secondaryTargetType": {
+                        "workoutTargetTypeId": 6,
+                        "workoutTargetTypeKey": "pace.zone",
+                    },
+                    "secondaryTargetValueOne": 0.45,
+                    "secondaryTargetValueTwo": 0.6916667,
+                },
+                {
+                    "type": "RepeatGroupDTO",
+                    "stepId": 12984228433,
+                    "stepOrder": 2,
+                    "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
+                    "numberOfIterations": 2,
+                    "workoutSteps": [
+                        {
+                            "type": "ExecutableStepDTO",
+                            "stepId": 12984228434,
+                            "stepOrder": 3,
+                            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                            "description": "1:56-2:09/100m",
+                            "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance"},
+                            "endConditionValue": 1000.0,
+                            "targetType": None,
+                            "secondaryTargetType": {
+                                "workoutTargetTypeId": 6,
+                                "workoutTargetTypeKey": "pace.zone",
+                            },
+                            "secondaryTargetValueOne": 0.7751938,
+                            "secondaryTargetValueTwo": 0.8583333,
+                        },
+                        {
+                            "type": "ExecutableStepDTO",
+                            "stepId": 12984228435,
+                            "stepOrder": 4,
+                            "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
+                            "endCondition": {"conditionTypeId": 8, "conditionTypeKey": "fixed.rest"},
+                            "endConditionValue": 60.0,
+                            "targetType": None,
+                        },
+                    ],
+                },
+            ],
+        }
+    ],
+}
+
 # Women's Health
 MOCK_MENSTRUAL_DATA = {
     "calendarDate": "2024-01-15",

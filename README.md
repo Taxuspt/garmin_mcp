@@ -15,6 +15,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - Track training status and readiness
 - Manage gear and equipment
 - Access workouts and training plans
+- Inspect detailed workout step structures, including repeat groups and swim pace targets
 - Weekly health aggregates (steps, stress, intensity minutes)
 
 ### Tool Coverage

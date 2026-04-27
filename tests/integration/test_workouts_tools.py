@@ -11,6 +11,7 @@ from garmin_mcp import workouts
 from tests.fixtures.garmin_responses import (
     MOCK_WORKOUTS,
     MOCK_WORKOUT_DETAILS,
+    MOCK_SWIM_WORKOUT_DETAILS,
 )
 
 
@@ -82,6 +83,52 @@ async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
     assert interval_step["type"] == "interval"
     assert interval_step["target_type"] == "pace.zone"
     assert interval_step["target_zone"] == 4
+
+
+@pytest.mark.asyncio
+async def test_get_workout_by_id_tool_handles_swim_secondary_targets(
+    app_with_workouts, mock_garmin_client
+):
+    """Test swim workouts with null primary targetType still expose secondary pace targets."""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = MOCK_SWIM_WORKOUT_DETAILS
+
+    result = await app_with_workouts.call_tool(
+        "get_workout_by_id",
+        {"workout_id": 1528077786}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["id"] == 1528077786
+    assert result_data["sport"] == "swimming"
+    assert result_data["estimated_distance_meters"] == 3000.0
+
+    segment = result_data["segments"][0]
+    assert segment["step_count"] == 2
+
+    warmup_step = segment["steps"][0]
+    assert warmup_step["type"] == "warmup"
+    assert warmup_step["secondary_target_type"] == "pace.zone"
+    assert warmup_step["secondary_target_value_low"] == 0.45
+    assert warmup_step["secondary_target_value_high"] == 0.6916667
+    assert "target_type" not in warmup_step
+
+    repeat_step = segment["steps"][1]
+    assert repeat_step["type"] == "repeat"
+    assert repeat_step["repeat_count"] == 2
+    assert repeat_step["step_count"] == 2
+
+    interval_step = repeat_step["steps"][0]
+    assert interval_step["type"] == "interval"
+    assert interval_step["secondary_target_type"] == "pace.zone"
+    assert interval_step["secondary_target_value_low"] == 0.7751938
+    assert interval_step["secondary_target_value_high"] == 0.8583333
+
+    rest_step = repeat_step["steps"][1]
+    assert rest_step["type"] == "rest"
+    assert rest_step["end_condition"] == "fixed.rest"
+    assert rest_step["end_condition_value"] == 60.0
 
 
 @pytest.mark.asyncio
