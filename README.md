@@ -36,6 +36,7 @@ This MCP server implements **97+ tools** covering ~89% of the [python-garminconn
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (3 tools)
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
+- ✅ Courses (3 tools) - list / upload GPX as course / delete course
 
 ### Intentionally Skipped Endpoints
 
