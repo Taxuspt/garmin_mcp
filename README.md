@@ -32,6 +32,7 @@ This MCP server implements **96+ tools** covering ~89% of the [python-garminconn
 - ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (3 tools)
+- ✅ Courses (3 tools) - list / upload GPX as course / delete course
 
 ### Intentionally Skipped Endpoints
 
