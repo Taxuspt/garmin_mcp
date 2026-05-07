@@ -19,4 +19,5 @@ build/
 docs/*
 .gitignore
 playground/*
+scratch/*
 tests/fixtures/captured/*
