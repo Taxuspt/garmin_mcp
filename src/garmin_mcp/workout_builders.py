@@ -130,10 +130,10 @@ def build_z2_walk_json(
     return {
         "workoutName": name,
         "description": f"Walk {duration_min} min at Z2 ({hr_min}-{hr_max} bpm)",
-        "sportType": {"sportTypeId": 11, "sportTypeKey": "walking"},
+        "sportType": {"sportTypeId": 12, "sportTypeKey": "walking"},
         "workoutSegments": [{
             "segmentOrder": 1,
-            "sportType": {"sportTypeId": 11, "sportTypeKey": "walking"},
+            "sportType": {"sportTypeId": 12, "sportTypeKey": "walking"},
             "workoutSteps": [
                 {
                     "type": "ExecutableStepDTO",
@@ -220,10 +220,10 @@ def build_strength_json(
     return {
         "workoutName": name,
         "description": f"Strength: {len(exercises)} exercises",
-        "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
         "workoutSegments": [{
             "segmentOrder": 1,
-            "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+            "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
             "workoutSteps": steps,
         }],
     }

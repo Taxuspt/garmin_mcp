@@ -39,6 +39,7 @@ def test_build_z2_walk_json_structure():
     )
     assert result["workoutName"] == "Z2 Walk 30m"
     assert result["sportType"]["sportTypeKey"] == "walking"
+    assert result["sportType"]["sportTypeId"] == 12
     steps = result["workoutSegments"][0]["workoutSteps"]
     assert len(steps) == 3
     assert steps[1]["zoneNumber"] == 2
@@ -55,6 +56,7 @@ def test_build_strength_json_structure():
     )
     assert result["workoutName"] == "Full Body A"
     assert result["sportType"]["sportTypeKey"] == "strength_training"
+    assert result["sportType"]["sportTypeId"] == 5
     steps = result["workoutSegments"][0]["workoutSteps"]
     # 2 exercises + 1 rest between them = 3 steps
     assert len(steps) == 3
