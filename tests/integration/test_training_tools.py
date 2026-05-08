@@ -1,7 +1,7 @@
 """
 Integration tests for training module MCP tools
 
-Tests all 8 training tools using FastMCP integration with mocked Garmin API responses.
+Tests training tools using FastMCP integration with mocked Garmin API responses.
 """
 import pytest
 from unittest.mock import Mock
@@ -16,6 +16,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_TRAINING_STATUS,
     MOCK_LACTATE_THRESHOLD,
     MOCK_LACTATE_THRESHOLD_RANGE,
+    MOCK_CYCLING_FTP,
     MOCK_ENDURANCE_SCORE,
     MOCK_ACTIVITY_TYPES,
 )
@@ -206,6 +207,24 @@ async def test_get_fitnessage_data_tool(app_with_training, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.get_fitnessage_data.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_cycling_ftp_tool(app_with_training, mock_garmin_client):
+    """Test get_cycling_ftp tool returns latest FTP data"""
+    mock_garmin_client.get_cycling_ftp.return_value = MOCK_CYCLING_FTP
+
+    result = await app_with_training.call_tool("get_cycling_ftp", {})
+
+    assert result is not None
+    mock_garmin_client.get_cycling_ftp.assert_called_once_with()
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "CYCLING"
+    assert data["functional_threshold_power_watts"] == 294
+    assert data["calendar_date"] == "2024-03-15T10:30:00.000"
+    assert data["is_stale"] is False
+    assert data["biometric_source_type"] == "CHANGE_LOG"
 
 
 @pytest.mark.asyncio
