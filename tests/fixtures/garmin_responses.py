@@ -77,6 +77,64 @@ MOCK_ACTIVITY_SPLITS = {
     ]
 }
 
+MOCK_SWIM_ACTIVITY_SPLITS = {
+    "activityId": 22526515067,
+    "lapDTOs": [
+        {
+            "lapIndex": 1,
+            "startTimeGMT": "2026-04-14T17:19:08.0",
+            "distance": 2024.0,
+            "duration": 2995.565,
+            "movingDuration": 2995.565,
+            "elapsedDuration": 2995.565,
+            "averageSpeed": 0.6759999990463257,
+            "averageMovingSpeed": 0.67566553875138,
+            "maxSpeed": 0.7689999938011169,
+            "calories": 552.0,
+            "bmrCalories": 85.0,
+            "averageHR": 136.0,
+            "maxHR": 152.0,
+            "averageSwimCadence": 22.0,
+            "numberOfActiveLengths": 92,
+            "totalNumberOfStrokes": 1104,
+            "averageStrokes": 12.0,
+            "averageSWOLF": 45.0,
+            "averageStrokeDistance": 0.0,
+            "wktStepIndex": 0,
+            "lengthDTOs": [
+                {
+                    "lengthIndex": 1,
+                    "startTimeGMT": "2026-04-14T17:19:08.0",
+                    "distance": 22.0,
+                    "duration": 31.0,
+                    "averageSpeed": 0.7099999785423279,
+                    "maxSpeed": 0.7099999785423279,
+                    "calories": 6.0,
+                    "averageHR": 121.0,
+                    "maxHR": 134.0,
+                    "totalNumberOfStrokes": 11,
+                    "averageSWOLF": 42.0,
+                    "swimStroke": "FREESTYLE",
+                },
+                {
+                    "lengthIndex": 2,
+                    "startTimeGMT": "2026-04-14T17:19:39.0",
+                    "distance": 22.0,
+                    "duration": 31.125,
+                    "averageSpeed": 0.7070000171661376,
+                    "maxSpeed": 0.7070000171661376,
+                    "calories": 6.0,
+                    "averageHR": 135.0,
+                    "maxHR": 142.0,
+                    "totalNumberOfStrokes": 12,
+                    "averageSWOLF": 43.0,
+                    "swimStroke": "FREESTYLE",
+                },
+            ],
+        }
+    ],
+}
+
 # Health & Wellness
 MOCK_STATS = {
     "totalKilocalories": 2500,
