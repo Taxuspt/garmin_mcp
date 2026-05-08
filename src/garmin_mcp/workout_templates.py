@@ -147,10 +147,10 @@ TEMPO_RUN_TEMPLATE = {
 STRENGTH_CIRCUIT_TEMPLATE = {
     "workoutName": "Strength Circuit",
     "description": "Strength training circuit: warmup, 3x circuit (work + rest), cooldown",
-    "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+    "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
     "workoutSegments": [{
         "segmentOrder": 1,
-        "sportType": {"sportTypeId": 4, "sportTypeKey": "strength_training"},
+        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
         "workoutSteps": [
             {
                 "type": "ExecutableStepDTO",
@@ -226,9 +226,16 @@ WORKOUT_STRUCTURE_REFERENCE = {
     "sportType_values": {
         "1": {"sportTypeKey": "running"},
         "2": {"sportTypeKey": "cycling"},
-        "4": {"sportTypeKey": "strength_training"},
-        "5": {"sportTypeKey": "cardio"},
-        "11": {"sportTypeKey": "walking"}
+        "3": {"sportTypeKey": "other"},
+        "4": {"sportTypeKey": "lap_swimming"},
+        "5": {"sportTypeKey": "strength_training"},
+        "6": {"sportTypeKey": "cardio_training"},
+        "7": {"sportTypeKey": "yoga"},
+        "8": {"sportTypeKey": "pilates"},
+        "9": {"sportTypeKey": "hiit"},
+        "11": {"sportTypeKey": "mobility"},
+        "12": {"sportTypeKey": "walking"},
+        "13": {"sportTypeKey": "rucking"}
     }
 }
 
