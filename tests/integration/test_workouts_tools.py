@@ -177,10 +177,8 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
     """Test get_workout_by_id tool with UUID (training plan workout)"""
     import json as json_module
 
-    # Setup mock for client.get call (fbt-adaptive endpoint)
-    mock_response = Mock()
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
+    # Setup mock for connectapi call (fbt-adaptive endpoint)
+    mock_garmin_client.connectapi.return_value = {
         "workoutId": None,
         "workoutUuid": "d7a5491b-42a5-4d2d-ba38-4e414fc03caf",
         "workoutName": "Base",
@@ -205,7 +203,6 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
             }]
         }]
     }
-    mock_garmin_client.client.get.return_value = mock_response
 
     # Call tool with UUID (contains dashes)
     workout_uuid = "d7a5491b-42a5-4d2d-ba38-4e414fc03caf"
@@ -216,8 +213,7 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
 
     # Verify fbt-adaptive endpoint was called
     assert result is not None
-    mock_garmin_client.client.get.assert_called_once_with(
-        "connectapi",
+    mock_garmin_client.connectapi.assert_called_once_with(
         f"workout-service/fbt-adaptive/{workout_uuid}"
     )
 
@@ -640,7 +636,7 @@ async def test_delete_workouts_single(app_with_workouts, mock_garmin_client):
 
     mock_response = MagicMock()
     mock_response.status_code = 204
-    mock_garmin_client.garth.delete.return_value = mock_response
+    mock_garmin_client.client.delete.return_value = mock_response
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -664,7 +660,7 @@ async def test_delete_workouts_multiple(app_with_workouts, mock_garmin_client):
 
     mock_response = MagicMock()
     mock_response.status_code = 204
-    mock_garmin_client.garth.delete.return_value = mock_response
+    mock_garmin_client.client.delete.return_value = mock_response
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -676,7 +672,7 @@ async def test_delete_workouts_multiple(app_with_workouts, mock_garmin_client):
     assert result_data["total"] == 3
     assert result_data["succeeded"] == 3
     assert result_data["failed"] == 0
-    assert mock_garmin_client.garth.delete.call_count == 3
+    assert mock_garmin_client.client.delete.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -690,7 +686,7 @@ async def test_delete_workouts_partial_failure(app_with_workouts, mock_garmin_cl
     err_response = MagicMock()
     err_response.status_code = 404
 
-    mock_garmin_client.garth.delete.side_effect = [ok_response, err_response]
+    mock_garmin_client.client.delete.side_effect = [ok_response, err_response]
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -712,7 +708,7 @@ async def test_delete_workouts_exception(app_with_workouts, mock_garmin_client):
     """Test delete_workouts when an exception is raised"""
     import json as json_module
 
-    mock_garmin_client.garth.delete.side_effect = Exception("Network error")
+    mock_garmin_client.client.delete.side_effect = Exception("Network error")
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -814,7 +810,7 @@ async def test_schedule_workouts_single(app_with_workouts, mock_garmin_client):
 
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_garmin_client.garth.post.return_value = mock_response
+    mock_garmin_client.client.post.return_value = mock_response
 
     result = await app_with_workouts.call_tool(
         "schedule_workouts",
@@ -829,7 +825,7 @@ async def test_schedule_workouts_single(app_with_workouts, mock_garmin_client):
     assert result_data["results"][0]["status"] == "success"
     assert result_data["results"][0]["workout_id"] == 123456
     assert result_data["results"][0]["scheduled_date"] == "2024-01-15"
-    mock_garmin_client.garth.post.assert_called_once_with(
+    mock_garmin_client.client.post.assert_called_once_with(
         "connectapi", "workout-service/schedule/123456", json={"date": "2024-01-15"}
     )
 
@@ -842,7 +838,7 @@ async def test_schedule_workouts_multiple(app_with_workouts, mock_garmin_client)
 
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_garmin_client.garth.post.return_value = mock_response
+    mock_garmin_client.client.post.return_value = mock_response
 
     schedules = [
         {"workout_id": 111, "calendar_date": "2024-01-15"},
@@ -859,7 +855,7 @@ async def test_schedule_workouts_multiple(app_with_workouts, mock_garmin_client)
     assert result_data["total"] == 3
     assert result_data["succeeded"] == 3
     assert result_data["failed"] == 0
-    assert mock_garmin_client.garth.post.call_count == 3
+    assert mock_garmin_client.client.post.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -873,7 +869,7 @@ async def test_schedule_workouts_partial_failure(app_with_workouts, mock_garmin_
     err_response = MagicMock()
     err_response.status_code = 404
 
-    mock_garmin_client.garth.post.side_effect = [ok_response, err_response]
+    mock_garmin_client.client.post.side_effect = [ok_response, err_response]
 
     schedules = [
         {"workout_id": 111, "calendar_date": "2024-01-15"},
@@ -911,7 +907,7 @@ async def test_schedule_workouts_missing_fields(app_with_workouts, mock_garmin_c
     assert result_data["failed"] == 1
     assert result_data["results"][0]["status"] == "failed"
     assert "Missing required field" in result_data["results"][0]["message"]
-    mock_garmin_client.garth.post.assert_not_called()
+    mock_garmin_client.client.post.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -919,7 +915,7 @@ async def test_schedule_workouts_exception(app_with_workouts, mock_garmin_client
     """Test schedule_workouts when an exception is raised"""
     import json as json_module
 
-    mock_garmin_client.garth.post.side_effect = Exception("Network error")
+    mock_garmin_client.client.post.side_effect = Exception("Network error")
 
     result = await app_with_workouts.call_tool(
         "schedule_workouts",
@@ -946,7 +942,7 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
 
     schedule_response = MagicMock()
     schedule_response.status_code = 200
-    mock_garmin_client.garth.post.return_value = schedule_response
+    mock_garmin_client.client.post.return_value = schedule_response
 
     inline_data = {"workoutName": "Easy Run", "sportType": {"sportTypeId": 1, "sportTypeKey": "running"}}
     result = await app_with_workouts.call_tool(
@@ -965,7 +961,7 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
     assert entry["scheduled_date"] == "2024-02-01"
     assert entry["workout_name"] == "Easy Run"
     mock_garmin_client.upload_workout.assert_called_once_with(inline_data)
-    mock_garmin_client.garth.post.assert_called_once_with(
+    mock_garmin_client.client.post.assert_called_once_with(
         "connectapi", "workout-service/schedule/999001", json={"date": "2024-02-01"}
     )
 
@@ -981,7 +977,7 @@ async def test_schedule_workouts_mixed_inline_and_id(app_with_workouts, mock_gar
 
     schedule_response = MagicMock()
     schedule_response.status_code = 200
-    mock_garmin_client.garth.post.return_value = schedule_response
+    mock_garmin_client.client.post.return_value = schedule_response
 
     inline_data = {"workoutName": "Tempo Run", "sportType": {"sportTypeId": 1, "sportTypeKey": "running"}}
     schedules = [
@@ -1015,7 +1011,7 @@ async def test_schedule_workouts_missing_both_id_and_data(app_with_workouts, moc
     assert result_data["succeeded"] == 0
     assert result_data["failed"] == 1
     assert "workout_id" in result_data["results"][0]["message"] or "workout_data" in result_data["results"][0]["message"]
-    mock_garmin_client.garth.post.assert_not_called()
+    mock_garmin_client.client.post.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1037,4 +1033,4 @@ async def test_schedule_workouts_inline_upload_no_id_returned(app_with_workouts,
     assert result_data["succeeded"] == 0
     assert result_data["failed"] == 1
     assert result_data["results"][0]["status"] == "failed"
-    mock_garmin_client.garth.post.assert_not_called()
+    mock_garmin_client.client.post.assert_not_called()
