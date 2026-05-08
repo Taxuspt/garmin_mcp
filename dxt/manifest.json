@@ -1,0 +1,110 @@
+{
+  "manifest_version": "0.3",
+  "name": "garmin-mcp",
+  "display_name": "Garmin Connect",
+  "version": "0.1.0",
+  "description": "Connect Claude to your Garmin Connect fitness and health data. Access activities, training metrics, sleep, body composition, workouts, and 110+ other data points.",
+  "long_description": "This MCP server bridges Claude to your personal Garmin Connect data via the garminconnect Python library.\n\n**Capabilities:**\n- Activities: list, detail, splits, laps, heart-rate zones, weather\n- Health: steps, sleep, stress, body battery, HRV, SpO2, respiration\n- Training: readiness, load trends (CTL/ATL/TSB), VO2 max trend, power zones\n- Workouts: upload, schedule, download, bulk operations\n- Body: weight, body composition, weigh-ins\n- Gear, badges, challenges, nutrition logging\n- Advanced cycling: FIT file analysis, DI2 shift data, Power Duration Curve\n\n**First-time setup:** After installing this extension you must authenticate once by running `garmin-mcp-auth` in a terminal (see README). Tokens are saved and valid for ~6 months.",
+  "author": {
+    "name": "Alexandre Domingues",
+    "url": "https://github.com/Taxuspt/garmin_mcp"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Taxuspt/garmin_mcp"
+  },
+  "homepage": "https://github.com/Taxuspt/garmin_mcp",
+  "license": "MIT",
+  "keywords": [
+    "garmin",
+    "fitness",
+    "health",
+    "running",
+    "cycling",
+    "training",
+    "garmin-connect"
+  ],
+  "server": {
+    "type": "uv",
+    "entry_point": "garmin_mcp",
+    "mcp_config": {
+      "command": "uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--from",
+        "git+https://github.com/Taxuspt/garmin_mcp",
+        "garmin-mcp"
+      ],
+      "env": {
+        "GARMINTOKENS": "${user_config.token_path}",
+        "GARMIN_EMAIL": "${user_config.garmin_email}",
+        "GARMIN_PASSWORD": "${user_config.garmin_password}"
+      }
+    }
+  },
+  "user_config": {
+    "token_path": {
+      "type": "directory",
+      "title": "Token storage directory",
+      "description": "Directory where your Garmin OAuth tokens are stored. You must run garmin-mcp-auth once in a terminal to generate these tokens before using the server.",
+      "required": false,
+      "default": "${HOME}/.garminconnect"
+    },
+    "garmin_email": {
+      "type": "string",
+      "title": "Garmin email (optional)",
+      "description": "Your Garmin Connect email address. Leave blank if you have already run garmin-mcp-auth.",
+      "required": false,
+      "sensitive": false
+    },
+    "garmin_password": {
+      "type": "string",
+      "title": "Garmin password (optional)",
+      "description": "Your Garmin Connect password. Leave blank if you have already run garmin-mcp-auth.",
+      "required": false,
+      "sensitive": true
+    }
+  },
+  "tools": [
+    {
+      "name": "get_activities",
+      "description": "List recent activities with pagination"
+    },
+    {
+      "name": "get_activity",
+      "description": "Get detailed information about a single activity"
+    },
+    {
+      "name": "get_stats",
+      "description": "Get daily health statistics (steps, HR, stress, body battery, sleep)"
+    },
+    {
+      "name": "get_sleep_data",
+      "description": "Get detailed sleep data including stages and score"
+    },
+    {
+      "name": "get_training_readiness",
+      "description": "Get training readiness score and contributing factors"
+    },
+    {
+      "name": "get_hrv_data",
+      "description": "Get heart rate variability data"
+    },
+    {
+      "name": "upload_workout",
+      "description": "Upload a structured workout to Garmin Connect"
+    },
+    {
+      "name": "get_body_composition",
+      "description": "Get body composition measurements"
+    }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

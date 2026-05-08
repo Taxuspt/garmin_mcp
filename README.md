@@ -142,6 +142,36 @@ schedule_workout(workout_id=1560092011, date="2026-05-06")
 
 After syncing your watch, the workout appears on the Forerunner 965 calendar.
 
+## One-click Install (Claude Desktop)
+
+The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop Extension file — no JSON editing required.
+
+### Download and install
+
+1. Download the latest `garmin-mcp.dxt` from the [Releases page](https://github.com/Taxuspt/garmin_mcp/releases).
+2. Drag the `.dxt` file into the Claude Desktop window, **or** double-click it, **or** go to **Settings → Extensions → Install Extension** and select the file.
+3. Claude Desktop will prompt you for optional configuration (token path, email, password).
+
+### First-time authentication
+
+The extension installs and runs the server automatically, but you must authenticate with Garmin once before data can be fetched:
+
+```bash
+uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
+```
+
+This saves OAuth tokens to `~/.garminconnect`. After that the server works without any credentials in the config.
+
+> **Note:** Tokens are valid for approximately 6 months. Re-run `garmin-mcp-auth` when they expire.
+
+### Build the `.dxt` yourself
+
+```bash
+bash scripts/build_dxt.sh   # produces garmin-mcp.dxt in the repo root
+```
+
+---
+
 ## Setup
 
 ### Quick Start for Claude Desktop
