@@ -52,6 +52,8 @@ def register_tools(app):
                     "avg_hr_bpm": a.get('averageHR'),
                     "max_hr_bpm": a.get('maxHR'),
                     "steps": a.get('steps'),
+                    "elevation_gain_meters": a.get('elevationGain'),
+                    "elevation_loss_meters": a.get('elevationLoss'),
                 }
                 # Remove None values
                 activity = {k: v for k, v in activity.items() if v is not None}
@@ -175,6 +177,12 @@ def register_tools(app):
                 # Intensity minutes
                 "moderate_intensity_minutes": summary.get('moderateIntensityMinutes'),
                 "vigorous_intensity_minutes": summary.get('vigorousIntensityMinutes'),
+
+                # Elevation
+                "elevation_gain_meters": summary.get('elevationGain'),
+                "elevation_loss_meters": summary.get('elevationLoss'),
+                "max_elevation_meters": summary.get('maxElevation'),
+                "min_elevation_meters": summary.get('minElevation'),
 
                 # Recovery
                 "recovery_hr_bpm": summary.get('recoveryHeartRate'),
@@ -497,6 +505,8 @@ def register_tools(app):
                     "avg_hr_bpm": a.get('averageHR'),
                     "max_hr_bpm": a.get('maxHR'),
                     "steps": a.get('steps'),
+                    "elevation_gain_meters": a.get('elevationGain'),
+                    "elevation_loss_meters": a.get('elevationLoss'),
                     "owner_display_name": a.get('ownerDisplayName'),
                 }
                 # Remove None values
