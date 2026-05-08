@@ -35,6 +35,7 @@ This MCP server implements **97+ tools** covering ~89% of the [python-garminconn
 - ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (3 tools)
+- ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 
 ### Intentionally Skipped Endpoints
 
@@ -51,6 +52,88 @@ Some endpoints are not implemented due to performance or complexity consideratio
 - Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
 
 If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
+
+## High-level workout tools
+
+These builder tools let an LLM create and schedule workouts without writing raw Garmin JSON.
+
+### `create_walk_run_workout`
+
+Creates a walk/run interval workout with optional heart-rate zone target.
+
+```json
+{
+  "name": "W3 Mié 2:2",
+  "run_seconds": 120,
+  "walk_seconds": 120,
+  "repeats": 9,
+  "warmup_min": 10,
+  "cooldown_min": 8,
+  "hr_zone": "Z3"
+}
+```
+
+Returns: `{"status": "success", "workout_id": 1234567890, ...}`
+
+### `create_z2_walk_workout`
+
+Creates a steady Z2 walking workout.
+
+```json
+{
+  "name": "Z2 Walk 45m",
+  "duration_min": 45,
+  "hr_min": 110,
+  "hr_max": 130
+}
+```
+
+Returns: `{"status": "success", "workout_id": 1234567890, ...}`
+
+### `create_strength_workout`
+
+Creates a strength workout from a list of exercises. Unknown names fall back to a generic step with the original name preserved.
+
+```json
+{
+  "name": "Full Body A",
+  "exercises": [
+    {"name": "Sentadillas", "sets": 3, "reps": 12, "rest_seconds": 90},
+    {"name": "Flexiones",   "sets": 3, "reps": 15, "rest_seconds": 60},
+    {"name": "Peso muerto", "sets": 3, "reps": 10, "rest_seconds": 90}
+  ]
+}
+```
+
+Returns: `{"status": "success", "workout_id": 1234567890, ...}`
+
+### `schedule_week`
+
+Schedules multiple workouts in one call.
+
+```json
+{
+  "week": [
+    {"date": "2026-05-12", "workout_id": 1234567890},
+    {"date": "2026-05-14", "workout_id": 1234567891}
+  ]
+}
+```
+
+Returns: `{"status": "complete", "scheduled": [...]}`
+
+### Full flow example
+
+```text
+create_walk_run_workout(name="W3 Mié 2:2", run_seconds=120, walk_seconds=120,
+                        repeats=9, warmup_min=10, cooldown_min=8)
+  → workout_id = 1560092011
+
+schedule_workout(workout_id=1560092011, date="2026-05-06")
+  → OK
+```
+
+After syncing your watch, the workout appears on the Forerunner 965 calendar.
 
 ## Setup
 
@@ -550,3 +633,11 @@ uv run pytest tests/e2e/ -m e2e -v
 
 - **Integration tests** (130 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
 - **End-to-end tests** (4 tests): Test with real MCP server and Garmin API (requires valid credentials)
+
+## Reinstalling from local path
+
+If you are working from a local checkout or fork:
+
+```bash
+uv tool install --python 3.12 --force C:\Users\aresd\Desktop\programacion\garmin_mcp
+```
