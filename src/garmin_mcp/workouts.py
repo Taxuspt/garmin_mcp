@@ -71,11 +71,38 @@ def _curate_workout_summary(workout: dict) -> dict:
     return {k: v for k, v in summary.items() if v is not None}
 
 
+def _curate_step_target(
+    curated: dict,
+    step: dict,
+    target_field: str,
+    value_one_field: str,
+    value_two_field: str,
+    zone_field: str,
+    prefix: str = "",
+) -> None:
+    """Curate a workout target block, handling Garmin null target payloads safely."""
+    target_type = step.get(target_field)
+    if not isinstance(target_type, dict):
+        target_type = {}
+    target_key = target_type.get('workoutTargetTypeKey')
+
+    if not target_key or target_key == 'no.target':
+        return
+
+    curated[f'{prefix}target_type'] = target_key
+
+    if step.get(value_one_field) is not None:
+        curated[f'{prefix}target_value_low'] = step.get(value_one_field)
+    if step.get(value_two_field) is not None:
+        curated[f'{prefix}target_value_high'] = step.get(value_two_field)
+    if step.get(zone_field) is not None:
+        curated[f'{prefix}target_zone'] = step.get(zone_field)
+
+
 def _curate_workout_step(step: dict) -> dict:
     """Extract essential workout step information"""
-    step_type = step.get('stepType', {})
-    end_condition = step.get('endCondition', {})
-    target_type = step.get('targetType', {})
+    step_type = step.get('stepType') or {}
+    end_condition = step.get('endCondition') or {}
 
     curated = {
         "order": step.get('stepOrder'),
@@ -93,20 +120,34 @@ def _curate_workout_step(step: dict) -> dict:
         # Value meaning depends on condition type (seconds for time, meters for distance)
         curated['end_condition_value'] = step.get('endConditionValue')
 
-    # Target (heart rate, pace, power, etc.)
-    target_key = target_type.get('workoutTargetTypeKey')
-    if target_key and target_key != 'no.target':
-        curated['target_type'] = target_key
-        if step.get('targetValueOne'):
-            curated['target_value_low'] = step.get('targetValueOne')
-        if step.get('targetValueTwo'):
-            curated['target_value_high'] = step.get('targetValueTwo')
-        if step.get('zoneNumber'):
-            curated['target_zone'] = step.get('zoneNumber')
+    # Primary target (heart rate, pace, power, etc.)
+    _curate_step_target(
+        curated,
+        step,
+        target_field='targetType',
+        value_one_field='targetValueOne',
+        value_two_field='targetValueTwo',
+        zone_field='zoneNumber',
+    )
+
+    # Swim workouts often store pace prescriptions as secondary targets.
+    _curate_step_target(
+        curated,
+        step,
+        target_field='secondaryTargetType',
+        value_one_field='secondaryTargetValueOne',
+        value_two_field='secondaryTargetValueTwo',
+        zone_field='secondaryZoneNumber',
+        prefix='secondary_',
+    )
 
     # Repeat info for repeat steps
     if step.get('type') == 'RepeatGroupDTO':
         curated['repeat_count'] = step.get('numberOfIterations')
+        nested_steps = step.get('workoutSteps', [])
+        if nested_steps:
+            curated['steps'] = [_curate_workout_step(s) for s in nested_steps]
+            curated['step_count'] = len(nested_steps)
 
     return {k: v for k, v in curated.items() if v is not None}
 
