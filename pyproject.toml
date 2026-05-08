@@ -9,9 +9,9 @@ description = "MCP server to access Garmin data"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "python-dotenv==1.0.1",
+    "python-dotenv==1.2.2",
     "garminconnect==0.3.2",
-    "requests==2.32.4",
+    "requests==2.33.0",
     "mcp>=1.23.0",
 ]
 
