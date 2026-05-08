@@ -234,7 +234,7 @@ async def test_create_custom_food(app_with_nutrition, mock_garmin_client):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = response_data
-    mock_garmin_client.garth.put.return_value = mock_resp
+    mock_garmin_client.client.put.return_value = mock_resp
     result = await app_with_nutrition.call_tool(
         "create_custom_food",
         {
@@ -248,7 +248,7 @@ async def test_create_custom_food(app_with_nutrition, mock_garmin_client):
         }
     )
     assert result is not None
-    call_args = mock_garmin_client.garth.put.call_args
+    call_args = mock_garmin_client.client.put.call_args
     assert call_args[0][0] == "connectapi"
     assert call_args[0][1] == "/nutrition-service/customFood"
     payload = call_args[1]["json"]
@@ -266,13 +266,13 @@ async def test_create_custom_food_minimal(app_with_nutrition, mock_garmin_client
     """Test create_custom_food with only required fields"""
     mock_resp = MagicMock()
     mock_resp.status_code = 204
-    mock_garmin_client.garth.put.return_value = mock_resp
+    mock_garmin_client.client.put.return_value = mock_resp
     result = await app_with_nutrition.call_tool(
         "create_custom_food",
         {"food_name": "Simple Food", "calories": 100}
     )
     assert "Custom food created" in result[0][0].text
-    call_args = mock_garmin_client.garth.put.call_args
+    call_args = mock_garmin_client.client.put.call_args
     payload = call_args[1]["json"]
     # Optional fields should NOT be present in the payload
     assert "carbs" not in payload["nutritionContents"][0]
@@ -283,7 +283,7 @@ async def test_create_custom_food_minimal(app_with_nutrition, mock_garmin_client
 @pytest.mark.asyncio
 async def test_create_custom_food_error(app_with_nutrition, mock_garmin_client):
     """Test create_custom_food handles errors"""
-    mock_garmin_client.garth.put.side_effect = Exception("API error")
+    mock_garmin_client.client.put.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool(
         "create_custom_food",
         {"food_name": "Test", "calories": 100}
@@ -304,7 +304,7 @@ async def test_update_custom_food(app_with_nutrition, mock_garmin_client):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = response_data
-    mock_garmin_client.garth.put.return_value = mock_resp
+    mock_garmin_client.client.put.return_value = mock_resp
     result = await app_with_nutrition.call_tool(
         "update_custom_food",
         {
@@ -320,7 +320,7 @@ async def test_update_custom_food(app_with_nutrition, mock_garmin_client):
         }
     )
     assert result is not None
-    call_args = mock_garmin_client.garth.put.call_args
+    call_args = mock_garmin_client.client.put.call_args
     assert call_args[0][0] == "connectapi"
     assert call_args[0][1] == "/nutrition-service/customFood"
     payload = call_args[1]["json"]
@@ -338,7 +338,7 @@ async def test_update_custom_food_204(app_with_nutrition, mock_garmin_client):
     """Test update_custom_food with 204 response"""
     mock_resp = MagicMock()
     mock_resp.status_code = 204
-    mock_garmin_client.garth.put.return_value = mock_resp
+    mock_garmin_client.client.put.return_value = mock_resp
     result = await app_with_nutrition.call_tool(
         "update_custom_food",
         {
@@ -354,7 +354,7 @@ async def test_update_custom_food_204(app_with_nutrition, mock_garmin_client):
 @pytest.mark.asyncio
 async def test_update_custom_food_error(app_with_nutrition, mock_garmin_client):
     """Test update_custom_food handles errors"""
-    mock_garmin_client.garth.put.side_effect = Exception("API error")
+    mock_garmin_client.client.put.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool(
         "update_custom_food",
         {
@@ -375,7 +375,7 @@ async def test_log_food(app_with_nutrition, mock_garmin_client):
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"status": "ok"}
-    mock_garmin_client.garth.put.return_value = mock_resp
+    mock_garmin_client.client.put.return_value = mock_resp
     result = await app_with_nutrition.call_tool(
         "log_food",
         {
@@ -388,7 +388,7 @@ async def test_log_food(app_with_nutrition, mock_garmin_client):
         }
     )
     assert result is not None
-    call_args = mock_garmin_client.garth.put.call_args
+    call_args = mock_garmin_client.client.put.call_args
     assert call_args[0][0] == "connectapi"
     assert call_args[0][1] == "/nutrition-service/food/logs"
     payload = call_args[1]["json"]
@@ -408,7 +408,7 @@ async def test_log_food_default_qty(app_with_nutrition, mock_garmin_client):
     """Test log_food with default serving quantity of 1"""
     mock_resp = MagicMock()
     mock_resp.status_code = 204
-    mock_garmin_client.garth.put.return_value = mock_resp
+    mock_garmin_client.client.put.return_value = mock_resp
     result = await app_with_nutrition.call_tool(
         "log_food",
         {
@@ -420,14 +420,14 @@ async def test_log_food_default_qty(app_with_nutrition, mock_garmin_client):
         }
     )
     assert "Food logged successfully" in result[0][0].text
-    payload = mock_garmin_client.garth.put.call_args[1]["json"]
+    payload = mock_garmin_client.client.put.call_args[1]["json"]
     assert payload["foodLogItems"][0]["servingQty"] == 1
 
 
 @pytest.mark.asyncio
 async def test_log_food_error(app_with_nutrition, mock_garmin_client):
     """Test log_food handles errors"""
-    mock_garmin_client.garth.put.side_effect = Exception("API error")
+    mock_garmin_client.client.put.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool(
         "log_food",
         {

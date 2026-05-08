@@ -89,7 +89,7 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
     """Test get_workout_by_id tool with UUID (training plan workout)"""
     import json as json_module
 
-    # Setup mock for garth.get call (fbt-adaptive endpoint)
+    # Setup mock for client.get call (fbt-adaptive endpoint)
     mock_response = Mock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
@@ -117,7 +117,7 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
             }]
         }]
     }
-    mock_garmin_client.garth.get.return_value = mock_response
+    mock_garmin_client.client.get.return_value = mock_response
 
     # Call tool with UUID (contains dashes)
     workout_uuid = "d7a5491b-42a5-4d2d-ba38-4e414fc03caf"
@@ -128,7 +128,7 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
 
     # Verify fbt-adaptive endpoint was called
     assert result is not None
-    mock_garmin_client.garth.get.assert_called_once_with(
+    mock_garmin_client.client.get.assert_called_once_with(
         "connectapi",
         f"workout-service/fbt-adaptive/{workout_uuid}"
     )
@@ -422,10 +422,10 @@ async def test_delete_workout_success_204(app_with_workouts, mock_garmin_client)
     import json as json_module
     from unittest.mock import MagicMock
 
-    # Setup mock for garth.delete call
+    # Setup mock for client.delete call
     mock_response = MagicMock()
     mock_response.status_code = 204
-    mock_garmin_client.garth.delete.return_value = mock_response
+    mock_garmin_client.client.delete.return_value = mock_response
 
     # Call tool
     workout_id = 123456
@@ -448,10 +448,10 @@ async def test_delete_workout_success_200(app_with_workouts, mock_garmin_client)
     import json as json_module
     from unittest.mock import MagicMock
 
-    # Setup mock for garth.delete call
+    # Setup mock for client.delete call
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_garmin_client.garth.delete.return_value = mock_response
+    mock_garmin_client.client.delete.return_value = mock_response
 
     # Call tool
     workout_id = 789012
@@ -473,10 +473,10 @@ async def test_delete_workout_failure(app_with_workouts, mock_garmin_client):
     import json as json_module
     from unittest.mock import MagicMock
 
-    # Setup mock for garth.delete call with error status
+    # Setup mock for client.delete call with error status
     mock_response = MagicMock()
     mock_response.status_code = 404
-    mock_garmin_client.garth.delete.return_value = mock_response
+    mock_garmin_client.client.delete.return_value = mock_response
 
     # Call tool
     workout_id = 999999
@@ -497,7 +497,7 @@ async def test_delete_workout_failure(app_with_workouts, mock_garmin_client):
 async def test_delete_workout_exception(app_with_workouts, mock_garmin_client):
     """Test delete_workout tool when an exception is raised"""
     # Setup mock to raise exception
-    mock_garmin_client.garth.delete.side_effect = Exception("Network error")
+    mock_garmin_client.client.delete.side_effect = Exception("Network error")
 
     # Call tool
     result = await app_with_workouts.call_tool(

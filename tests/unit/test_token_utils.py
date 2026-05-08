@@ -117,12 +117,11 @@ class TestValidateTokens:
     @patch("garmin_mcp.token_utils.Garmin")
     def test_invalid_tokens_auth_failed(self, mock_garmin, mock_exists):
         """Test validation when authentication fails."""
-        from garth.exc import GarthHTTPError
+        from garminconnect import GarminConnectConnectionError
 
         mock_exists.return_value = True
         mock_garmin_instance = Mock()
-        # Create a proper GarthHTTPError exception with required arguments
-        auth_error = GarthHTTPError("Auth failed", error="authentication_failed")
+        auth_error = GarminConnectConnectionError("Auth failed: authentication_failed")
         mock_garmin_instance.login = Mock(side_effect=auth_error)
         mock_garmin.return_value = mock_garmin_instance
 

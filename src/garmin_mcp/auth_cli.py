@@ -8,10 +8,10 @@ import argparse
 import os
 import sys
 import getpass
+import base64
 
 import requests
-from garth.exc import GarthHTTPError
-from garminconnect import Garmin, GarminConnectAuthenticationError
+from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
 from garmin_mcp.token_utils import (
     get_token_path,
@@ -124,16 +124,24 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
     print(f"Email: {email}")
 
     try:
-        garmin = Garmin(email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa)
-        garmin.login()
+        garmin = Garmin(email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True)
+        result1, result2 = garmin.login()
+
+        if result1 == "needs_mfa":
+            mfa_code = get_mfa()
+            garmin.resume_login(result2, mfa_code)
 
         # Save tokens to directory
-        garmin.garth.dump(token_path)
+        garmin.client.dump(token_path)
         print(f"\n✓ OAuth tokens saved to: {os.path.expanduser(token_path)}")
 
         # Save tokens as base64
-        token_base64 = garmin.garth.dumps()
+        expanded_token_path = os.path.expanduser(token_path)
+        token_json_path = os.path.join(expanded_token_path, "garmin_tokens.json")
         expanded_base64_path = os.path.expanduser(token_base64_path)
+        with open(token_json_path, "r") as f:
+            token_data = f.read()
+        token_base64 = base64.b64encode(token_data.encode()).decode()
         with open(expanded_base64_path, "w") as token_file:
             token_file.write(token_base64)
         print(f"✓ OAuth tokens (base64) saved to: {expanded_base64_path}")
@@ -177,19 +185,19 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
         return False
 
-    except GarthHTTPError as e:
+    except GarminConnectTooManyRequestsError:
+        print(f"\n✗ Too many requests. Please wait a few minutes and try again.", file=sys.stderr)
+        return False
+
+    except GarminConnectConnectionError as e:
         error_msg = str(e)
         print(f"\n✗ Authentication error", file=sys.stderr)
-
-        if "429" in error_msg:
-            print("  Too many requests. Please wait a few minutes and try again.", file=sys.stderr)
-        elif "401" in error_msg or "403" in error_msg:
+        if "401" in error_msg or "403" in error_msg:
             print("  Invalid credentials. Please check your email and password.", file=sys.stderr)
         elif "500" in error_msg or "503" in error_msg:
             print("  Garmin Connect service issue. Please try again later.", file=sys.stderr)
         else:
             print(f"  {error_msg.split(':')[0]}", file=sys.stderr)
-
         return False
 
     except requests.exceptions.HTTPError as e:

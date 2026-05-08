@@ -4,12 +4,12 @@ Modular MCP Server for Garmin Connect Data
 
 import os
 import sys
+import base64
 
 import requests
 from mcp.server.fastmcp import FastMCP
 
-from garth.exc import GarthHTTPError
-from garminconnect import Garmin, GarminConnectAuthenticationError
+from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
 # Import all modules
 from garmin_mcp import activity_management
@@ -113,7 +113,7 @@ def init_api(email, password):
         finally:
             sys.stderr = old_stderr
 
-    except (FileNotFoundError, GarthHTTPError, GarminConnectAuthenticationError):
+    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
 
         # Check if we're in a non-interactive environment without credentials
@@ -136,17 +136,24 @@ def init_api(email, password):
         )
         try:
             garmin = Garmin(
-                email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa
+                email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True
             )
-            garmin.login()
+            result1, result2 = garmin.login()
+            if result1 == "needs_mfa":
+                mfa_code = get_mfa()
+                garmin.resume_login(result2, mfa_code)
             # Save Oauth1 and Oauth2 token files to directory for next login
-            garmin.garth.dump(tokenstore)
+            garmin.client.dump(tokenstore)
             print(
                 f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n",
                 file=sys.stderr,
             )
-            # Encode Oauth1 and Oauth2 tokens to base64 string and safe to file for next login (alternative way)
-            token_base64 = garmin.garth.dumps()
+            # Encode Oauth1 and Oauth2 tokens to base64 string and save to file for next login (alternative way)
+            expanded_tokenstore = os.path.expanduser(tokenstore)
+            token_json_path = os.path.join(expanded_tokenstore, "garmin_tokens.json")
+            with open(token_json_path, "r") as f:
+                token_data = f.read()
+            token_base64 = base64.b64encode(token_data.encode()).decode()
             dir_path = os.path.expanduser(tokenstore_base64)
             with open(dir_path, "w") as token_file:
                 token_file.write(token_base64)
@@ -156,7 +163,8 @@ def init_api(email, password):
             )
         except (
             FileNotFoundError,
-            GarthHTTPError,
+            GarminConnectConnectionError,
+            GarminConnectTooManyRequestsError,
             GarminConnectAuthenticationError,
             requests.exceptions.HTTPError,
         ) as err:
@@ -170,15 +178,15 @@ def init_api(email, password):
                     print("MFA code may be incorrect or expired.", file=sys.stderr)
                 else:
                     print("Invalid email or password.", file=sys.stderr)
-            elif isinstance(err, GarthHTTPError):
+            elif isinstance(err, GarminConnectTooManyRequestsError):
+                print(
+                    "Too many requests. Please wait and try again.", file=sys.stderr
+                )
+            elif isinstance(err, GarminConnectConnectionError):
                 if "401" in error_msg or "Unauthorized" in error_msg:
                     print(
                         "Invalid credentials. Please check your email and password.",
                         file=sys.stderr,
-                    )
-                elif "429" in error_msg:
-                    print(
-                        "Too many requests. Please wait and try again.", file=sys.stderr
                     )
                 elif "500" in error_msg or "503" in error_msg:
                     print(

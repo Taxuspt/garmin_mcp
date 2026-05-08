@@ -280,7 +280,7 @@ def register_tools(app):
             if is_uuid:
                 # Training plan / Garmin Coach workout - use fbt-adaptive endpoint
                 url = f"workout-service/fbt-adaptive/{workout_id_str}"
-                response = garmin_client.garth.get("connectapi", url)
+                response = garmin_client.client.get("connectapi", url)
                 if response.status_code != 200:
                     return f"No workout found with UUID {workout_id_str}. HTTP {response.status_code}"
                 workout = response.json()
@@ -403,7 +403,7 @@ def register_tools(app):
         """
         try:
             url = f"{garmin_client.garmin_workouts}/workout/{workout_id}"
-            response = garmin_client.garth.delete("connectapi", url, api=True)
+            response = garmin_client.client.delete("connectapi", url, api=True)
 
             if response.status_code == 204 or response.status_code == 200:
                 return json.dumps({
@@ -531,7 +531,7 @@ def register_tools(app):
         """
         try:
             url = f"workout-service/schedule/{workout_id}"
-            response = garmin_client.garth.post("connectapi", url, json={"date": calendar_date})
+            response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
 
             if response.status_code == 200:
                 return json.dumps({

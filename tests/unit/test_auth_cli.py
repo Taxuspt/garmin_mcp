@@ -3,8 +3,9 @@
 import os
 import sys
 import tempfile
+import base64
 from pathlib import Path
-from unittest.mock import Mock, patch, call
+from unittest.mock import Mock, patch, call, mock_open
 
 import pytest
 
@@ -135,15 +136,14 @@ class TestAuthenticate:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.login = Mock(return_value=(None, None))
+        mock_garmin_instance.client = Mock()
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=True)
+            with patch("builtins.open", mock_open(read_data="{}")):
+                result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=True)
 
         assert result is True
         mock_garmin_instance.login.assert_called_once()
@@ -157,27 +157,26 @@ class TestAuthenticate:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.login = Mock(return_value=(None, None))
+        mock_garmin_instance.client = Mock()
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
+        token_data = '{"token": "test"}'
+        expected_b64 = base64.b64encode(token_data.encode()).decode()
+        m = mock_open(read_data=token_data)
+
         with tempfile.TemporaryDirectory() as tmpdir:
             base64_path = f"{tmpdir}/base64.txt"
-            result = authenticate(tmpdir, base64_path, force_reauth=False)
+            with patch("builtins.open", m):
+                result = authenticate(tmpdir, base64_path, force_reauth=False)
 
-            assert result is True
-            mock_garmin_instance.login.assert_called_once()
-            mock_garmin_instance.garth.dump.assert_called_once_with(tmpdir)
-            mock_garmin_instance.get_full_name.assert_called_once()
-
-            # Check base64 file was created (use expanded path)
-            expanded_base64_path = os.path.expanduser(base64_path)
-            base64_file = Path(expanded_base64_path)
-            assert base64_file.exists()
-            assert base64_file.read_text() == "base64data"
+        assert result is True
+        mock_garmin_instance.login.assert_called_once()
+        mock_garmin_instance.client.dump.assert_called_once_with(tmpdir)
+        mock_garmin_instance.get_full_name.assert_called_once()
+        # Verify base64-encoded token data was written to the base64 file
+        m().write.assert_called_once_with(expected_b64)
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
@@ -374,15 +373,14 @@ class TestAuthenticateIsCn:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.login = Mock(return_value=(None, None))
+        mock_garmin_instance.client = Mock()
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False, is_cn=True)
+            with patch("builtins.open", mock_open(read_data="{}")):
+                result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False, is_cn=True)
 
         assert result is True
         # Verify Garmin was called with is_cn=True
@@ -391,6 +389,7 @@ class TestAuthenticateIsCn:
             password="secret",
             is_cn=True,
             prompt_mfa=get_mfa,
+            return_on_mfa=True,
         )
 
     @patch("garmin_mcp.auth_cli.token_exists")
@@ -402,15 +401,14 @@ class TestAuthenticateIsCn:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock()
-        mock_garmin_instance.garth = Mock()
-        mock_garmin_instance.garth.dump = Mock()
-        mock_garmin_instance.garth.dumps = Mock(return_value="base64data")
+        mock_garmin_instance.login = Mock(return_value=(None, None))
+        mock_garmin_instance.client = Mock()
         mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
+            with patch("builtins.open", mock_open(read_data="{}")):
+                result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
 
         assert result is True
         # Verify Garmin was called with is_cn=False
@@ -419,4 +417,5 @@ class TestAuthenticateIsCn:
             password="secret",
             is_cn=False,
             prompt_mfa=get_mfa,
+            return_on_mfa=True,
         )
