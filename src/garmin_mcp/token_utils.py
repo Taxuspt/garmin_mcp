@@ -7,22 +7,27 @@ from typing import Tuple
 from garminconnect import Garmin, GarminConnectConnectionError
 
 
+def _expand_path(path: str) -> str:
+    """Expand both shell variables (${HOME}, $HOME) and ~ in a path."""
+    return os.path.expanduser(os.path.expandvars(path))
+
+
 def get_token_path() -> str:
     """Get token path from environment or default.
 
     Returns:
-        str: Path to token storage directory
+        str: Expanded path to token storage directory
     """
-    return os.getenv("GARMINTOKENS") or "~/.garminconnect"
+    return _expand_path(os.getenv("GARMINTOKENS") or "~/.garminconnect")
 
 
 def get_token_base64_path() -> str:
     """Get base64 token file path from environment or default.
 
     Returns:
-        str: Path to base64 token file
+        str: Expanded path to base64 token file
     """
-    return os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
+    return _expand_path(os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64")
 
 
 def token_exists(token_path: str = None) -> bool:

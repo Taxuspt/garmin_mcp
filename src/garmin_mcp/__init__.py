@@ -82,8 +82,8 @@ elif password_file:
     with open(password_file, "r") as password_file:
         password = password_file.read().rstrip()
 
-tokenstore = os.getenv("GARMINTOKENS") or "~/.garminconnect"
-tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
+tokenstore = os.path.expanduser(os.path.expandvars(os.getenv("GARMINTOKENS") or "~/.garminconnect"))
+tokenstore_base64 = os.path.expanduser(os.path.expandvars(os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"))
 is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
 
