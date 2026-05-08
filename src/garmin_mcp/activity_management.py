@@ -198,6 +198,33 @@ def register_tools(app):
             return f"Error retrieving activity: {str(e)}"
 
     @app.tool()
+    async def set_activity_name(activity_id: int, activity_name: str) -> str:
+        """Set or update the name of an activity.
+
+        Args:
+            activity_id: ID of the activity to update
+            activity_name: New activity name
+        """
+        try:
+            activity_name = activity_name.strip()
+            if not activity_name:
+                return "Activity name cannot be empty"
+
+            garmin_client.set_activity_name(activity_id, activity_name)
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "activity_name": activity_name,
+                    "message": "Activity name successfully updated",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity name: {str(e)}"
+
+    @app.tool()
     async def get_activity_splits(activity_id: int) -> str:
         """Get splits for an activity
 

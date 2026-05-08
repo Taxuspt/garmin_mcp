@@ -10,6 +10,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 - List recent activities with pagination support
 - Get detailed activity information
+- Manage activity names
 - Access health metrics (steps, heart rate, sleep, stress, respiration)
 - View body composition data
 - Track training status and readiness
