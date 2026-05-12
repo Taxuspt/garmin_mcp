@@ -112,13 +112,14 @@ def register_tools(app):
             return f"Error retrieving activities for date: {str(e)}"
 
     @app.tool()
-    async def get_activity(activity_id: int) -> str:
+    async def get_activity(activity_id: Union[int, str]) -> str:
         """Get basic activity information
 
         Args:
             activity_id: ID of the activity to retrieve
         """
         try:
+            activity_id = int(activity_id)
             activity = garmin_client.get_activity(activity_id)
             if not activity:
                 return f"No activity found with ID {activity_id}"
@@ -206,7 +207,7 @@ def register_tools(app):
             return f"Error retrieving activity: {str(e)}"
 
     @app.tool()
-    async def set_activity_name(activity_id: int, activity_name: str) -> str:
+    async def set_activity_name(activity_id: Union[int, str], activity_name: str) -> str:
         """Set or update the name of an activity.
 
         Args:
@@ -214,6 +215,7 @@ def register_tools(app):
             activity_name: New activity name
         """
         try:
+            activity_id = int(activity_id)
             activity_name = activity_name.strip()
             if not activity_name:
                 return "Activity name cannot be empty"
@@ -233,13 +235,14 @@ def register_tools(app):
             return f"Error updating activity name: {str(e)}"
 
     @app.tool()
-    async def get_activity_splits(activity_id: int) -> str:
+    async def get_activity_splits(activity_id: Union[int, str]) -> str:
         """Get splits for an activity
 
         Args:
             activity_id: ID of the activity to retrieve splits for
         """
         try:
+            activity_id = int(activity_id)
             splits = garmin_client.get_activity_splits(activity_id)
             if not splits:
                 return f"No splits found for activity with ID {activity_id}"
@@ -314,13 +317,14 @@ def register_tools(app):
             return f"Error retrieving activity splits: {str(e)}"
 
     @app.tool()
-    async def get_activity_typed_splits(activity_id: int) -> str:
+    async def get_activity_typed_splits(activity_id: Union[int, str]) -> str:
         """Get typed splits for an activity
 
         Args:
             activity_id: ID of the activity to retrieve typed splits for
         """
         try:
+            activity_id = int(activity_id)
             typed_splits = garmin_client.get_activity_typed_splits(activity_id)
             if not typed_splits:
                 return f"No typed splits found for activity with ID {activity_id}"
@@ -330,13 +334,14 @@ def register_tools(app):
             return f"Error retrieving activity typed splits: {str(e)}"
 
     @app.tool()
-    async def get_activity_split_summaries(activity_id: int) -> str:
+    async def get_activity_split_summaries(activity_id: Union[int, str]) -> str:
         """Get split summaries for an activity
 
         Args:
             activity_id: ID of the activity to retrieve split summaries for
         """
         try:
+            activity_id = int(activity_id)
             split_summaries = garmin_client.get_activity_split_summaries(activity_id)
             if not split_summaries:
                 return f"No split summaries found for activity with ID {activity_id}"
@@ -346,13 +351,14 @@ def register_tools(app):
             return f"Error retrieving activity split summaries: {str(e)}"
 
     @app.tool()
-    async def get_activity_weather(activity_id: int) -> str:
+    async def get_activity_weather(activity_id: Union[int, str]) -> str:
         """Get weather data for an activity
 
         Args:
             activity_id: ID of the activity to retrieve weather data for
         """
         try:
+            activity_id = int(activity_id)
             weather = garmin_client.get_activity_weather(activity_id)
             if not weather:
                 return f"No weather data found for activity with ID {activity_id}"
@@ -379,13 +385,14 @@ def register_tools(app):
             return f"Error retrieving activity weather data: {str(e)}"
 
     @app.tool()
-    async def get_activity_hr_in_timezones(activity_id: int) -> str:
+    async def get_activity_hr_in_timezones(activity_id: Union[int, str]) -> str:
         """Get heart rate data in different time zones for an activity
 
         Args:
             activity_id: ID of the activity to retrieve heart rate time zone data for
         """
         try:
+            activity_id = int(activity_id)
             hr_zones = garmin_client.get_activity_hr_in_timezones(activity_id)
             if not hr_zones:
                 return f"No heart rate time zone data found for activity with ID {activity_id}"
@@ -395,7 +402,7 @@ def register_tools(app):
             return f"Error retrieving activity heart rate time zone data: {str(e)}"
 
     @app.tool()
-    async def get_activity_power_in_timezones(activity_id: int) -> str:
+    async def get_activity_power_in_timezones(activity_id: Union[int, str]) -> str:
         """Get power distribution across training zones for an activity.
 
         Returns time spent in each power zone with watt thresholds and duration.
@@ -405,6 +412,7 @@ def register_tools(app):
             activity_id: ID of the activity to retrieve power zone data for
         """
         try:
+            activity_id = int(activity_id)
             power_zones = garmin_client.get_activity_power_in_timezones(activity_id)
             if not power_zones:
                 return f"No power zone data found for activity {activity_id}. Ensure the activity was recorded with a power meter."
@@ -414,13 +422,14 @@ def register_tools(app):
             return f"Error retrieving activity power zone data: {str(e)}"
 
     @app.tool()
-    async def get_activity_gear(activity_id: int) -> str:
+    async def get_activity_gear(activity_id: Union[int, str]) -> str:
         """Get gear data used for an activity
 
         Args:
             activity_id: ID of the activity to retrieve gear data for
         """
         try:
+            activity_id = int(activity_id)
             gear = garmin_client.get_activity_gear(activity_id)
             if not gear:
                 return f"No gear data found for activity with ID {activity_id}"
@@ -430,13 +439,14 @@ def register_tools(app):
             return f"Error retrieving activity gear data: {str(e)}"
 
     @app.tool()
-    async def get_activity_exercise_sets(activity_id: int) -> str:
+    async def get_activity_exercise_sets(activity_id: Union[int, str]) -> str:
         """Get exercise sets for strength training activities
 
         Args:
             activity_id: ID of the activity to retrieve exercise sets for
         """
         try:
+            activity_id = int(activity_id)
             exercise_sets = garmin_client.get_activity_exercise_sets(activity_id)
             if not exercise_sets:
                 return f"No exercise sets found for activity with ID {activity_id}"
