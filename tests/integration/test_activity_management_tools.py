@@ -101,6 +101,27 @@ async def test_get_activity_tool(app_with_activity_management, mock_garmin_clien
 
 
 @pytest.mark.asyncio
+async def test_get_activity_accepts_string_id(app_with_activity_management, mock_garmin_client):
+    """Test get_activity accepts large IDs serialized as strings
+
+    Some MCP clients stringify large numeric IDs in tool call arguments
+    (Zod schema receives string instead of integer). The tool must coerce
+    to int internally so the underlying Garmin call still gets an integer.
+    Regression test for the 'Expected number, received string' bug.
+    """
+    mock_garmin_client.get_activity.return_value = MOCK_ACTIVITY_DETAILS
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": "22833209898"}  # string, not int
+    )
+
+    assert result is not None
+    # Library must have been called with an int, not a string
+    mock_garmin_client.get_activity.assert_called_once_with(22833209898)
+
+
+@pytest.mark.asyncio
 async def test_set_activity_name_tool(app_with_activity_management, mock_garmin_client):
     """Test set_activity_name tool updates activity name"""
     activity_id = 12345678901
