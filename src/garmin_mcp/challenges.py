@@ -540,14 +540,15 @@ def register_tools(app):
             return f"Error retrieving race predictions: {str(e)}"
 
     @app.tool()
-    async def get_inprogress_virtual_challenges(start: int = 0, limit: int = 20) -> str:
+    async def get_inprogress_virtual_challenges(start: int = 1, limit: int = 20) -> str:
         """Get in-progress virtual challenges/expeditions
 
         Returns virtual challenges (like walking expeditions on famous trails)
         that the user is currently participating in.
 
         Args:
-            start: Starting index for pagination (default 0)
+            start: Starting index for pagination (default 1, must be >= 1;
+                garminconnect 0.3.2 rejects 0 for this endpoint)
             limit: Maximum number of challenges to return (default 20, max 100)
         """
         try:

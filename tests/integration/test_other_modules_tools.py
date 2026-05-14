@@ -11,6 +11,8 @@ Tests tools from:
 - __init__ / main (1 tool - list_activities)
 Total: 25 tools
 """
+import json
+
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -78,6 +80,29 @@ async def test_get_device_settings_tool(app_with_devices, mock_garmin_client):
     )
     assert result is not None
     mock_garmin_client.get_device_settings.assert_called_once_with("abc123456789")
+
+
+@pytest.mark.asyncio
+async def test_get_device_settings_default_device(app_with_devices, mock_garmin_client):
+    """When device_id is omitted, falls back to get_device_last_used()."""
+    mock_garmin_client.get_device_last_used.return_value = {
+        "userDeviceId": "abc123456789"
+    }
+    mock_garmin_client.get_device_settings.return_value = MOCK_DEVICE_SETTINGS
+    result = await app_with_devices.call_tool("get_device_settings", {})
+    assert result is not None
+    mock_garmin_client.get_device_last_used.assert_called_once()
+    mock_garmin_client.get_device_settings.assert_called_once_with("abc123456789")
+
+
+@pytest.mark.asyncio
+async def test_get_device_settings_default_device_missing(app_with_devices, mock_garmin_client):
+    """When no last-used device exists, returns a clear error string."""
+    mock_garmin_client.get_device_last_used.return_value = None
+    result = await app_with_devices.call_tool("get_device_settings", {})
+    text = result[0][0].text
+    assert "No default device found" in text
+    mock_garmin_client.get_device_settings.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -414,3 +439,31 @@ async def test_get_menstrual_calendar_data_tool(app_with_womens_health, mock_gar
     )
     assert result is not None
     mock_garmin_client.get_menstrual_calendar_data.assert_called_once_with("2024-01-01", "2024-01-31")
+
+
+@pytest.mark.asyncio
+async def test_get_menstrual_calendar_data_chunking(app_with_womens_health, mock_garmin_client):
+    """Range >92 days is split into 92-day windows and stitched."""
+    second_chunk = {
+        **MOCK_MENSTRUAL_DATA,
+        "calendarDate": "2026-04-03",
+        "cycleDay": 1,
+    }
+    mock_garmin_client.get_menstrual_calendar_data.side_effect = [
+        [MOCK_MENSTRUAL_DATA],
+        [second_chunk],
+    ]
+
+    result = await app_with_womens_health.call_tool(
+        "get_menstrual_calendar_data",
+        {"start_date": "2026-01-01", "end_date": "2026-06-30"},
+    )
+
+    assert result is not None
+    assert mock_garmin_client.get_menstrual_calendar_data.call_count == 2
+    calls = mock_garmin_client.get_menstrual_calendar_data.call_args_list
+    assert calls[0].args == ("2026-01-01", "2026-04-02")
+    assert calls[1].args == ("2026-04-03", "2026-06-30")
+
+    data = json.loads(result[0][0].text)
+    assert data == [MOCK_MENSTRUAL_DATA, second_chunk]
