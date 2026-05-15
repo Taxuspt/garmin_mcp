@@ -581,6 +581,43 @@ def _compute_shift_summary(shifts: list) -> dict:
 # Main FIT parsing logic
 # ---------------------------------------------------------------------------
 
+def _compute_hrv_metrics(rr_intervals_s: List[float]) -> Optional[Dict]:
+    """Compute standard time-domain HRV metrics from R-R intervals (seconds).
+
+    Returns RMSSD, SDNN, pNN50, mean R-R, and count. These are the standard
+    intra-workout HRV metrics used in sports science and HRV-guided training
+    platforms (HRV4Training, Elite HRV, Polar's recovery metrics, etc.).
+
+    Requires at least 10 R-R intervals to produce stable results.
+    """
+    if len(rr_intervals_s) < 10:
+        return None
+
+    rr_ms = [r * 1000.0 for r in rr_intervals_s]
+    diffs = [rr_ms[i + 1] - rr_ms[i] for i in range(len(rr_ms) - 1)]
+
+    # RMSSD: root mean square of successive differences
+    squared = [d * d for d in diffs]
+    rmssd = (sum(squared) / len(squared)) ** 0.5 if squared else 0.0
+
+    # SDNN: standard deviation of all N-N intervals
+    mean_rr = sum(rr_ms) / len(rr_ms)
+    sdnn = (sum((r - mean_rr) ** 2 for r in rr_ms) / (len(rr_ms) - 1)) ** 0.5 if len(rr_ms) > 1 else 0.0
+
+    # pNN50: percentage of pairs differing by more than 50 ms
+    nn50 = sum(1 for d in diffs if abs(d) > 50.0)
+    pnn50 = 100.0 * nn50 / len(diffs) if diffs else 0.0
+
+    return {
+        "rmssd_ms": round(rmssd, 1),
+        "sdnn_ms": round(sdnn, 1),
+        "pnn50_pct": round(pnn50, 2),
+        "mean_rr_ms": round(mean_rr, 1),
+        "mean_hr_bpm": round(60000.0 / mean_rr, 1) if mean_rr > 0 else None,
+        "rr_count": len(rr_ms),
+    }
+
+
 def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     """Parse a FIT file and extract structured cycling data."""
     fit_bytes = _extract_fit_bytes(fit_bytes)
@@ -590,6 +627,11 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     laps: List[Dict] = []
     shifts: List[Dict] = []
     records: List[Dict] = []
+    # R-R intervals from the FIT 'hrv' message type, paired with the timestamp
+    # of the most recent record message so we can bucket them per lap later.
+    # Requires "Log HRV" enabled on the watch AND a chest strap paired.
+    rr_pairs: List[tuple] = []  # (record_timestamp, rr_seconds)
+    last_record_ts = None
 
     # Track last values for context at shift time
     last_cadence: Optional[float] = None
@@ -733,6 +775,11 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
             if grade is not None:
                 last_grade = grade
 
+            # Track timestamp for HRV bucketing
+            ts = _get_field(message, "timestamp")
+            if ts is not None:
+                last_record_ts = ts
+
             record: Dict[str, Any] = {
                 "timestamp": str(_get_field(message, "timestamp") or ""),
                 "power_w": _get_field(message, "power"),
@@ -775,6 +822,21 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
             record = {k: v for k, v in record.items() if v is not None}
             records.append(record)
 
+        # ------------------------------------------------------------------
+        # HRV — R-R intervals (one or more per message in field 'time')
+        # ------------------------------------------------------------------
+        elif msg_type == "hrv":
+            rr_field = _get_field(message, "time")
+            if rr_field is None:
+                continue
+            if not isinstance(rr_field, (list, tuple)):
+                rr_field = [rr_field]
+            for rr in rr_field:
+                # Filter sentinel/invalid values. FIT spec uses ~65.535 s
+                # as "no R-R interval detected" filler in fixed-size arrays.
+                if rr is not None and 0.2 < rr < 3.0:
+                    rr_pairs.append((last_record_ts, float(rr)))
+
     # ------------------------------------------------------------------
     # Post-parse enrichment
     # ------------------------------------------------------------------
@@ -813,6 +875,65 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
 
     if pdc:
         result["power_duration_curve"] = pdc
+
+    # HRV (time-domain) — always include summary if R-R data exists.
+    # Raw R-R array only included when include_records=True (can be large).
+    # Also compute per-lap HRV by bucketing R-R intervals by timestamp.
+    if rr_pairs:
+        all_rr = [rr for (_, rr) in rr_pairs]
+        hrv_summary = _compute_hrv_metrics(all_rr)
+        if hrv_summary:
+            result["hrv"] = hrv_summary
+
+        # Per-lap HRV: walk laps in order, derive each lap's [start, end)
+        # window from start_time + total_elapsed_time_s, filter R-R pairs.
+        import datetime as _dt
+
+        def _parse_iso(s):
+            if not s:
+                return None
+            try:
+                # FIT timestamps may be "2026-05-15 02:27:08" or with tz
+                return _dt.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                return None
+
+        for lap in laps:
+            lap_start = _parse_iso(lap.get("start_time"))
+            elapsed = lap.get("total_elapsed_time_s")
+            if lap_start is None or not elapsed:
+                continue
+            lap_end = lap_start + _dt.timedelta(seconds=float(elapsed))
+
+            # Filter R-R pairs whose record_ts falls within this lap.
+            # rr_pairs[i][0] is a datetime-like value from fitparse.
+            lap_rr = []
+            for ts, rr in rr_pairs:
+                ts_dt = ts if isinstance(ts, _dt.datetime) else _parse_iso(ts)
+                if ts_dt is None:
+                    continue
+                # Compare naively if either is tz-naive (FIT timestamps are UTC)
+                if lap_start.tzinfo and not ts_dt.tzinfo:
+                    ts_dt = ts_dt.replace(tzinfo=lap_start.tzinfo)
+                elif ts_dt.tzinfo and not lap_start.tzinfo:
+                    lap_start_cmp = lap_start.replace(tzinfo=ts_dt.tzinfo)
+                    lap_end_cmp = lap_end.replace(tzinfo=ts_dt.tzinfo)
+                    if lap_start_cmp <= ts_dt < lap_end_cmp:
+                        lap_rr.append(rr)
+                    continue
+                if lap_start <= ts_dt < lap_end:
+                    lap_rr.append(rr)
+
+            lap_hrv = _compute_hrv_metrics(lap_rr)
+            if lap_hrv:
+                lap["hrv"] = lap_hrv
+
+        if include_records:
+            # Raw stream — list of {timestamp, rr_seconds} for full transparency
+            result["rr_intervals_seconds"] = [
+                {"timestamp": str(ts) if ts else None, "rr_seconds": rr}
+                for (ts, rr) in rr_pairs
+            ]
 
     if include_records:
         result["records"] = records
