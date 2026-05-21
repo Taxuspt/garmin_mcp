@@ -167,7 +167,7 @@ def register_tools(app):
             gear_uuid: UUID of the gear to add (get from get_gear)
         """
         try:
-            get_client(ctx).add_gear_to_activity(activity_id, gear_uuid)
+            get_client(ctx).add_gear_to_activity(gear_uuid, activity_id)
 
             return json.dumps(
                 {
@@ -192,7 +192,7 @@ def register_tools(app):
             gear_uuid: UUID of the gear to remove
         """
         try:
-            get_client(ctx).remove_gear_from_activity(activity_id, gear_uuid)
+            get_client(ctx).remove_gear_from_activity(gear_uuid, activity_id)
 
             return json.dumps(
                 {

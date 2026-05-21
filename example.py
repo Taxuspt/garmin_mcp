@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pip3 install garth requests readchar
+pip3 install requests readchar
 
 export EMAIL=<your garmin email>
 export PASSWORD=<your garmin password>
@@ -13,11 +13,10 @@ import logging
 import os
 import sys
 from getpass import getpass
+import base64
 
 import readchar
 import requests
-from garth.exc import GarthHTTPError
-
 from garminconnect import (
     Garmin,
     GarminConnectAuthenticationError,
@@ -35,6 +34,7 @@ email = os.getenv("EMAIL")
 password = os.getenv("PASSWORD")
 tokenstore = os.getenv("GARMINTOKENS") or "~/.garminconnect"
 tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
+is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 api = None
 
 # Example selections and settings
@@ -141,6 +141,7 @@ menu_options = {
     "U": f"Get Fitness Age data for {today.isoformat()}",
     "V": f"Get daily wellness events data for {startdate.isoformat()}",
     "W": "Get userprofile settings",
+    "X": f"Get lifestyle logging data for {today.isoformat()}",
     "Z": "Remove stored login tokens (logout)",
     "q": "Exit",
 }
@@ -201,10 +202,10 @@ def init_api(email, password):
         # with open(dir_path, "r") as token_file:
         #     tokenstore = token_file.read()
 
-        garmin = Garmin()
+        garmin = Garmin(is_cn=is_cn)
         garmin.login(tokenstore)
 
-    except (FileNotFoundError, GarthHTTPError, GarminConnectAuthenticationError):
+    except (FileNotFoundError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
         print(
             "Login tokens not present, login with your Garmin Connect credentials to generate them.\n"
@@ -216,16 +217,23 @@ def init_api(email, password):
                 email, password = get_credentials()
 
             garmin = Garmin(
-                email=email, password=password, is_cn=False, prompt_mfa=get_mfa
+                email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True
             )
-            garmin.login()
+            result1, result2 = garmin.login()
+            if result1 == "needs_mfa":
+                mfa_code = get_mfa()
+                garmin.resume_login(result2, mfa_code)
             # Save Oauth1 and Oauth2 token files to directory for next login
-            garmin.garth.dump(tokenstore)
+            garmin.client.dump(tokenstore)
             print(
                 f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n"
             )
-            # Encode Oauth1 and Oauth2 tokens to base64 string and safe to file for next login (alternative way)
-            token_base64 = garmin.garth.dumps()
+            # Encode Oauth1 and Oauth2 tokens to base64 string and save to file for next login (alternative way)
+            expanded_tokenstore = os.path.expanduser(tokenstore)
+            token_json_path = os.path.join(expanded_tokenstore, "garmin_tokens.json")
+            with open(token_json_path, "r") as f:
+                token_data = f.read()
+            token_base64 = base64.b64encode(token_data.encode()).decode()
             dir_path = os.path.expanduser(tokenstore_base64)
             with open(dir_path, "w") as token_file:
                 token_file.write(token_base64)
@@ -234,7 +242,8 @@ def init_api(email, password):
             )
         except (
             FileNotFoundError,
-            GarthHTTPError,
+            GarminConnectConnectionError,
+            GarminConnectTooManyRequestsError,
             GarminConnectAuthenticationError,
             requests.exceptions.HTTPError,
         ) as err:
@@ -883,6 +892,13 @@ def switch(api, i):
                     "api.get_userprofile_settings()", api.get_userprofile_settings()
                 )
 
+            elif i == "X":
+                # Get lifestyle logging data
+                display_json(
+                    f"api.get_lifestyle_logging_data('{today.isoformat()}')",
+                    api.get_lifestyle_logging_data(today.isoformat()),
+                )
+
             elif i == "Z":
                 # Remove stored login tokens for Garmin Connect portal
                 tokendir = os.path.expanduser(tokenstore)
@@ -903,7 +919,6 @@ def switch(api, i):
             GarminConnectAuthenticationError,
             GarminConnectTooManyRequestsError,
             requests.exceptions.HTTPError,
-            GarthHTTPError,
         ) as err:
             logger.error(err)
         except KeyError:

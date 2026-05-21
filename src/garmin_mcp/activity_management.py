@@ -55,6 +55,8 @@ def register_tools(app):
                     "avg_hr_bpm": a.get('averageHR'),
                     "max_hr_bpm": a.get('maxHR'),
                     "steps": a.get('steps'),
+                    "elevation_gain_meters": a.get('elevationGain'),
+                    "elevation_loss_meters": a.get('elevationLoss'),
                 }
                 # Remove None values
                 activity = {k: v for k, v in activity.items() if v is not None}
@@ -179,6 +181,12 @@ def register_tools(app):
                 "moderate_intensity_minutes": summary.get('moderateIntensityMinutes'),
                 "vigorous_intensity_minutes": summary.get('vigorousIntensityMinutes'),
 
+                # Elevation
+                "elevation_gain_meters": summary.get('elevationGain'),
+                "elevation_loss_meters": summary.get('elevationLoss'),
+                "max_elevation_meters": summary.get('maxElevation'),
+                "min_elevation_meters": summary.get('minElevation'),
+
                 # Recovery
                 "recovery_hr_bpm": summary.get('recoveryHeartRate'),
                 "body_battery_impact": summary.get('differenceBodyBattery'),
@@ -199,6 +207,33 @@ def register_tools(app):
             return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving activity: {str(e)}"
+
+    @app.tool()
+    async def set_activity_name(ctx: Context, activity_id: int, activity_name: str) -> str:
+        """Set or update the name of an activity.
+
+        Args:
+            activity_id: ID of the activity to update
+            activity_name: New activity name
+        """
+        try:
+            activity_name = activity_name.strip()
+            if not activity_name:
+                return "Activity name cannot be empty"
+
+            get_client(ctx).set_activity_name(activity_id, activity_name)
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "activity_name": activity_name,
+                    "message": "Activity name successfully updated",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity name: {str(e)}"
 
     @app.tool()
     async def get_activity_splits(ctx: Context, activity_id: int) -> str:
@@ -227,15 +262,52 @@ def register_tools(app):
                     "start_time": lap.get('startTimeGMT'),
                     "distance_meters": lap.get('distance'),
                     "duration_seconds": lap.get('duration'),
+                    "moving_duration_seconds": lap.get('movingDuration'),
+                    "elapsed_duration_seconds": lap.get('elapsedDuration'),
                     "avg_speed_mps": lap.get('averageSpeed'),
+                    "avg_moving_speed_mps": lap.get('averageMovingSpeed'),
                     "max_speed_mps": lap.get('maxSpeed'),
                     "avg_hr_bpm": lap.get('averageHR'),
                     "max_hr_bpm": lap.get('maxHR'),
                     "calories": lap.get('calories'),
+                    "bmr_calories": lap.get('bmrCalories'),
                     "avg_cadence": lap.get('averageRunCadence'),
                     "avg_power_watts": lap.get('averagePower'),
+                    "avg_swim_cadence": lap.get('averageSwimCadence'),
+                    "active_length_count": lap.get('numberOfActiveLengths'),
+                    "total_strokes": lap.get('totalNumberOfStrokes'),
+                    "avg_strokes": lap.get('averageStrokes'),
+                    "avg_swolf": lap.get('averageSWOLF'),
+                    "avg_stroke_distance": lap.get('averageStrokeDistance'),
                     "intensity_type": lap.get('intensityType'),
+                    "elevation_gain_meters": lap.get('elevationGain'),
+                    "elevation_loss_meters": lap.get('elevationLoss'),
+                    "workout_step_index": lap.get('wktStepIndex'),
                 }
+
+                length_dtos = lap.get('lengthDTOs', [])
+                if length_dtos:
+                    lap_data["lengths"] = []
+                    for length in length_dtos:
+                        length_data = {
+                            "length_number": length.get('lengthIndex'),
+                            "start_time": length.get('startTimeGMT'),
+                            "distance_meters": length.get('distance'),
+                            "duration_seconds": length.get('duration'),
+                            "avg_speed_mps": length.get('averageSpeed'),
+                            "max_speed_mps": length.get('maxSpeed'),
+                            "calories": length.get('calories'),
+                            "avg_hr_bpm": length.get('averageHR'),
+                            "max_hr_bpm": length.get('maxHR'),
+                            "total_strokes": length.get('totalNumberOfStrokes'),
+                            "avg_swolf": length.get('averageSWOLF'),
+                            "stroke": length.get('swimStroke'),
+                        }
+                        length_data = {
+                            k: v for k, v in length_data.items() if v is not None
+                        }
+                        lap_data["lengths"].append(length_data)
+
                 # Remove None values
                 lap_data = {k: v for k, v in lap_data.items() if v is not None}
                 curated["laps"].append(lap_data)
@@ -324,6 +396,25 @@ def register_tools(app):
             return json.dumps(hr_zones, indent=2)
         except Exception as e:
             return f"Error retrieving activity heart rate time zone data: {str(e)}"
+
+    @app.tool()
+    async def get_activity_power_in_timezones(ctx: Context, activity_id: int) -> str:
+        """Get power distribution across training zones for an activity.
+
+        Returns time spent in each power zone with watt thresholds and duration.
+        Requires a power meter. Zones are based on the athlete's FTP configured in Garmin Connect.
+
+        Args:
+            activity_id: ID of the activity to retrieve power zone data for
+        """
+        try:
+            power_zones = get_client(ctx).get_activity_power_in_timezones(activity_id)
+            if not power_zones:
+                return f"No power zone data found for activity {activity_id}. Ensure the activity was recorded with a power meter."
+
+            return json.dumps(power_zones, indent=2)
+        except Exception as e:
+            return f"Error retrieving activity power zone data: {str(e)}"
 
     @app.tool()
     async def get_activity_gear(ctx: Context, activity_id: int) -> str:
@@ -417,6 +508,8 @@ def register_tools(app):
                     "avg_hr_bpm": a.get('averageHR'),
                     "max_hr_bpm": a.get('maxHR'),
                     "steps": a.get('steps'),
+                    "elevation_gain_meters": a.get('elevationGain'),
+                    "elevation_loss_meters": a.get('elevationLoss'),
                     "owner_display_name": a.get('ownerDisplayName'),
                 }
                 # Remove None values

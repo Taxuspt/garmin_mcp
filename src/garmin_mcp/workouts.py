@@ -18,6 +18,38 @@ def configure(client):
     garmin_client = client
 
 
+def _fix_hr_zone_step(step: dict) -> None:
+    """Fix a common mistake where HR zone targets use targetValueOne instead of zoneNumber.
+
+    When targetType is heart.rate.zone and a named zone is intended, Garmin expects
+    zoneNumber (1-5). If targetValueOne is set to a small integer (1-5) and zoneNumber
+    is missing, this is almost certainly a zone number, not an absolute HR value.
+
+    Custom HR bpm ranges (e.g. targetValueOne=105, targetValueTwo=143) are left
+    unchanged — these are legitimate custom heart rate targets in Garmin Connect.
+    """
+    target_type = step.get('targetType', {})
+    target_key = target_type.get('workoutTargetTypeKey', '')
+
+    if target_key == 'heart.rate.zone' and 'zoneNumber' not in step:
+        zone = step.get('targetValueOne')
+        if zone is not None and 1 <= zone <= 5:
+            step['zoneNumber'] = int(zone)
+            step.pop('targetValueOne', None)
+            step.pop('targetValueTwo', None)
+
+    # Recurse into nested steps (RepeatGroupDTO)
+    for nested in step.get('workoutSteps', []):
+        _fix_hr_zone_step(nested)
+
+
+def _fix_hr_zone_steps(workout_data: dict) -> None:
+    """Walk all workout steps and fix HR zone target mistakes."""
+    for segment in workout_data.get('workoutSegments', []):
+        for step in segment.get('workoutSteps', []):
+            _fix_hr_zone_step(step)
+
+
 def _curate_workout_summary(workout: dict) -> dict:
     """Extract essential workout metadata for list views"""
     sport_type = workout.get('sportType', {})
@@ -45,11 +77,38 @@ def _curate_workout_summary(workout: dict) -> dict:
     return {k: v for k, v in summary.items() if v is not None}
 
 
+def _curate_step_target(
+    curated: dict,
+    step: dict,
+    target_field: str,
+    value_one_field: str,
+    value_two_field: str,
+    zone_field: str,
+    prefix: str = "",
+) -> None:
+    """Curate a workout target block, handling Garmin null target payloads safely."""
+    target_type = step.get(target_field)
+    if not isinstance(target_type, dict):
+        target_type = {}
+    target_key = target_type.get('workoutTargetTypeKey')
+
+    if not target_key or target_key == 'no.target':
+        return
+
+    curated[f'{prefix}target_type'] = target_key
+
+    if step.get(value_one_field) is not None:
+        curated[f'{prefix}target_value_low'] = step.get(value_one_field)
+    if step.get(value_two_field) is not None:
+        curated[f'{prefix}target_value_high'] = step.get(value_two_field)
+    if step.get(zone_field) is not None:
+        curated[f'{prefix}target_zone'] = step.get(zone_field)
+
+
 def _curate_workout_step(step: dict) -> dict:
     """Extract essential workout step information"""
-    step_type = step.get('stepType', {})
-    end_condition = step.get('endCondition', {})
-    target_type = step.get('targetType', {})
+    step_type = step.get('stepType') or {}
+    end_condition = step.get('endCondition') or {}
 
     curated = {
         "order": step.get('stepOrder'),
@@ -67,20 +126,45 @@ def _curate_workout_step(step: dict) -> dict:
         # Value meaning depends on condition type (seconds for time, meters for distance)
         curated['end_condition_value'] = step.get('endConditionValue')
 
-    # Target (heart rate, pace, power, etc.)
-    target_key = target_type.get('workoutTargetTypeKey')
-    if target_key and target_key != 'no.target':
-        curated['target_type'] = target_key
-        if step.get('targetValueOne'):
-            curated['target_value_low'] = step.get('targetValueOne')
-        if step.get('targetValueTwo'):
-            curated['target_value_high'] = step.get('targetValueTwo')
-        if step.get('zoneNumber'):
-            curated['target_zone'] = step.get('zoneNumber')
+    # Primary target (heart rate, pace, power, etc.)
+    _curate_step_target(
+        curated,
+        step,
+        target_field='targetType',
+        value_one_field='targetValueOne',
+        value_two_field='targetValueTwo',
+        zone_field='zoneNumber',
+    )
+
+    # Swim workouts often store pace prescriptions as secondary targets.
+    _curate_step_target(
+        curated,
+        step,
+        target_field='secondaryTargetType',
+        value_one_field='secondaryTargetValueOne',
+        value_two_field='secondaryTargetValueTwo',
+        zone_field='secondaryZoneNumber',
+        prefix='secondary_',
+    )
+
+    # Strength training exercise info
+    if step.get('category'):
+        curated['category'] = step.get('category')
+    if step.get('exerciseName'):
+        curated['exercise_name'] = step.get('exerciseName')
+    if step.get('weightValue') is not None:
+        curated['weight_value'] = step.get('weightValue')
+        weight_unit = step.get('weightUnit', {})
+        if weight_unit and weight_unit.get('unitKey'):
+            curated['weight_unit'] = weight_unit.get('unitKey')
 
     # Repeat info for repeat steps
     if step.get('type') == 'RepeatGroupDTO':
         curated['repeat_count'] = step.get('numberOfIterations')
+        nested_steps = step.get('workoutSteps', [])
+        if nested_steps:
+            curated['steps'] = [_curate_workout_step(s) for s in nested_steps]
+            curated['step_count'] = len(nested_steps)
 
     return {k: v for k, v in curated.items() if v is not None}
 
@@ -254,10 +338,7 @@ def register_tools(app):
             if is_uuid:
                 # Training plan / Garmin Coach workout - use fbt-adaptive endpoint
                 url = f"workout-service/fbt-adaptive/{workout_id_str}"
-                response = get_client(ctx).garth.get("connectapi", url)
-                if response.status_code != 200:
-                    return f"No workout found with UUID {workout_id_str}. HTTP {response.status_code}"
-                workout = response.json()
+                workout = get_client(ctx).connectapi(url)
             else:
                 # Regular workout - use standard endpoint
                 workout = get_client(ctx).get_workout_by_id(int(workout_id_str))
@@ -307,7 +388,57 @@ def register_tools(app):
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
         - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
 
-        Example workout structure:
+        IMPORTANT: Heart rate targets come in two forms:
+        - Named zone (e.g. Zone 2): set targetType to "heart.rate.zone" and use "zoneNumber" (1-5).
+          Do NOT put the zone number in targetValueOne.
+        - Custom HR range (e.g. 105-143 bpm): set targetType to "heart.rate.zone" and use
+          "targetValueOne" (low bpm) / "targetValueTwo" (high bpm). Do NOT set "zoneNumber".
+          This matches Garmin Connect's "Custom" heart rate target.
+        For non-HR targets (pace, power, cadence), use targetValueOne/targetValueTwo directly.
+
+        Note: a safety check converts targetValueOne 1-5 to zoneNumber when zoneNumber is missing,
+        to catch the common mistake of putting a zone index in targetValueOne. Typical bpm values
+        (e.g. 105, 143) are not affected.
+
+        IMPORTANT: Sport type IDs for workouts (different from activity API!):
+        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 11 = walking
+
+        **Available Templates:**
+        Instead of building workout JSON from scratch, you can use these MCP resources as starting points:
+        - workout://templates/simple-run - Basic warmup/run/cooldown structure
+        - workout://templates/interval-running - Interval training with repeat groups
+        - workout://templates/tempo-run - Tempo run with heart rate zone targets
+        - workout://templates/strength-circuit - Strength training with exercises, reps, rest
+        - workout://reference/structure - Complete JSON structure reference with all fields
+
+        Access these resources using your MCP client's resource reading capability, modify the template
+        as needed, and pass the resulting JSON as the workout_data parameter.
+
+        **Strength training workouts** require these additional fields on each exercise step:
+        - "category": exercise category (e.g. "BENCH_PRESS", "PULL_UP", "CURL", "SHOULDER_PRESS",
+          "ROW", "SQUAT", "DEADLIFT", "TRICEPS_EXTENSION", "PLANK", "LUNGE", "CARDIO")
+        - "exerciseName": specific exercise (e.g. "BARBELL_BENCH_PRESS", "PULL_UP",
+          "DUMBBELL_BICEPS_CURL", "DUMBBELL_SHOULDER_PRESS", "BENT_OVER_ROW_WITH_DUMBELL",
+          "BODY_WEIGHT_DIP", "BARBELL_SQUAT", "BARBELL_DEADLIFT")
+        - "weightValue" (optional): weight as number (e.g. 24.0)
+        - "weightUnit" (optional): {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
+        Use endCondition reps (conditionTypeId: 10) for exercises, rest (stepTypeId: 5) between sets.
+
+        Example strength exercise step:
+        {
+            "type": "ExecutableStepDTO",
+            "stepOrder": 1,
+            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+            "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+            "endConditionValue": 10.0,
+            "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+            "category": "BENCH_PRESS",
+            "exerciseName": "BARBELL_BENCH_PRESS",
+            "weightValue": 60.0,
+            "weightUnit": {"unitId": 8, "unitKey": "kilogram", "factor": 1000.0}
+        }
+
+        Example running workout with HR zone target:
         {
             "workoutName": "My Workout",
             "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
@@ -317,10 +448,11 @@ def register_tools(app):
                 "workoutSteps": [{
                     "type": "ExecutableStepDTO",
                     "stepOrder": 1,
-                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                    "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                     "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                    "endConditionValue": 300.0,
-                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+                    "endConditionValue": 1200.0,
+                    "targetType": {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"},
+                    "zoneNumber": 3
                 }]
             }]
         }
@@ -329,6 +461,9 @@ def register_tools(app):
             workout_data: Dictionary containing workout structure (name, sport type, segments, etc.)
         """
         try:
+            # Fix common mistake: HR zone targets using targetValueOne instead of zoneNumber
+            _fix_hr_zone_steps(workout_data)
+
             # Pass dict directly - library handles conversion
             result = get_client(ctx).upload_workout(workout_data)
 
@@ -347,6 +482,130 @@ def register_tools(app):
             return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error uploading workout: {str(e)}"
+
+    @app.tool()
+    async def upload_workouts(ctx: Context, workouts: list[dict]) -> str:
+        """Upload multiple workouts from JSON data in a single call
+
+        Creates multiple new workouts in Garmin Connect. Each item in the list
+        uses the same structure as upload_workout.
+
+        IMPORTANT: Step types must use Garmin's DTO format:
+        - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
+        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
+
+        IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
+
+        Args:
+            workouts: List of workout dictionaries, each containing workout structure
+                      (name, sport type, segments, etc.) — same format as upload_workout.
+        """
+        client = get_client(ctx)
+        results = []
+        for workout_data in workouts:
+            try:
+                _fix_hr_zone_steps(workout_data)
+                result = client.upload_workout(workout_data)
+                if isinstance(result, dict):
+                    entry = {
+                        "status": "success",
+                        "workout_id": result.get('workoutId'),
+                        "name": result.get('workoutName'),
+                        "message": "Workout uploaded successfully"
+                    }
+                    results.append({k: v for k, v in entry.items() if v is not None})
+                else:
+                    results.append({"status": "success", "message": "Workout uploaded successfully"})
+            except Exception as e:
+                results.append({
+                    "status": "error",
+                    "name": workout_data.get('workoutName'),
+                    "message": f"Error uploading workout: {str(e)}"
+                })
+
+        total = len(results)
+        succeeded = sum(1 for r in results if r["status"] == "success")
+        return json.dumps({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": total - succeeded,
+            "results": results
+        }, indent=2)
+
+    @app.tool()
+    async def delete_workout(ctx: Context, workout_id: int) -> str:
+        """Delete a workout from Garmin Connect
+
+        Permanently removes a workout from your Garmin Connect workout library.
+
+        Args:
+            workout_id: ID of the workout to delete (get IDs from get_workouts)
+        """
+        try:
+            client = get_client(ctx)
+            url = f"{client.garmin_workouts}/workout/{workout_id}"
+            response = client.client.delete("connectapi", url, api=True)
+
+            if response.status_code == 204 or response.status_code == 200:
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "message": f"Workout {workout_id} deleted successfully"
+                }, indent=2)
+            else:
+                return json.dumps({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "http_status": response.status_code,
+                    "message": f"Failed to delete workout: HTTP {response.status_code}"
+                }, indent=2)
+        except Exception as e:
+            return f"Error deleting workout: {str(e)}"
+
+    @app.tool()
+    async def delete_workouts(ctx: Context, workout_ids: list[int]) -> str:
+        """Delete multiple workouts from Garmin Connect in a single call
+
+        Permanently removes multiple workouts from your Garmin Connect workout library.
+
+        Args:
+            workout_ids: List of workout IDs to delete (get IDs from get_workouts)
+        """
+        client = get_client(ctx)
+        results = []
+        for workout_id in workout_ids:
+            try:
+                url = f"{client.garmin_workouts}/workout/{workout_id}"
+                response = client.client.delete("connectapi", url, api=True)
+
+                if response.status_code in (200, 204):
+                    results.append({
+                        "status": "success",
+                        "workout_id": workout_id,
+                        "message": f"Workout {workout_id} deleted successfully"
+                    })
+                else:
+                    results.append({
+                        "status": "failed",
+                        "workout_id": workout_id,
+                        "http_status": response.status_code,
+                        "message": f"Failed to delete workout: HTTP {response.status_code}"
+                    })
+            except Exception as e:
+                results.append({
+                    "status": "error",
+                    "workout_id": workout_id,
+                    "message": f"Error deleting workout: {str(e)}"
+                })
+
+        total = len(results)
+        succeeded = sum(1 for r in results if r["status"] == "success")
+        return json.dumps({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": total - succeeded,
+            "results": results
+        }, indent=2)
 
     @app.tool()
     async def get_scheduled_workouts(ctx: Context, start_date: str, end_date: str) -> str:
@@ -458,7 +717,7 @@ def register_tools(app):
         """
         try:
             url = f"workout-service/schedule/{workout_id}"
-            response = get_client(ctx).garth.post("connectapi", url, json={"date": calendar_date})
+            response = get_client(ctx).client.post("connectapi", url, json={"date": calendar_date})
 
             if response.status_code == 200:
                 return json.dumps({
@@ -477,5 +736,109 @@ def register_tools(app):
                 }, indent=2)
         except Exception as e:
             return f"Error scheduling workout: {str(e)}"
+
+    @app.tool()
+    async def schedule_workouts(ctx: Context, schedules: list[dict]) -> str:
+        """Schedule multiple workouts to specific calendar dates
+
+        This adds workouts to your Garmin Connect calendar in a single call.
+        Each item can either reference an existing workout by ID, or provide
+        inline workout_data to upload-and-schedule in one step.
+
+        Args:
+            schedules: List of workout schedules, each with:
+                - calendar_date (str): Date to schedule the workout in YYYY-MM-DD format (required)
+                - workout_id (int): ID of an existing workout to schedule (required unless workout_data is provided)
+                - workout_data (dict): Inline workout JSON to upload first, then schedule (optional).
+                  When provided, workout_id is not required. Uses the same structure as upload_workout.
+
+        Examples:
+            Schedule existing workouts by ID:
+            [{"workout_id": 123456, "calendar_date": "2024-01-15"},
+             {"workout_id": 789012, "calendar_date": "2024-01-17"}]
+
+            Upload and schedule inline:
+            [{"calendar_date": "2024-01-15", "workout_data": {"workoutName": "Easy Run", ...}},
+             {"workout_id": 789012, "calendar_date": "2024-01-17"}]
+        """
+        client = get_client(ctx)
+        results = []
+        for item in schedules:
+            workout_id = item.get("workout_id")
+            calendar_date = item.get("calendar_date")
+            workout_data = item.get("workout_data")
+
+            if calendar_date is None:
+                results.append({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": "Missing required field: calendar_date"
+                })
+                continue
+
+            if workout_id is None and workout_data is None:
+                results.append({
+                    "status": "failed",
+                    "workout_id": None,
+                    "scheduled_date": calendar_date,
+                    "message": "Missing required fields: provide either workout_id or workout_data"
+                })
+                continue
+
+            try:
+                workout_name = None
+
+                if workout_data is not None:
+                    # Upload the workout first, then use the returned ID to schedule
+                    _fix_hr_zone_steps(workout_data)
+                    upload_result = client.upload_workout(workout_data)
+                    if not isinstance(upload_result, dict) or upload_result.get('workoutId') is None:
+                        results.append({
+                            "status": "failed",
+                            "scheduled_date": calendar_date,
+                            "message": "Upload succeeded but no workout_id returned"
+                        })
+                        continue
+                    workout_id = upload_result['workoutId']
+                    workout_name = upload_result.get('workoutName')
+
+                url = f"workout-service/schedule/{workout_id}"
+                response = client.client.post("connectapi", url, json={"date": calendar_date})
+
+                if response.status_code == 200:
+                    entry = {
+                        "status": "success",
+                        "workout_id": workout_id,
+                        "scheduled_date": calendar_date,
+                        "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
+                    }
+                    if workout_name:
+                        entry["workout_name"] = workout_name
+                    results.append(entry)
+                else:
+                    results.append({
+                        "status": "failed",
+                        "workout_id": workout_id,
+                        "scheduled_date": calendar_date,
+                        "http_status": response.status_code,
+                        "message": f"Failed to schedule workout: HTTP {response.status_code}"
+                    })
+            except Exception as e:
+                results.append({
+                    "status": "error",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": f"Error scheduling workout: {str(e)}"
+                })
+
+        total = len(results)
+        succeeded = sum(1 for r in results if r["status"] == "success")
+        return json.dumps({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": total - succeeded,
+            "results": results
+        }, indent=2)
 
     return app
