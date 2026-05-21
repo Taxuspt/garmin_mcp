@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch, MagicMock
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import activity_analysis
+from garmin_mcp.client_resolver import set_global_client
 from garmin_mcp.activity_analysis import (
     _compute_power_duration_curve,
     _detect_climbs,
@@ -26,6 +27,7 @@ ACTIVITY_ID = 22041393449
 def app_with_activity_analysis(mock_garmin_client):
     """Create FastMCP app with activity_analysis tools registered"""
     activity_analysis.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Activity Analysis")
     app = activity_analysis.register_tools(app)
     return app

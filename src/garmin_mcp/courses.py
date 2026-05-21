@@ -22,6 +22,10 @@ import math
 import os
 from typing import Any, Dict, Optional
 
+from mcp.server.fastmcp import Context
+
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -169,14 +173,14 @@ def register_tools(app):
     """Register course management tools"""
 
     @app.tool()
-    async def get_courses() -> str:
+    async def get_courses(ctx: Context) -> str:
         """List all courses saved on Garmin Connect.
 
         Returns a curated list of courses with id, name, distance, activity type
         and creation date.
         """
         try:
-            response = garmin_client.garth.request(
+            response = get_client(ctx).garth.request(
                 "GET", "connectapi", "/course-service/course"
             )
             data = response.json()
@@ -203,6 +207,7 @@ def register_tools(app):
 
     @app.tool()
     async def upload_course(
+        ctx: Context,
         gpx_path: str,
         course_name: Optional[str] = None,
         activity_type: str = "running",
@@ -235,8 +240,9 @@ def register_tools(app):
             with open(gpx_path, "rb") as f:
                 gpx_bytes = f.read()
 
+            client = get_client(ctx)
             # Step 1: parse the GPX server-side
-            parse_response = garmin_client.garth.request(
+            parse_response = client.garth.request(
                 "POST",
                 "connectapi",
                 "/course-service/course/import",
@@ -265,19 +271,19 @@ def register_tools(app):
             )
 
             create_url = (
-                f"https://connectapi.{garmin_client.garth.domain}/course-service/course"
+                f"https://connectapi.{client.garth.domain}/course-service/course"
             )
             create_headers = {
-                "Authorization": str(garmin_client.garth.oauth2_token),
+                "Authorization": str(client.garth.oauth2_token),
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/plain, */*",
-                "Origin": f"https://connect.{garmin_client.garth.domain}",
-                "Referer": f"https://connect.{garmin_client.garth.domain}/modern/courses",
+                "Origin": f"https://connect.{client.garth.domain}",
+                "Referer": f"https://connect.{client.garth.domain}/modern/courses",
                 "X-Requested-With": "XMLHttpRequest",
                 "NK": "NT",
-                "DI-Backend": f"connectapi.{garmin_client.garth.domain}",
+                "DI-Backend": f"connectapi.{client.garth.domain}",
             }
-            create_response = garmin_client.garth.sess.post(
+            create_response = client.garth.sess.post(
                 create_url, json=payload, headers=create_headers
             )
 
@@ -301,7 +307,7 @@ def register_tools(app):
                     "elevation_gain_m": saved.get("elevationGainMeter"),
                     "elevation_loss_m": saved.get("elevationLossMeter"),
                     "activity_type_id": saved.get("activityTypePk"),
-                    "url": f"https://connect.{garmin_client.garth.domain}/modern/course/{saved.get('courseId')}",
+                    "url": f"https://connect.{client.garth.domain}/modern/course/{saved.get('courseId')}",
                 },
                 indent=2,
             )
@@ -310,27 +316,28 @@ def register_tools(app):
             return f"Error uploading course: {str(e)}"
 
     @app.tool()
-    async def delete_course(course_id: int) -> str:
+    async def delete_course(ctx: Context, course_id: int) -> str:
         """Delete a course from Garmin Connect.
 
         Args:
             course_id: ID of the course to delete (get IDs from get_courses).
         """
         try:
+            client = get_client(ctx)
             url = (
-                f"https://connectapi.{garmin_client.garth.domain}"
+                f"https://connectapi.{client.garth.domain}"
                 f"/course-service/course/{course_id}"
             )
             headers = {
-                "Authorization": str(garmin_client.garth.oauth2_token),
+                "Authorization": str(client.garth.oauth2_token),
                 "Accept": "application/json, text/plain, */*",
-                "Origin": f"https://connect.{garmin_client.garth.domain}",
-                "Referer": f"https://connect.{garmin_client.garth.domain}/modern/courses",
+                "Origin": f"https://connect.{client.garth.domain}",
+                "Referer": f"https://connect.{client.garth.domain}/modern/courses",
                 "X-Requested-With": "XMLHttpRequest",
                 "NK": "NT",
-                "DI-Backend": f"connectapi.{garmin_client.garth.domain}",
+                "DI-Backend": f"connectapi.{client.garth.domain}",
             }
-            response = garmin_client.garth.sess.delete(url, headers=headers)
+            response = client.garth.sess.delete(url, headers=headers)
 
             if response.status_code in (200, 204):
                 return json.dumps(
