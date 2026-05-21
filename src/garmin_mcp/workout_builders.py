@@ -7,6 +7,10 @@ to the existing upload_workout / schedule_workout endpoints.
 import json
 from typing import Any, Dict, List, Optional
 
+from mcp.server.fastmcp import Context
+
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -238,6 +242,7 @@ def register_tools(app):
 
     @app.tool()
     async def create_walk_run_workout(
+        ctx: Context,
         name: str,
         run_seconds: int,
         walk_seconds: int,
@@ -269,7 +274,7 @@ def register_tools(app):
                 cooldown_min=cooldown_min,
                 hr_zone=hr_zone,
             )
-            result = garmin_client.upload_workout(workout_json)
+            result = get_client(ctx).upload_workout(workout_json)
 
             if isinstance(result, dict):
                 curated = {
@@ -286,6 +291,7 @@ def register_tools(app):
 
     @app.tool()
     async def create_z2_walk_workout(
+        ctx: Context,
         name: str,
         duration_min: int,
         hr_min: int,
@@ -306,7 +312,7 @@ def register_tools(app):
                 hr_min=hr_min,
                 hr_max=hr_max,
             )
-            result = garmin_client.upload_workout(workout_json)
+            result = get_client(ctx).upload_workout(workout_json)
 
             if isinstance(result, dict):
                 curated = {
@@ -323,6 +329,7 @@ def register_tools(app):
 
     @app.tool()
     async def create_strength_workout(
+        ctx: Context,
         name: str,
         exercises: List[Dict[str, Any]],
     ) -> str:
@@ -337,7 +344,7 @@ def register_tools(app):
         """
         try:
             workout_json = build_strength_json(name=name, exercises=exercises)
-            result = garmin_client.upload_workout(workout_json)
+            result = get_client(ctx).upload_workout(workout_json)
 
             if isinstance(result, dict):
                 curated = {
@@ -353,19 +360,20 @@ def register_tools(app):
             return f"Error creating strength workout: {str(e)}"
 
     @app.tool()
-    async def schedule_week(week: List[Dict[str, Any]]) -> str:
+    async def schedule_week(ctx: Context, week: List[Dict[str, Any]]) -> str:
         """Schedule a list of workouts for the week in a single call.
 
         Args:
             week: List of dicts with keys: date (YYYY-MM-DD), workout_id (int)
         """
         try:
+            client = get_client(ctx)
             results = []
             for item in week:
                 calendar_date = item["date"]
                 workout_id = int(item["workout_id"])
                 url = f"workout-service/schedule/{workout_id}"
-                response = garmin_client.garth.post(
+                response = client.garth.post(
                     "connectapi", url, json={"date": calendar_date}
                 )
                 if response.status_code == 200:

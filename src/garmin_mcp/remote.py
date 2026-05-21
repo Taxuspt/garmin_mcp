@@ -36,6 +36,9 @@ from garmin_mcp import workout_templates
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
 from garmin_mcp import nutrition
+from garmin_mcp import courses
+from garmin_mcp import workout_builders
+from garmin_mcp import activity_analysis
 
 
 def main():
@@ -117,6 +120,9 @@ def main():
     app = data_management.register_tools(app)
     app = womens_health.register_tools(app)
     app = nutrition.register_tools(app)
+    app = courses.register_tools(app)
+    app = workout_builders.register_tools(app)
+    app = activity_analysis.register_tools(app)
 
     # Register resources (workout templates)
     app = workout_templates.register_resources(app)
