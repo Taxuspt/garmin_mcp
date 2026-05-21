@@ -10,12 +10,14 @@ from unittest.mock import Mock, MagicMock
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import nutrition
+from garmin_mcp.client_resolver import set_global_client
 
 
 @pytest.fixture
 def app_with_nutrition(mock_garmin_client):
     """Create FastMCP app with nutrition tools registered"""
     nutrition.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Nutrition")
     app = nutrition.register_tools(app)
     return app

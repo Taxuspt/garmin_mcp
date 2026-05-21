@@ -6,6 +6,9 @@ from typing import Optional
 from urllib.parse import quote
 
 from garminconnect import GarminConnectConnectionError
+from mcp.server.fastmcp import Context
+
+from garmin_mcp.client_resolver import get_client
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -29,7 +32,7 @@ def register_tools(app):
     """Register all nutrition tools with the MCP server app"""
 
     @app.tool()
-    async def get_nutrition_daily_food_log(date: str) -> str:
+    async def get_nutrition_daily_food_log(ctx: Context, date: str) -> str:
         """Get daily food consumption records for a date
 
         Returns food items logged throughout the day including calories,
@@ -40,7 +43,7 @@ def register_tools(app):
         """
         try:
             url = f"/nutrition-service/food/logs/{date}"
-            data = garmin_client.connectapi(url)
+            data = get_client(ctx).connectapi(url)
             if not data:
                 return f"No food log data found for {date}."
             return json.dumps(data, indent=2)
@@ -48,7 +51,7 @@ def register_tools(app):
             return f"Error retrieving food log data: {str(e)}"
 
     @app.tool()
-    async def get_nutrition_daily_meals(date: str) -> str:
+    async def get_nutrition_daily_meals(ctx: Context, date: str) -> str:
         """Get daily meal summaries for a date
 
         Returns meal-level summaries (breakfast, lunch, dinner, snacks)
@@ -60,7 +63,7 @@ def register_tools(app):
         """
         try:
             url = f"/nutrition-service/meals/{date}"
-            data = garmin_client.connectapi(url)
+            data = get_client(ctx).connectapi(url)
             if not data:
                 return f"No meal data found for {date}."
             return json.dumps(data, indent=2)
@@ -68,7 +71,7 @@ def register_tools(app):
             return f"Error retrieving meal data: {str(e)}"
 
     @app.tool()
-    async def get_nutrition_daily_settings(date: str) -> str:
+    async def get_nutrition_daily_settings(ctx: Context, date: str) -> str:
         """Get nutrition plan/settings for a date
 
         Returns the user's nutrition goals and targets including
@@ -79,7 +82,7 @@ def register_tools(app):
         """
         try:
             url = f"/nutrition-service/settings/{date}"
-            data = garmin_client.connectapi(url)
+            data = get_client(ctx).connectapi(url)
             if not data:
                 return f"No nutrition settings found for {date}."
             return json.dumps(data, indent=2)
@@ -88,6 +91,7 @@ def register_tools(app):
 
     @app.tool()
     async def get_custom_foods(
+        ctx: Context,
         search: str = "",
         start: int = 0,
         limit: int = 20,
@@ -110,7 +114,7 @@ def register_tools(app):
                 f"&start={start}&limit={limit}"
                 f"&includeContent=true"
             )
-            data = garmin_client.connectapi(url)
+            data = get_client(ctx).connectapi(url)
             if not data:
                 return "No custom foods found."
             return json.dumps(data, indent=2)
@@ -118,7 +122,7 @@ def register_tools(app):
             return f"Error retrieving custom foods: {str(e)}"
 
     @app.tool()
-    async def get_custom_food_serving_units() -> str:
+    async def get_custom_food_serving_units(ctx: Context) -> str:
         """Get available serving units for custom foods
 
         Returns the list of valid serving units (e.g. G, ML, OZ)
@@ -126,7 +130,7 @@ def register_tools(app):
         """
         try:
             url = "/nutrition-service/metadata/customFoodServingUnits"
-            data = garmin_client.connectapi(url)
+            data = get_client(ctx).connectapi(url)
             if not data:
                 return "No serving units found."
             return json.dumps(data, indent=2)
@@ -135,6 +139,7 @@ def register_tools(app):
 
     @app.tool()
     async def create_custom_food(
+        ctx: Context,
         food_name: str,
         calories: float,
         serving_unit: str = "G",
@@ -204,7 +209,7 @@ def register_tools(app):
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
-            resp = garmin_client.client.put(
+            resp = get_client(ctx).client.put(
                 "connectapi", url, json=payload, api=True
             )
             if resp.status_code == 204:
@@ -220,6 +225,7 @@ def register_tools(app):
 
     @app.tool()
     async def update_custom_food(
+        ctx: Context,
         food_id: str,
         serving_id: str,
         food_name: str,
@@ -292,7 +298,7 @@ def register_tools(app):
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
-            resp = garmin_client.client.put(
+            resp = get_client(ctx).client.put(
                 "connectapi", url, json=payload, api=True
             )
             if resp.status_code == 204:
@@ -308,6 +314,7 @@ def register_tools(app):
 
     @app.tool()
     async def log_custom_food(
+        ctx: Context,
         meal_date: str,
         meal_time: str,
         food_id: str,
@@ -335,8 +342,9 @@ def register_tools(app):
         try:
             from datetime import datetime, timezone
 
+            client = get_client(ctx)
             meals_url = f"/nutrition-service/meals/{meal_date}"
-            meals_data = garmin_client.connectapi(meals_url)
+            meals_data = client.connectapi(meals_url)
             meals = (meals_data or {}).get("meals", [])
 
             meal_id = None
@@ -375,7 +383,7 @@ def register_tools(app):
                 ],
             }
             url = "/nutrition-service/food/logs"
-            resp = garmin_client.client.put(
+            resp = client.client.put(
                 "connectapi", url, json=payload, api=True
             )
             if resp.status_code == 204:
@@ -391,6 +399,7 @@ def register_tools(app):
 
     @app.tool()
     async def log_food(
+        ctx: Context,
         meal_date: str,
         meal_time: str,
         name: str,
@@ -418,8 +427,9 @@ def register_tools(app):
         try:
             from datetime import datetime, timezone
 
+            client = get_client(ctx)
             meals_url = f"/nutrition-service/meals/{meal_date}"
-            meals_data = garmin_client.connectapi(meals_url)
+            meals_data = client.connectapi(meals_url)
             meals = (meals_data or {}).get("meals", [])
 
             # Match meal_time against startTime/endTime windows; fall back to SNACKS
@@ -458,7 +468,7 @@ def register_tools(app):
                 ],
             }
             url = "/nutrition-service/food/logs/quickAdd"
-            resp = garmin_client.client.put(
+            resp = client.client.put(
                 "connectapi", url, json=payload, api=True
             )
             if resp.status_code == 204:
@@ -473,7 +483,7 @@ def register_tools(app):
             return f"Error logging food: {str(e)}"
 
     @app.tool()
-    async def delete_food_log(log_id: int) -> str:
+    async def delete_food_log(ctx: Context, log_id: int) -> str:
         """Delete a food log entry
 
         Permanently removes a logged food item from the nutrition log.
@@ -485,7 +495,7 @@ def register_tools(app):
         """
         try:
             url = f"/nutrition-service/food/logs/{log_id}"
-            resp = garmin_client.client.delete("connectapi", url, api=True)
+            resp = get_client(ctx).client.delete("connectapi", url, api=True)
             if resp.status_code in (200, 204):
                 return json.dumps({"status": "success", "log_id": log_id, "message": f"Food log entry {log_id} deleted successfully."}, indent=2)
             return json.dumps({"status": "failed", "log_id": log_id, "http_status": resp.status_code, "message": f"Failed to delete food log: HTTP {resp.status_code}"}, indent=2)
@@ -499,6 +509,7 @@ def register_tools(app):
 
     @app.tool()
     async def upsert_and_log(
+        ctx: Context,
         meal_date: str,
         meal_time: str,
         food_name: str,
@@ -533,13 +544,14 @@ def register_tools(app):
         try:
             from datetime import datetime, timezone
 
+            client = get_client(ctx)
             # 1. Search for existing custom food
             search_url = (
                 f"/nutrition-service/customFood"
                 f"?searchExpression={quote(food_name)}"
                 f"&start=0&limit=10&includeContent=true"
             )
-            search_data = garmin_client.connectapi(search_url)
+            search_data = client.connectapi(search_url)
             foods = search_data if isinstance(search_data, list) else []
 
             food_id = None
@@ -575,7 +587,7 @@ def register_tools(app):
                     },
                     "nutritionContents": [nutrition],
                 }
-                create_resp = garmin_client.client.put(
+                create_resp = client.client.put(
                     "connectapi", "/nutrition-service/customFood", json=create_payload, api=True
                 )
                 if create_resp.status_code not in (200, 201, 204):
@@ -594,7 +606,7 @@ def register_tools(app):
                         f"?searchExpression={quote(food_name)}"
                         f"&start=0&limit=10&includeContent=true"
                     )
-                    lookup_data = garmin_client.connectapi(lookup_url)
+                    lookup_data = client.connectapi(lookup_url)
                     lookup_foods = lookup_data if isinstance(lookup_data, list) else []
                     for f in lookup_foods:
                         meta = f.get("foodMetaData", f)
@@ -608,7 +620,7 @@ def register_tools(app):
                     return f"Error: could not retrieve foodId/servingId for '{food_name}' after creation."
 
             # 3. Resolve meal_id from meal_time
-            meals_data = garmin_client.connectapi(f"/nutrition-service/meals/{meal_date}")
+            meals_data = client.connectapi(f"/nutrition-service/meals/{meal_date}")
             meals = (meals_data or {}).get("meals", [])
             meal_id = None
             for m in meals:
@@ -644,7 +656,7 @@ def register_tools(app):
                     }
                 ],
             }
-            log_resp = garmin_client.client.put(
+            log_resp = client.client.put(
                 "connectapi", "/nutrition-service/food/logs", json=log_payload, api=True
             )
             if log_resp.status_code == 204:
