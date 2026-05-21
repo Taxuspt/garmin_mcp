@@ -1,8 +1,9 @@
 """
 Integration tests for activity_management module MCP tools
 
-Tests all 10 activity management tools using FastMCP integration with mocked Garmin API responses.
+Tests activity management tools using FastMCP integration with mocked Garmin API responses.
 """
+import json
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -13,6 +14,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_ACTIVITIES,
     MOCK_ACTIVITY_DETAILS,
     MOCK_ACTIVITY_SPLITS,
+    MOCK_SWIM_ACTIVITY_SPLITS,
     MOCK_ACTIVITY_COUNT,
     MOCK_ACTIVITY_TYPES,
 )
@@ -101,6 +103,43 @@ async def test_get_activity_tool(app_with_activity_management, mock_garmin_clien
 
 
 @pytest.mark.asyncio
+async def test_set_activity_name_tool(app_with_activity_management, mock_garmin_client):
+    """Test set_activity_name tool updates activity name"""
+    activity_id = 12345678901
+    mock_garmin_client.set_activity_name.return_value = {}
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_name",
+        {"activity_id": activity_id, "activity_name": "Morning Run - Easy"},
+    )
+
+    assert result is not None
+    mock_garmin_client.set_activity_name.assert_called_once_with(
+        activity_id, "Morning Run - Easy"
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["activity_id"] == activity_id
+    assert data["activity_name"] == "Morning Run - Easy"
+
+
+@pytest.mark.asyncio
+async def test_set_activity_name_tool_rejects_blank_name(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test set_activity_name tool rejects blank names"""
+    result = await app_with_activity_management.call_tool(
+        "set_activity_name",
+        {"activity_id": 12345678901, "activity_name": "   "},
+    )
+
+    assert result is not None
+    mock_garmin_client.set_activity_name.assert_not_called()
+    assert result[0][0].text == "Activity name cannot be empty"
+
+
+@pytest.mark.asyncio
 async def test_get_activity_splits_tool(app_with_activity_management, mock_garmin_client):
     """Test get_activity_splits tool returns activity splits"""
     # Setup mock
@@ -116,6 +155,68 @@ async def test_get_activity_splits_tool(app_with_activity_management, mock_garmi
     # Verify
     assert result is not None
     mock_garmin_client.get_activity_splits.assert_called_once_with(activity_id)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_splits_elevation_fields(app_with_activity_management, mock_garmin_client):
+    """Test get_activity_splits tool includes elevation gain and loss"""
+    import json
+
+    # Setup mock
+    mock_garmin_client.get_activity_splits.return_value = MOCK_ACTIVITY_SPLITS
+
+    # Call tool
+    activity_id = 12345678901
+    result = await app_with_activity_management.call_tool(
+        "get_activity_splits",
+        {"activity_id": activity_id}
+    )
+
+    # Parse and verify elevation fields
+    data = json.loads(result[0][0].text)
+    assert "laps" in data
+    assert len(data["laps"]) == 2
+
+    # First lap elevation
+    assert data["laps"][0]["elevation_gain_meters"] == 25.5
+    assert data["laps"][0]["elevation_loss_meters"] == 10.2
+
+    # Second lap elevation
+    assert data["laps"][1]["elevation_gain_meters"] == 15.0
+    assert data["laps"][1]["elevation_loss_meters"] == 30.8
+
+
+@pytest.mark.asyncio
+async def test_get_activity_splits_includes_swim_lengths(app_with_activity_management, mock_garmin_client):
+    """Test get_activity_splits tool preserves swim lap and nested length data."""
+    import json
+
+    mock_garmin_client.get_activity_splits.return_value = MOCK_SWIM_ACTIVITY_SPLITS
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity_splits",
+        {"activity_id": 22526515067}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activity_id"] == 22526515067
+    assert data["lap_count"] == 1
+    assert data["laps"][0]["avg_swim_cadence"] == 22.0
+    assert data["laps"][0]["active_length_count"] == 92
+    assert data["laps"][0]["total_strokes"] == 1104
+    assert data["laps"][0]["avg_strokes"] == 12.0
+    assert data["laps"][0]["avg_swolf"] == 45.0
+    assert data["laps"][0]["moving_duration_seconds"] == 2995.565
+    assert data["laps"][0]["elapsed_duration_seconds"] == 2995.565
+    assert data["laps"][0]["avg_moving_speed_mps"] == 0.67566553875138
+    assert data["laps"][0]["bmr_calories"] == 85.0
+    assert data["laps"][0]["avg_stroke_distance"] == 0.0
+    assert data["laps"][0]["workout_step_index"] == 0
+    assert len(data["laps"][0]["lengths"]) == 2
+    assert data["laps"][0]["lengths"][0]["length_number"] == 1
+    assert data["laps"][0]["lengths"][0]["distance_meters"] == 22.0
+    assert data["laps"][0]["lengths"][0]["duration_seconds"] == 31.0
+    assert data["laps"][0]["lengths"][0]["stroke"] == "FREESTYLE"
 
 
 @pytest.mark.asyncio
@@ -371,3 +472,17 @@ async def test_get_activity_not_found(app_with_activity_management, mock_garmin_
     # Verify helpful message is returned
     assert result is not None
     # Should indicate activity not found
+
+
+@pytest.mark.asyncio
+async def test_set_activity_name_exception(app_with_activity_management, mock_garmin_client):
+    """Test set_activity_name tool when API raises exception"""
+    mock_garmin_client.set_activity_name.side_effect = Exception("API Error")
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_name",
+        {"activity_id": 12345678901, "activity_name": "Morning Run"},
+    )
+
+    assert result is not None
+    assert result[0][0].text == "Error updating activity name: API Error"
