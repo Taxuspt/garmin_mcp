@@ -40,11 +40,47 @@ def _fix_hr_zone_step(step: dict) -> None:
         _fix_hr_zone_step(nested)
 
 
+def _fix_repeat_group_step(step: dict) -> None:
+    """Ensure RepeatGroupDTO steps have a valid endCondition and numberOfIterations.
+
+    The Garmin API silently corrupts a RepeatGroupDTO when conditionTypeId is
+    missing from its endCondition — it falls back to an unrelated condition type
+    (observed: "heart.rate") and drops numberOfIterations entirely.
+
+    This function:
+    - Adds conditionTypeId: 7 ("iterations") when conditionTypeKey is "iterations"
+      but conditionTypeId is absent.
+    - Backfills numberOfIterations from endConditionValue when the former is missing.
+    - Recurses into nested workoutSteps so nested repeat groups are also fixed.
+    """
+    if step.get('type') != 'RepeatGroupDTO':
+        for nested in step.get('workoutSteps', []):
+            _fix_repeat_group_step(nested)
+        return
+
+    end_condition = step.get('endCondition')
+    if isinstance(end_condition, dict):
+        if (
+            end_condition.get('conditionTypeKey') == 'iterations'
+            and 'conditionTypeId' not in end_condition
+        ):
+            end_condition['conditionTypeId'] = 7
+
+    if 'numberOfIterations' not in step:
+        value = step.get('endConditionValue')
+        if value is not None:
+            step['numberOfIterations'] = int(value)
+
+    for nested in step.get('workoutSteps', []):
+        _fix_repeat_group_step(nested)
+
+
 def _fix_hr_zone_steps(workout_data: dict) -> None:
     """Walk all workout steps and fix HR zone target mistakes."""
     for segment in workout_data.get('workoutSegments', []):
         for step in segment.get('workoutSteps', []):
             _fix_hr_zone_step(step)
+            _fix_repeat_group_step(step)
 
 
 def _curate_workout_summary(workout: dict) -> dict:
@@ -414,7 +450,10 @@ def register_tools(app):
 
         IMPORTANT: Step types must use Garmin's DTO format:
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
-        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
+        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations.
+          Always include endCondition with conditionTypeId 7 and conditionTypeKey
+          "iterations"; omitting conditionTypeId causes the API to silently corrupt
+          the repeat count.
 
         IMPORTANT: Heart rate targets come in two forms:
         - Named zone (e.g. Zone 2): set targetType to "heart.rate.zone" and use "zoneNumber" (1-5).
@@ -520,7 +559,10 @@ def register_tools(app):
 
         IMPORTANT: Step types must use Garmin's DTO format:
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
-        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
+        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations.
+          Always include endCondition with conditionTypeId 7 and conditionTypeKey
+          "iterations"; omitting conditionTypeId causes the API to silently corrupt
+          the repeat count.
 
         IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
 

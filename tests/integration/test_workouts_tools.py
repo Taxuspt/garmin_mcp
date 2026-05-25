@@ -8,6 +8,7 @@ from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import workouts
+from garmin_mcp.workouts import _fix_repeat_group_step
 from tests.fixtures.garmin_responses import (
     MOCK_WORKOUTS,
     MOCK_WORKOUT_DETAILS,
@@ -1036,3 +1037,77 @@ async def test_schedule_workouts_inline_upload_no_id_returned(app_with_workouts,
     assert result_data["failed"] == 1
     assert result_data["results"][0]["status"] == "failed"
     mock_garmin_client.client.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _fix_repeat_group_step (unit tests)
+# ---------------------------------------------------------------------------
+
+def test_fix_repeat_group_adds_missing_condition_type_id():
+    """Adds conditionTypeId:7 when conditionTypeKey is 'iterations' but id is absent."""
+    step = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 5,
+        "endCondition": {"conditionTypeKey": "iterations"},
+        "endConditionValue": 5,
+        "workoutSteps": [],
+    }
+    _fix_repeat_group_step(step)
+    assert step["endCondition"]["conditionTypeId"] == 7
+    assert step["endCondition"]["conditionTypeKey"] == "iterations"
+
+
+def test_fix_repeat_group_leaves_existing_condition_type_id_unchanged():
+    """Does not overwrite conditionTypeId when already present."""
+    step = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 3,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 3,
+        "workoutSteps": [],
+    }
+    _fix_repeat_group_step(step)
+    assert step["endCondition"]["conditionTypeId"] == 7
+
+
+def test_fix_repeat_group_backfills_number_of_iterations_from_end_condition_value():
+    """numberOfIterations is set from endConditionValue when missing."""
+    step = {
+        "type": "RepeatGroupDTO",
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 4,
+        "workoutSteps": [],
+    }
+    _fix_repeat_group_step(step)
+    assert step["numberOfIterations"] == 4
+
+
+def test_fix_repeat_group_does_not_modify_non_repeat_steps():
+    """Steps that are not RepeatGroupDTO are not modified."""
+    step = {
+        "type": "ExecutableStepDTO",
+        "endCondition": {"conditionTypeKey": "time"},
+        "endConditionValue": 300.0,
+    }
+    _fix_repeat_group_step(step)
+    assert "conditionTypeId" not in step["endCondition"]
+
+
+def test_fix_repeat_group_recurses_into_nested_repeat_groups():
+    """Nested RepeatGroupDTOs inside another are also fixed."""
+    inner = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 2,
+        "endCondition": {"conditionTypeKey": "iterations"},
+        "endConditionValue": 2,
+        "workoutSteps": [],
+    }
+    outer = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 3,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 3,
+        "workoutSteps": [inner],
+    }
+    _fix_repeat_group_step(outer)
+    assert inner["endCondition"]["conditionTypeId"] == 7
