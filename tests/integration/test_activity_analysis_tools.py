@@ -16,6 +16,7 @@ from garmin_mcp.activity_analysis import (
     _compute_temperature_stats,
     _grade_analysis,
     _compute_shift_summary,
+    _compute_hrv_metrics,
 )
 
 
@@ -670,3 +671,241 @@ def test_grade_analysis_bins_correctly():
     assert "descending" in result
     # Steeper terrain should have higher avg power
     assert result["gentle"]["avg_power_w"] < result["moderate"]["avg_power_w"]
+
+
+# ---------------------------------------------------------------------------
+# HRV metrics (unit tests for _compute_hrv_metrics)
+# ---------------------------------------------------------------------------
+
+def test_compute_hrv_metrics_returns_none_below_minimum():
+    """Returns None when fewer than 10 R-R intervals."""
+    assert _compute_hrv_metrics([0.6] * 9) is None
+
+
+def test_compute_hrv_metrics_correct_values():
+    """Computes correct RMSSD, SDNN, pNN50, mean_rr for known input.
+
+    20 alternating 600/700 ms R-R intervals (in seconds):
+      mean_rr  = 650.0 ms
+      RMSSD    = sqrt(10000) = 100.0 ms      (all successive diffs = ±100 ms)
+      SDNN     = sqrt(50000/19) ≈ 51.3 ms   (sample SD)
+      pNN50    = 100.0 %                     (all |diffs| = 100 ms > 50 ms)
+      mean_hr  = round(60000/650, 1) = 92.3 bpm
+    """
+    rr_s = [0.6, 0.7] * 10
+    result = _compute_hrv_metrics(rr_s)
+    assert result is not None
+    assert result["rmssd_ms"] == 100.0
+    assert result["sdnn_ms"] == 51.3
+    assert result["pnn50_pct"] == 100.0
+    assert result["mean_rr_ms"] == 650.0
+    assert result["mean_hr_bpm"] == 92.3
+    assert result["rr_count"] == 20
+
+
+def test_compute_hrv_metrics_pnn50_zero_when_no_large_diffs():
+    """pNN50 is 0 when all successive differences are <= 50 ms."""
+    rr_s = [0.6] * 20
+    result = _compute_hrv_metrics(rr_s)
+    assert result is not None
+    assert result["pnn50_pct"] == 0.0
+    assert result["rmssd_ms"] == 0.0
+    assert result["sdnn_ms"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# HRV from FIT (integration tests through the tool)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_fit_no_hrv_messages_produces_no_hrv_key(app_with_activity_analysis, mock_garmin_client):
+    """Activities without hrv messages produce no hrv key (backwards compat)."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    record_msg = _make_mock_fit_message("record", {"heart_rate": 140})
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([record_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert "hrv" not in data
+
+
+@pytest.mark.asyncio
+async def test_fit_hrv_summary_present_with_enough_intervals(app_with_activity_analysis, mock_garmin_client):
+    """hrv summary key appears with correct structure when >= 10 valid R-R intervals exist."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    record_msg = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:00:00"})
+    hrv_msg = _make_mock_fit_message("hrv", {"time": [0.6, 0.7] * 10})
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([record_msg, hrv_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert "hrv" in data
+    hrv = data["hrv"]
+    assert "rmssd_ms" in hrv
+    assert "sdnn_ms" in hrv
+    assert "pnn50_pct" in hrv
+    assert "mean_rr_ms" in hrv
+    assert "rr_count" in hrv
+    assert hrv["rr_count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_fit_hrv_sentinel_values_filtered(app_with_activity_analysis, mock_garmin_client):
+    """FIT sentinel values (~65.535 s) are excluded from HRV computation."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    record_msg = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:00:00"})
+    hrv_msg = _make_mock_fit_message("hrv", {"time": [0.6] * 20 + [65.535] * 5})
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([record_msg, hrv_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert "hrv" in data
+    assert data["hrv"]["rr_count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_fit_hrv_not_produced_below_minimum_samples(app_with_activity_analysis, mock_garmin_client):
+    """No hrv key when fewer than 10 valid R-R intervals are present."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    record_msg = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:00:00"})
+    hrv_msg = _make_mock_fit_message("hrv", {"time": [0.6] * 9})
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([record_msg, hrv_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert "hrv" not in data
+
+
+@pytest.mark.asyncio
+async def test_fit_hrv_rr_intervals_excluded_by_default(app_with_activity_analysis, mock_garmin_client):
+    """Raw rr_intervals_seconds is absent when include_records is not set."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    record_msg = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:00:00"})
+    hrv_msg = _make_mock_fit_message("hrv", {"time": [0.65] * 20})
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([record_msg, hrv_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert "rr_intervals_seconds" not in data
+    assert "hrv" in data  # summary is still present
+
+
+@pytest.mark.asyncio
+async def test_fit_hrv_rr_intervals_included_when_records_requested(app_with_activity_analysis, mock_garmin_client):
+    """Raw rr_intervals_seconds appears when include_records=True."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    messages = [
+        _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:00:00"}),
+        _make_mock_fit_message("hrv", {"time": [0.65] * 20}),
+    ]
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        # side_effect returns a fresh iterator on each FitFile() call
+        mock_ff = MagicMock()
+        mock_ff.get_messages.side_effect = lambda: iter(messages)
+        mock_fp.FitFile.return_value = mock_ff
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data",
+            {"activity_id": ACTIVITY_ID, "include_records": True}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert "rr_intervals_seconds" in data
+    assert len(data["rr_intervals_seconds"]) == 20
+    assert data["rr_intervals_seconds"][0]["rr_seconds"] == 0.65
+
+
+@pytest.mark.asyncio
+async def test_fit_hrv_per_lap_bucketing(app_with_activity_analysis, mock_garmin_client):
+    """Per-lap HRV is computed by bucketing R-R pairs into each lap's time window."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    # Record + HRV inside lap 1's window (10:00–10:10)
+    record_lap1 = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:05:00"})
+    hrv_lap1 = _make_mock_fit_message("hrv", {"time": [0.6, 0.7] * 10})
+
+    # Record + HRV inside lap 2's window (10:10–10:20)
+    record_lap2 = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:15:00"})
+    hrv_lap2 = _make_mock_fit_message("hrv", {"time": [0.6, 0.7] * 10})
+
+    lap1_msg = _make_mock_fit_message("lap", {
+        "start_time": "2026-05-15 10:00:00",
+        "total_elapsed_time": 600.0,
+    })
+    lap2_msg = _make_mock_fit_message("lap", {
+        "start_time": "2026-05-15 10:10:00",
+        "total_elapsed_time": 600.0,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([
+            record_lap1, hrv_lap1,
+            record_lap2, hrv_lap2,
+            lap1_msg, lap2_msg,
+        ])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert len(data["laps"]) == 2
+    assert "hrv" in data["laps"][0], "Lap 1 should have HRV"
+    assert "hrv" in data["laps"][1], "Lap 2 should have HRV"
+    assert data["laps"][0]["hrv"]["rr_count"] == 20
+    assert data["laps"][1]["hrv"]["rr_count"] == 20
+
+
+@pytest.mark.asyncio
+async def test_fit_hrv_lap_below_minimum_gets_no_hrv(app_with_activity_analysis, mock_garmin_client):
+    """A lap with fewer than 10 R-R intervals in its window gets no hrv key."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    record_lap1 = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:05:00"})
+    hrv_lap1 = _make_mock_fit_message("hrv", {"time": [0.6, 0.7] * 10})  # 20 → hrv
+
+    record_lap2 = _make_mock_fit_message("record", {"timestamp": "2026-05-15 10:15:00"})
+    hrv_lap2 = _make_mock_fit_message("hrv", {"time": [0.6] * 5})  # 5 → no hrv
+
+    lap1_msg = _make_mock_fit_message("lap", {
+        "start_time": "2026-05-15 10:00:00",
+        "total_elapsed_time": 600.0,
+    })
+    lap2_msg = _make_mock_fit_message("lap", {
+        "start_time": "2026-05-15 10:10:00",
+        "total_elapsed_time": 600.0,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([
+            record_lap1, hrv_lap1,
+            record_lap2, hrv_lap2,
+            lap1_msg, lap2_msg,
+        ])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert len(data["laps"]) == 2
+    assert "hrv" in data["laps"][0]
+    assert "hrv" not in data["laps"][1]
