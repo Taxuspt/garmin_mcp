@@ -15,7 +15,7 @@ import gzip
 import io
 import json
 import zipfile
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 try:
     import fitparse
@@ -829,7 +829,7 @@ def register_tools(app):
 
     @app.tool()
     async def get_activity_fit_data(
-        activity_id: int,
+        activity_id: Union[int, str],
         include_records: bool = False,
     ) -> str:
         """Download and parse FIT file for an activity to expose advanced cycling data.
@@ -869,6 +869,7 @@ def register_tools(app):
             )
 
         try:
+            activity_id = int(activity_id)
             from garminconnect import Garmin
 
             fit_bytes = garmin_client.download_activity(

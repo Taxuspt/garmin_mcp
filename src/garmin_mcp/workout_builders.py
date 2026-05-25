@@ -356,16 +356,36 @@ def register_tools(app):
     async def schedule_week(week: List[Dict[str, Any]]) -> str:
         """Schedule a list of workouts for the week in a single call.
 
+        Idempotent: if a workout is already scheduled for that date, it is
+        reported as already scheduled and the POST is skipped (avoids
+        duplicating calendar entries).
+
         Args:
             week: List of dicts with keys: date (YYYY-MM-DD), workout_id (int)
         """
+        # Imported here (not at module top) to avoid any import-time ordering
+        # surprises between sibling modules. Both modules share the same
+        # garmin_client instance via configure() in __main__.
+        from garmin_mcp.workouts import _is_already_scheduled
+
         try:
             results = []
             for item in week:
                 calendar_date = item["date"]
                 workout_id = int(item["workout_id"])
+
+                if _is_already_scheduled(workout_id, calendar_date):
+                    results.append({
+                        "date": calendar_date,
+                        "workout_id": workout_id,
+                        "status": "already_scheduled",
+                        "idempotent": True,
+                    })
+                    continue
+
+                # garminconnect 0.3.2 dropped the .garth attribute; use .client.
                 url = f"workout-service/schedule/{workout_id}"
-                response = garmin_client.garth.post(
+                response = garmin_client.client.post(
                     "connectapi", url, json={"date": calendar_date}
                 )
                 if response.status_code == 200:
