@@ -174,9 +174,9 @@ bash scripts/build_dxt.sh   # produces garmin-mcp.dxt in the repo root
 
 ## Setup
 
-### Quick Start for Claude Desktop
+### Quick Start for MCP Clients
 
-The easiest way to use this MCP server with Claude Desktop is to authenticate once before adding the server to your configuration.
+The easiest way to use this MCP server with Claude Desktop, [Codex](https://openai.com/codex/), or another MCP client is to authenticate once before adding the server to your configuration.
 
 #### Prerequisites
 
@@ -186,7 +186,7 @@ The easiest way to use this MCP server with Claude Desktop is to authenticate on
 
 #### Step 1: Pre-authenticate (One-time)
 
-Before adding to Claude Desktop, authenticate once in your terminal:
+Before adding the server to your MCP client, authenticate once in your terminal:
 
 ```bash
 
@@ -211,7 +211,7 @@ uv run garmin-mcp-auth --verify
 GARMIN_EMAIL=your@email.com GARMIN_PASSWORD=secret garmin-mcp-auth
 ```
 
-If you don't have MFA enabled you can also skip `garmin-mcp-auth` and pass `GARMIN_EMAIL` and `GARMIN_PASSWORD` as env variables directly to Claude Desktop (or other MCP client, if supported), see below for an example.
+If you don't have MFA enabled you can also skip `garmin-mcp-auth` and pass `GARMIN_EMAIL` and `GARMIN_PASSWORD` as env variables directly to your MCP client, if supported. For better security, prefer the pre-authentication flow above and keep credentials out of MCP client configuration.
 
 #### Step 2: Configure Claude Desktop
 
@@ -239,9 +239,11 @@ Add to your Claude Desktop MCP settings **WITHOUT** credentials:
 
 **Important:** No `GARMIN_EMAIL` or `GARMIN_PASSWORD` needed in config! The server uses your saved tokens.
 
-#### Step 3: Restart Claude Desktop
+#### Step 3: Restart your MCP client
 
-Your Garmin data is now available in Claude!
+Your Garmin data is now available to your MCP client.
+
+For Codex and other clients, see the examples below.
 
 ---
 
@@ -374,6 +376,45 @@ You might have to add the full path to `uvx` you can check the full path with `w
 ```
 
 2. Restart Claude Desktop
+
+### With Codex
+
+Codex uses TOML for MCP server configuration. Add one of the following entries to `~/.codex/config.toml` after authenticating with `garmin-mcp-auth`.
+
+You can also ask your MCP-capable client to set this up for you. For example:
+
+```text
+Install the Garmin MCP server from https://github.com/Taxuspt/garmin_mcp, authenticate with garmin-mcp-auth, and add it to my MCP configuration without storing my Garmin email or password.
+```
+
+#### Directly from GitHub without cloning the repo
+
+```toml
+[mcp_servers.garmin]
+command = "uvx"
+args = [
+  "--python",
+  "3.12",
+  "--from",
+  "git+https://github.com/Taxuspt/garmin_mcp",
+  "garmin-mcp"
+]
+```
+
+#### Directly from your local copy of the repository
+
+```toml
+[mcp_servers.garmin-local]
+command = "uv"
+args = [
+  "--directory",
+  "/full/path/to/garmin_mcp",
+  "run",
+  "garmin-mcp"
+]
+```
+
+Restart your MCP client after saving the file.
 
 ### With Docker
 
