@@ -60,6 +60,29 @@ Some endpoints are not implemented due to performance or complexity consideratio
 
 If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
 
+## Tool Filtering
+
+This server registers 110+ tools by default, which can be a lot of context for
+an LLM to carry in every session. You can expose only the tools you need with
+two optional environment variables:
+
+| Env var | Effect |
+|---|---|
+| `GARMIN_ENABLED_TOOLS` | Comma-separated **allowlist** — if set, *only* these tools are registered. |
+| `GARMIN_DISABLED_TOOLS` | Comma-separated **denylist** — listed tools are skipped. Ignored if an allowlist is set. |
+
+Tool names are case-insensitive. With neither variable set, all tools register
+(unchanged default behaviour). Names that match no tool are ignored with a
+warning on stderr, which makes typos easy to spot.
+
+Example — expose only sleep, stress, and recent activities:
+
+```json
+"env": {
+  "GARMIN_ENABLED_TOOLS": "get_sleep_data,get_stress_summary,get_activities"
+}
+```
+
 ## High-level workout tools
 
 These builder tools let an LLM create and schedule workouts without writing raw Garmin JSON.
