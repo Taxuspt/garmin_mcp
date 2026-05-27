@@ -19,26 +19,76 @@ def register_tools(app):
     """Register all activity management tools with the MCP server app"""
 
     @app.tool()
-    async def get_activities_by_date(start_date: str, end_date: str, activity_type: str = "") -> str:
-        """Get activities data between specified dates, optionally filtered by activity type
+    async def get_activities_by_date(
+        start_date: str,
+        end_date: str,
+        activity_type: str = "",
+        page: int = 0,
+        page_size: int = 100,
+    ) -> str:
+        """Get activities between specified dates with pagination support.
+
+        For accounts with large activity histories, broad date ranges can return
+        thousands of activities in a single response. Use page and page_size to
+        retrieve activities in manageable chunks and avoid "result too large" errors.
+        Activities are ordered newest-first.
+
+        Note: total_count for a date range is not available from the Garmin API
+        without fetching all results. Use has_more and next_page to walk through
+        additional pages instead.
 
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
             activity_type: Optional activity type filter (e.g., cycling, running, swimming)
+            page: Zero-based page number (default 0)
+            page_size: Number of activities per page, max 200 (default 100)
         """
         try:
-            activities = garmin_client.get_activities_by_date(start_date, end_date, activity_type)
-            if not activities:
-                return f"No activities found between {start_date} and {end_date}" + \
-                       (f" for activity type '{activity_type}'" if activity_type else "")
+            # Clamp page_size to [1, 200]
+            page_size = min(max(1, page_size), 200)
+            start = page * page_size
 
-            # Curate the activity list
-            curated = {
-                "count": len(activities),
-                "date_range": {"start": start_date, "end": end_date},
-                "activities": []
+            # Call the Garmin API directly with explicit pagination params.
+            # The library's get_activities_by_date auto-fetches ALL matching
+            # activities in a loop (hardcoded limit=20 per request), which causes
+            # "Tool result is too large" errors on accounts with large histories.
+            # Calling connectapi directly lets us fetch exactly one page at a time.
+            params: Dict[str, Any] = {
+                "startDate": start_date,
+                "endDate": end_date,
+                "start": str(start),
+                "limit": str(page_size),
             }
+            if activity_type:
+                params["activityType"] = activity_type
+
+            activities = garmin_client.connectapi(
+                garmin_client.garmin_connect_activities,
+                params=params,
+            )
+
+            if not activities:
+                return json.dumps({
+                    "count": 0,
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": False,
+                    "date_range": {"start": start_date, "end": end_date},
+                    "activities": [],
+                }, indent=2)
+
+            has_more = len(activities) == page_size
+            curated: Dict[str, Any] = {
+                "count": len(activities),
+                "page": page,
+                "page_size": page_size,
+                "has_more": has_more,
+                "date_range": {"start": start_date, "end": end_date},
+                "activities": [],
+            }
+            if has_more:
+                curated["next_page"] = page + 1
 
             for a in activities:
                 activity = {
