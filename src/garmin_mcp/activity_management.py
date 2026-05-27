@@ -33,9 +33,22 @@ def register_tools(app):
         retrieve activities in manageable chunks and avoid "result too large" errors.
         Activities are ordered newest-first.
 
+        Pagination: when has_more is true the response includes next_page — pass
+        that value as page on the next call to retrieve the following page. Repeat
+        until has_more is false.
+
         Note: total_count for a date range is not available from the Garmin API
-        without fetching all results. Use has_more and next_page to walk through
-        additional pages instead.
+        without fetching all results. Use has_more / next_page to walk pages.
+
+        Each activity includes an event_type field with values such as:
+          - "race"          — explicitly tagged as a race by the user
+          - "training"      — explicitly tagged as a training activity
+          - "uncategorized" — no event type set; common for Peloton imports and
+                              untagged outdoor runs. Distinct from "training":
+                              filter for races with event_type == "race" rather
+                              than excluding "training", since many non-race
+                              activities appear as "uncategorized" not "training"
+          - field omitted   — activity pre-dates event type support in the API
 
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -165,7 +178,13 @@ def register_tools(app):
 
     @app.tool()
     async def get_activity(activity_id: Union[int, str]) -> str:
-        """Get basic activity information
+        """Get detailed information for a single activity.
+
+        Returns a comprehensive summary including timing, distance, heart rate,
+        elevation, training effect, and an event_type field. Common event_type
+        values: "race", "training", "uncategorized" (no event type set by the
+        user). The field is omitted for very old activities that pre-date event
+        type support in the Garmin API.
 
         Args:
             activity_id: ID of the activity to retrieve
@@ -528,13 +547,20 @@ def register_tools(app):
 
     @app.tool()
     async def get_activities(start: int = 0, limit: int = 20) -> str:
-        """Get activities with pagination support
+        """Get activities with pagination support.
 
-        Retrieves a paginated list of activities. Use this for browsing through
-        large activity lists more efficiently than get_activities_by_date.
+        Retrieves a paginated list of activities ordered newest-first. Use this
+        for browsing through large activity lists when you do not need to filter
+        by date range, or as a complement to get_activities_by_date.
+
+        Each activity includes an event_type field. Common values: "race",
+        "training", "uncategorized" (no event type set by the user — common for
+        Peloton imports and untagged runs). Filter for races with
+        event_type == "race" rather than excluding "training", as many non-race
+        activities appear as "uncategorized" rather than "training".
 
         Args:
-            start: Starting index (default 0, activities are ordered newest first)
+            start: Starting index (default 0)
             limit: Maximum number of activities to return (default 20, max 100)
         """
         try:

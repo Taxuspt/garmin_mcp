@@ -11,7 +11,7 @@ MOCK_ACTIVITIES = [
         "activityId": 12345678901,
         "activityName": "Morning Run",
         "activityType": {"typeKey": "running", "typeId": 1},
-        "eventType": {"typeKey": "race", "typeId": 1},
+        "eventType": {"typeKey": "race", "typeId": 1},  # production values: "race", "training", "uncategorized"
         "startTimeLocal": "2024-01-15 07:00:00",
         "distance": 5000.0,
         "duration": 1800.0,
