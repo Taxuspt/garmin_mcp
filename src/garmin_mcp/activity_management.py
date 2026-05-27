@@ -45,6 +45,7 @@ def register_tools(app):
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
@@ -93,6 +94,7 @@ def register_tools(app):
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
@@ -133,6 +135,7 @@ def register_tools(app):
                 "id": activity.get('activityId'),
                 "name": activity.get('activityName'),
                 "type": activity_type.get('typeKey'),
+                "event_type": (activity.get('eventType') or {}).get('typeKey'),
                 "parent_type": activity_type.get('parentTypeId'),
 
                 # Timing
@@ -507,6 +510,7 @@ def register_tools(app):
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
