@@ -19,32 +19,96 @@ def register_tools(app):
     """Register all activity management tools with the MCP server app"""
 
     @app.tool()
-    async def get_activities_by_date(start_date: str, end_date: str, activity_type: str = "") -> str:
-        """Get activities data between specified dates, optionally filtered by activity type
+    async def get_activities_by_date(
+        start_date: str,
+        end_date: str,
+        activity_type: str = "",
+        page: int = 0,
+        page_size: int = 100,
+    ) -> str:
+        """Get activities between specified dates with pagination support.
+
+        For accounts with large activity histories, broad date ranges can return
+        thousands of activities in a single response. Use page and page_size to
+        retrieve activities in manageable chunks and avoid "result too large" errors.
+        Activities are ordered newest-first.
+
+        Pagination: when has_more is true the response includes next_page — pass
+        that value as page on the next call to retrieve the following page. Repeat
+        until has_more is false.
+
+        Note: total_count for a date range is not available from the Garmin API
+        without fetching all results. Use has_more / next_page to walk pages.
+
+        Each activity includes an event_type field with values such as:
+          - "race"          — explicitly tagged as a race by the user
+          - "training"      — explicitly tagged as a training activity
+          - "uncategorized" — no event type set; common for Peloton imports and
+                              untagged outdoor runs. Distinct from "training":
+                              filter for races with event_type == "race" rather
+                              than excluding "training", since many non-race
+                              activities appear as "uncategorized" not "training"
+          - field omitted   — activity pre-dates event type support in the API
 
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
             activity_type: Optional activity type filter (e.g., cycling, running, swimming)
+            page: Zero-based page number (default 0)
+            page_size: Number of activities per page, max 200 (default 100)
         """
         try:
-            activities = garmin_client.get_activities_by_date(start_date, end_date, activity_type)
-            if not activities:
-                return f"No activities found between {start_date} and {end_date}" + \
-                       (f" for activity type '{activity_type}'" if activity_type else "")
+            # Clamp page_size to [1, 200]
+            page_size = min(max(1, page_size), 200)
+            start = page * page_size
 
-            # Curate the activity list
-            curated = {
-                "count": len(activities),
-                "date_range": {"start": start_date, "end": end_date},
-                "activities": []
+            # Call the Garmin API directly with explicit pagination params.
+            # The library's get_activities_by_date auto-fetches ALL matching
+            # activities in a loop (hardcoded limit=20 per request), which causes
+            # "Tool result is too large" errors on accounts with large histories.
+            # Calling connectapi directly lets us fetch exactly one page at a time.
+            params: Dict[str, Any] = {
+                "startDate": start_date,
+                "endDate": end_date,
+                "start": str(start),
+                "limit": str(page_size),
             }
+            if activity_type:
+                params["activityType"] = activity_type
+
+            activities = garmin_client.connectapi(
+                garmin_client.garmin_connect_activities,
+                params=params,
+            )
+
+            if not activities:
+                return json.dumps({
+                    "count": 0,
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": False,
+                    "date_range": {"start": start_date, "end": end_date},
+                    "activities": [],
+                }, indent=2)
+
+            has_more = len(activities) == page_size
+            curated: Dict[str, Any] = {
+                "count": len(activities),
+                "page": page,
+                "page_size": page_size,
+                "has_more": has_more,
+                "date_range": {"start": start_date, "end": end_date},
+                "activities": [],
+            }
+            if has_more:
+                curated["next_page"] = page + 1
 
             for a in activities:
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
@@ -93,6 +157,7 @@ def register_tools(app):
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
@@ -113,7 +178,13 @@ def register_tools(app):
 
     @app.tool()
     async def get_activity(activity_id: Union[int, str]) -> str:
-        """Get basic activity information
+        """Get detailed information for a single activity.
+
+        Returns a comprehensive summary including timing, distance, heart rate,
+        elevation, training effect, and an event_type field. Common event_type
+        values: "race", "training", "uncategorized" (no event type set by the
+        user). The field is omitted for very old activities that pre-date event
+        type support in the Garmin API.
 
         Args:
             activity_id: ID of the activity to retrieve
@@ -133,6 +204,7 @@ def register_tools(app):
                 "id": activity.get('activityId'),
                 "name": activity.get('activityName'),
                 "type": activity_type.get('typeKey'),
+                "event_type": (activity.get('eventType') or {}).get('typeKey'),
                 "parent_type": activity_type.get('parentTypeId'),
 
                 # Timing
@@ -475,13 +547,20 @@ def register_tools(app):
 
     @app.tool()
     async def get_activities(start: int = 0, limit: int = 20) -> str:
-        """Get activities with pagination support
+        """Get activities with pagination support.
 
-        Retrieves a paginated list of activities. Use this for browsing through
-        large activity lists more efficiently than get_activities_by_date.
+        Retrieves a paginated list of activities ordered newest-first. Use this
+        for browsing through large activity lists when you do not need to filter
+        by date range, or as a complement to get_activities_by_date.
+
+        Each activity includes an event_type field. Common values: "race",
+        "training", "uncategorized" (no event type set by the user — common for
+        Peloton imports and untagged runs). Filter for races with
+        event_type == "race" rather than excluding "training", as many non-race
+        activities appear as "uncategorized" rather than "training".
 
         Args:
-            start: Starting index (default 0, activities are ordered newest first)
+            start: Starting index (default 0)
             limit: Maximum number of activities to return (default 20, max 100)
         """
         try:
@@ -507,6 +586,7 @@ def register_tools(app):
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
