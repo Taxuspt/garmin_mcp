@@ -441,6 +441,71 @@ async def test_get_activity_types_tool(app_with_activity_management, mock_garmin
     mock_garmin_client.get_activity_types.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_get_activities_includes_event_type(app_with_activity_management, mock_garmin_client):
+    """Test get_activities returns event_type field for each activity"""
+    mock_garmin_client.get_activities.return_value = MOCK_ACTIVITIES
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities",
+        {"start": 0, "limit": 20}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities"][0]["event_type"] == "race"
+    assert data["activities"][1]["event_type"] == "training"
+
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_includes_event_type(app_with_activity_management, mock_garmin_client):
+    """Test get_activities_by_date returns event_type field for each activity"""
+    mock_garmin_client.get_activities_by_date.return_value = MOCK_ACTIVITIES
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities"][0]["event_type"] == "race"
+    assert data["activities"][1]["event_type"] == "training"
+
+
+@pytest.mark.asyncio
+async def test_get_activities_omits_event_type_when_absent(app_with_activity_management, mock_garmin_client):
+    """Test that event_type is omitted gracefully when not present in the API response"""
+    activity_without_event_type = {
+        "activityId": 99999,
+        "activityName": "Old Activity",
+        "activityType": {"typeKey": "running", "typeId": 1},
+        "startTimeLocal": "2024-01-01 08:00:00",
+        "duration": 1200.0,
+    }
+    mock_garmin_client.get_activities.return_value = [activity_without_event_type]
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities",
+        {"start": 0, "limit": 20}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert "event_type" not in data["activities"][0]
+
+
+@pytest.mark.asyncio
+async def test_get_activity_includes_event_type(app_with_activity_management, mock_garmin_client):
+    """Test get_activity detail view returns event_type field"""
+    mock_garmin_client.get_activity.return_value = MOCK_ACTIVITY_DETAILS
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": 12345678901}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["event_type"] == "race"
+
+
 # Error handling tests
 @pytest.mark.asyncio
 async def test_get_activities_by_date_no_data(app_with_activity_management, mock_garmin_client):
