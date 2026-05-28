@@ -8,12 +8,15 @@ from unittest.mock import Mock, patch, MagicMock
 import pytest
 
 from garmin_mcp.token_utils import (
+    ensure_token_directory,
     get_token_path,
     get_token_base64_path,
+    resolve_path,
     token_exists,
     validate_tokens,
     remove_tokens,
     get_token_info,
+    without_token_env,
 )
 
 
@@ -32,6 +35,11 @@ class TestGetTokenPath:
         with patch.dict(os.environ, {"GARMINTOKENS": "/custom/path"}):
             assert get_token_path() == "/custom/path"
 
+    def test_ignores_unresolved_dxt_placeholder(self):
+        """Test that unresolved DXT placeholders fall back to the default path."""
+        with patch.dict(os.environ, {"GARMINTOKENS": "${user_config.token_path}"}):
+            assert get_token_path() == "~/.garminconnect"
+
 
 class TestGetTokenBase64Path:
     """Tests for get_token_base64_path function."""
@@ -49,6 +57,42 @@ class TestGetTokenBase64Path:
             assert get_token_base64_path() == "/custom/path.b64"
 
 
+class TestResolvePath:
+    """Tests for path normalization."""
+
+    def test_expands_home_env_var(self):
+        """Test DXT-style HOME defaults resolve to absolute paths."""
+        expected = str(Path.home() / ".garminconnect")
+        assert resolve_path("${HOME}/.garminconnect") == expected
+
+    def test_expands_tilde(self):
+        """Test shell-style home paths resolve to absolute paths."""
+        expected = str(Path.home() / ".garminconnect")
+        assert resolve_path("~/.garminconnect") == expected
+
+    def test_placeholder_uses_default(self):
+        """Test unresolved user_config placeholders do not become real paths."""
+        expected = str(Path.home() / ".garminconnect")
+        assert resolve_path("${user_config.token_path}") == expected
+
+
+class TestWithoutTokenEnv:
+    """Tests for removing token env vars during credential login."""
+
+    def test_temporarily_removes_token_env(self):
+        """Test token env vars are removed only inside the context."""
+        with patch.dict(
+            os.environ,
+            {"GARMINTOKENS": "/tmp/tokens", "GARMINTOKENS_BASE64": "/tmp/tokens.b64"},
+        ):
+            with without_token_env():
+                assert "GARMINTOKENS" not in os.environ
+                assert "GARMINTOKENS_BASE64" not in os.environ
+
+            assert os.environ["GARMINTOKENS"] == "/tmp/tokens"
+            assert os.environ["GARMINTOKENS_BASE64"] == "/tmp/tokens.b64"
+
+
 class TestTokenExists:
     """Tests for token_exists function."""
 
@@ -60,7 +104,14 @@ class TestTokenExists:
     def test_token_file_exists(self):
         """Test that existing token file is detected."""
         with tempfile.NamedTemporaryFile() as tmpfile:
+            tmpfile.write(b"token")
+            tmpfile.flush()
             assert token_exists(tmpfile.name) is True
+
+    def test_empty_token_file_does_not_exist(self):
+        """Test that empty placeholder files are not treated as valid token stores."""
+        with tempfile.NamedTemporaryFile() as tmpfile:
+            assert token_exists(tmpfile.name) is False
 
     def test_token_not_exists(self):
         """Test that non-existent token path is detected."""
@@ -147,6 +198,39 @@ class TestValidateTokens:
 
         assert is_valid is False
         assert "authentication failed" in error.lower() or "failed" in error.lower()
+
+
+class TestEnsureTokenDirectory:
+    """Tests for preparing token storage paths."""
+
+    def test_creates_missing_directory(self):
+        """Test that missing token directories are created."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_dir = Path(tmpdir) / "tokens"
+            result = ensure_token_directory(str(token_dir))
+
+            assert result == str(token_dir)
+            assert token_dir.is_dir()
+
+    def test_replaces_empty_placeholder_file(self):
+        """Test that an empty file can be converted into the token directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_dir = Path(tmpdir) / "tokens"
+            token_dir.write_text("")
+
+            result = ensure_token_directory(str(token_dir))
+
+            assert result == str(token_dir)
+            assert token_dir.is_dir()
+
+    def test_rejects_non_empty_file(self):
+        """Test that non-empty files are not overwritten."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_dir = Path(tmpdir) / "tokens"
+            token_dir.write_text("do not remove")
+
+            with pytest.raises(ValueError):
+                ensure_token_directory(str(token_dir))
 
 
 class TestRemoveTokens:

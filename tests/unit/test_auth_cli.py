@@ -20,6 +20,13 @@ from garmin_mcp.auth_cli import (
 class TestGetMfa:
     """Tests for get_mfa function."""
 
+    def test_get_mfa_from_env(self):
+        """Test getting MFA code from environment."""
+        with patch.dict(os.environ, {"GARMIN_MFA_CODE": " 654321 "}):
+            result = get_mfa()
+
+        assert result == "654321"
+
     @patch("builtins.input", return_value="123456")
     @patch("builtins.print")
     def test_get_mfa_success(self, mock_print, mock_input):

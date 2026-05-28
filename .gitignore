@@ -8,6 +8,8 @@ __pycache__/
 dist/
 build/
 *.egg
+.dxt-build/
+*.dxt
 
 # Virtual environments
 .env

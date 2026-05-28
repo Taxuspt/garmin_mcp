@@ -1,0 +1,165 @@
+{
+  "dxt_version": "0.1",
+  "name": "garmin-mcp",
+  "display_name": "Garmin Connect",
+  "version": "0.1.1",
+  "description": "Connect Claude to Garmin Connect fitness data, smart baselines, anomalies, lagged correlations, and weekly health reviews.",
+  "long_description": "This MCP server bridges Claude to your personal Garmin Connect data via the garminconnect Python library.\n\n**Capabilities:**\n- Activities: list, detail, splits, laps, heart-rate zones, weather\n- Health: steps, sleep, stress, body battery, HRV, SpO2, respiration\n- Smart analytics: personal baselines, anomaly detection, lagged correlations, weekly review\n- Custom reports: grouped historical reports that can be saved locally and rerun\n- Training: readiness, load trends (CTL/ATL/TSB), VO2 max trend, power zones\n- Workouts: upload, schedule, download, bulk operations\n- Body: weight, body composition, weigh-ins\n- Gear, badges, challenges, nutrition logging\n- Auth tools: check saved tokens, start Garmin login, request OTP only when Garmin asks, and save tokens\n\n**First-time setup:** Choose a persistent token directory. You can leave credentials blank and ask Claude to run check_garmin_auth, then login_to_garmin. Accounts without OTP save tokens in one call. If Garmin emails you a verification code, Claude will get an mfa_required response and you can run login_to_garmin again with the OTP code.",
+  "author": {
+    "name": "Alexandre Domingues",
+    "url": "https://github.com/Taxuspt/garmin_mcp"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Taxuspt/garmin_mcp"
+  },
+  "homepage": "https://github.com/Taxuspt/garmin_mcp",
+  "license": "MIT",
+  "keywords": [
+    "garmin",
+    "fitness",
+    "health",
+    "running",
+    "cycling",
+    "training",
+    "garmin-connect"
+  ],
+  "server": {
+    "type": "python",
+    "entry_point": "src/garmin_mcp/__main__.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${__dirname}",
+        "run",
+        "garmin-mcp"
+      ],
+      "env": {
+        "GARMINTOKENS": "${user_config.token_path}",
+        "GARMIN_EMAIL": "${user_config.garmin_email}",
+        "GARMIN_PASSWORD": "${user_config.garmin_password}",
+        "GARMIN_MFA_CODE": "${user_config.garmin_mfa_code}",
+        "GARMIN_REPORTS_PATH": "${user_config.reports_path}"
+      }
+    }
+  },
+  "user_config": {
+    "token_path": {
+      "type": "directory",
+      "title": "Token storage directory",
+      "description": "Directory where your Garmin OAuth tokens are stored. Use a persistent folder, then run the login_to_garmin tool or garmin-mcp-auth to save tokens.",
+      "required": false,
+      "default": "${HOME}/.garminconnect"
+    },
+    "garmin_email": {
+      "type": "string",
+      "title": "Garmin email (optional)",
+      "description": "Your Garmin Connect email address. Leave blank if you have already run garmin-mcp-auth.",
+      "required": false,
+      "sensitive": false
+    },
+    "garmin_password": {
+      "type": "string",
+      "title": "Garmin password (optional)",
+      "description": "Your Garmin Connect password. Leave blank if you have already run garmin-mcp-auth.",
+      "required": false,
+      "sensitive": true
+    },
+    "garmin_mfa_code": {
+      "type": "string",
+      "title": "One-time Garmin MFA code (optional)",
+      "description": "Paste the code Garmin emailed or sent to you when first logging in. Leave blank once tokens exist.",
+      "required": false,
+      "sensitive": true
+    },
+    "reports_path": {
+      "type": "file",
+      "title": "Saved reports file",
+      "description": "Local JSON file where custom health report definitions are saved.",
+      "required": false,
+      "default": "${HOME}/.garmin_mcp_reports.json"
+    }
+  },
+  "tools": [
+    {
+      "name": "check_garmin_auth",
+      "description": "Check whether saved Garmin tokens exist and still work"
+    },
+    {
+      "name": "login_to_garmin",
+      "description": "Log in to Garmin, request OTP only when Garmin asks for it, and save reusable tokens"
+    },
+    {
+      "name": "get_activities",
+      "description": "List recent activities with pagination"
+    },
+    {
+      "name": "get_activity",
+      "description": "Get detailed information about a single activity"
+    },
+    {
+      "name": "get_stats",
+      "description": "Get daily health statistics (steps, HR, stress, body battery, sleep)"
+    },
+    {
+      "name": "get_sleep_data",
+      "description": "Get detailed sleep data including stages and score"
+    },
+    {
+      "name": "get_training_readiness",
+      "description": "Get training readiness score and contributing factors"
+    },
+    {
+      "name": "get_hrv_data",
+      "description": "Get heart rate variability data"
+    },
+    {
+      "name": "upload_workout",
+      "description": "Upload a structured workout to Garmin Connect"
+    },
+    {
+      "name": "get_body_composition",
+      "description": "Get body composition measurements"
+    },
+    {
+      "name": "get_health_baselines",
+      "description": "Compare recent Garmin health metrics against personal rolling baselines"
+    },
+    {
+      "name": "get_wellness_anomalies",
+      "description": "Find unusual Garmin health days compared with recent personal baselines"
+    },
+    {
+      "name": "get_lagged_health_correlations",
+      "description": "Find delayed relationships between training, sleep, stress, HRV, readiness, and recovery"
+    },
+    {
+      "name": "get_weekly_health_review",
+      "description": "Summarize the last week against the prior week with anomalies and lagged relationships"
+    },
+    {
+      "name": "list_health_report_metrics",
+      "description": "List metric keys, groupings, and aggregations available for custom health reports"
+    },
+    {
+      "name": "run_custom_health_report",
+      "description": "Run an ad hoc or saved grouped historical health report"
+    },
+    {
+      "name": "save_custom_health_report",
+      "description": "Save a reusable custom health report definition locally"
+    },
+    {
+      "name": "list_saved_health_reports",
+      "description": "List locally saved custom health reports"
+    }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}

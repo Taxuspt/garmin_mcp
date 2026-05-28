@@ -24,7 +24,16 @@ from garmin_mcp import workouts
 from garmin_mcp import workout_templates
 from garmin_mcp import data_management
 from garmin_mcp import womens_health
+from garmin_mcp import analytics
+from garmin_mcp import auth_tools
 from garmin_mcp.client_resolver import set_global_client
+from garmin_mcp.token_utils import (
+    ensure_token_directory,
+    get_token_base64_path,
+    get_token_path,
+    resolve_path,
+    without_token_env,
+)
 
 
 def is_interactive_terminal() -> bool:
@@ -42,10 +51,15 @@ def get_mfa() -> str:
     Raises:
         RuntimeError: If running in non-interactive environment
     """
+    mfa_code = os.getenv("GARMIN_MFA_CODE") or os.getenv("GARMIN_OTP")
+    if mfa_code:
+        return mfa_code.strip()
+
     if not is_interactive_terminal():
         print(
             "\nERROR: MFA code required but no interactive terminal available.\n"
-            "Please run 'garmin-mcp-auth' in your terminal first.\n"
+            "Please run 'garmin-mcp-auth' in your terminal first, or set GARMIN_MFA_CODE "
+            "to the one-time code Garmin sent you.\n"
             "See: https://github.com/Taxuspt/garmin_mcp#mfa-setup\n",
             file=sys.stderr,
         )
@@ -79,8 +93,8 @@ elif password_file:
     with open(password_file, "r") as password_file:
         password = password_file.read().rstrip()
 
-tokenstore = os.getenv("GARMINTOKENS") or "~/.garminconnect"
-tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
+tokenstore = resolve_path(get_token_path())
+tokenstore_base64 = resolve_path(get_token_base64_path(), "~/.garminconnect_base64")
 
 
 def init_api(email, password):
@@ -120,9 +134,8 @@ def init_api(email, password):
             print(
                 "ERROR: OAuth tokens not found and no interactive terminal available.\n"
                 "Please authenticate first:\n"
-                "  1. Run: garmin-mcp-auth\n"
-                "  2. Enter your credentials and MFA code\n"
-                "  3. Restart your MCP client\n"
+                "  - In Claude, run login_to_garmin and provide an OTP only if Garmin asks.\n"
+                "  - Or run garmin-mcp-auth in a terminal before starting this server.\n"
                 f"Tokens will be saved to: {tokenstore}\n",
                 file=sys.stderr,
             )
@@ -137,8 +150,10 @@ def init_api(email, password):
             garmin = Garmin(
                 email=email, password=password, is_cn=False, prompt_mfa=get_mfa
             )
-            garmin.login()
+            with without_token_env():
+                garmin.login()
             # Save Oauth1 and Oauth2 token files to directory for next login
+            ensure_token_directory(tokenstore)
             garmin.garth.dump(tokenstore)
             print(
                 f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n",
@@ -146,7 +161,7 @@ def init_api(email, password):
             )
             # Encode Oauth1 and Oauth2 tokens to base64 string and safe to file for next login (alternative way)
             token_base64 = garmin.garth.dumps()
-            dir_path = os.path.expanduser(tokenstore_base64)
+            dir_path = resolve_path(tokenstore_base64, "~/.garminconnect_base64")
             with open(dir_path, "w") as token_file:
                 token_file.write(token_base64)
             print(
@@ -157,6 +172,7 @@ def init_api(email, password):
             FileNotFoundError,
             GarthHTTPError,
             GarminConnectAuthenticationError,
+            RuntimeError,
             requests.exceptions.HTTPError,
         ) as err:
             error_msg = str(err)
@@ -186,13 +202,16 @@ def init_api(email, password):
                     )
                 else:
                     print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
+            elif isinstance(err, RuntimeError):
+                print(str(err).split(":")[0], file=sys.stderr)
             elif isinstance(err, requests.exceptions.HTTPError):
                 print("Network error. Please check your connection.", file=sys.stderr)
             else:
                 print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
 
             print(
-                f"\nTip: Run 'garmin-mcp-auth' to authenticate interactively.",
+                "\nTip: Run the MCP tool 'login_to_garmin', or run "
+                "'garmin-mcp-auth' in a terminal.",
                 file=sys.stderr,
             )
             return None
@@ -200,21 +219,9 @@ def init_api(email, password):
     return garmin
 
 
-def main():
-    """Initialize the MCP server and register all tools"""
-
-    # Initialize Garmin client
-    garmin_client = init_api(email, password)
-    if not garmin_client:
-        print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
-        return
-
-    print("Garmin Connect client initialized successfully.", file=sys.stderr)
-
-    # Set global client for client_resolver (used by tool functions)
+def activate_garmin_client(garmin_client):
+    """Make a Garmin client available to all stdio MCP tools."""
     set_global_client(garmin_client)
-
-    # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)
     health_wellness.configure(garmin_client)
     user_profile.configure(garmin_client)
@@ -226,11 +233,39 @@ def main():
     workouts.configure(garmin_client)
     data_management.configure(garmin_client)
     womens_health.configure(garmin_client)
+    analytics.configure(garmin_client)
+
+
+def main():
+    """Initialize the MCP server and register all tools"""
+
+    auth_tools.configure(activate_garmin_client)
+
+    # Initialize Garmin client when tokens already exist. If they do not, keep
+    # the MCP server alive so check_garmin_auth/login_to_garmin can fix it.
+    try:
+        garmin_client = init_api(email, password)
+    except Exception as err:
+        print(
+            f"Garmin Connect auto-login skipped: {str(err).split(':')[0]}",
+            file=sys.stderr,
+        )
+        garmin_client = None
+    if garmin_client:
+        activate_garmin_client(garmin_client)
+        print("Garmin Connect client initialized successfully.", file=sys.stderr)
+    else:
+        print(
+            "Garmin Connect client not initialized. Auth tools are available; run "
+            "check_garmin_auth or login_to_garmin.",
+            file=sys.stderr,
+        )
 
     # Create the MCP app
     app = FastMCP("Garmin Connect v1.0")
 
     # Register tools from all modules
+    app = auth_tools.register_tools(app)
     app = activity_management.register_tools(app)
     app = health_wellness.register_tools(app)
     app = user_profile.register_tools(app)
@@ -242,6 +277,7 @@ def main():
     app = workouts.register_tools(app)
     app = data_management.register_tools(app)
     app = womens_health.register_tools(app)
+    app = analytics.register_tools(app)
 
     # Register resources (workout templates)
     app = workout_templates.register_resources(app)

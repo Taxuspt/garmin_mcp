@@ -37,6 +37,7 @@ def mock_garmin_client():
     client.get_spo2_data = Mock(return_value={})
     client.get_all_day_stress = Mock(return_value={})
     client.get_all_day_events = Mock(return_value={})
+    client.get_activities_by_date = Mock(return_value=[])
 
     return client
 

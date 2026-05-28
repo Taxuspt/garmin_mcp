@@ -19,11 +19,16 @@ from garmin_mcp.token_utils import (
     token_exists,
     validate_tokens,
     get_token_info,
+    without_token_env,
 )
 
 
 def get_mfa() -> str:
     """Get MFA code from user input."""
+    mfa_code = os.getenv("GARMIN_MFA_CODE") or os.getenv("GARMIN_OTP")
+    if mfa_code:
+        return mfa_code.strip()
+
     print("\nGarmin Connect MFA required. Please check your email/phone for the code.")
     return input("Enter MFA code: ")
 
@@ -103,11 +108,11 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
             sys.stderr = old_stderr
 
         if is_valid:
-            print("✓ Existing tokens are valid. Authentication not needed.")
+            print("OK: Existing tokens are valid. Authentication not needed.")
             print(f"  Use --force-reauth to generate new tokens.")
             return True
         else:
-            print(f"✗ Existing tokens are invalid: {error_msg}")
+            print(f"ERROR: Existing tokens are invalid: {error_msg}")
             print("  Proceeding with re-authentication...\n")
 
     # Get credentials
@@ -123,29 +128,30 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
     try:
         garmin = Garmin(email=email, password=password, is_cn=False, prompt_mfa=get_mfa)
-        garmin.login()
+        with without_token_env():
+            garmin.login()
 
         # Save tokens to directory
         garmin.garth.dump(token_path)
-        print(f"\n✓ OAuth tokens saved to: {os.path.expanduser(token_path)}")
+        print(f"\nOK: OAuth tokens saved to: {os.path.expanduser(token_path)}")
 
         # Save tokens as base64
         token_base64 = garmin.garth.dumps()
         expanded_base64_path = os.path.expanduser(token_base64_path)
         with open(expanded_base64_path, "w") as token_file:
             token_file.write(token_base64)
-        print(f"✓ OAuth tokens (base64) saved to: {expanded_base64_path}")
+        print(f"OK: OAuth tokens (base64) saved to: {expanded_base64_path}")
 
         # Verify tokens work
         print("\nVerifying tokens...")
         try:
             # Try to get user's full name as a simple verification
             full_name = garmin.get_full_name()
-            print(f"✓ Authentication successful!")
+            print("OK: Authentication successful!")
             print(f"  Logged in as: {full_name}")
         except Exception:
             # Fallback: just confirm tokens were saved
-            print(f"✓ Authentication successful!")
+            print("OK: Authentication successful!")
             print(f"  OAuth tokens saved and ready to use.")
 
         print("\n" + "=" * 60)
@@ -161,7 +167,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
     except GarminConnectAuthenticationError as e:
         error_msg = str(e)
-        print(f"\n✗ Authentication failed", file=sys.stderr)
+        print("\nERROR: Authentication failed", file=sys.stderr)
 
         # Provide helpful hints based on error type
         if "MFA" in error_msg or "code" in error_msg.lower():
@@ -177,7 +183,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
     except GarthHTTPError as e:
         error_msg = str(e)
-        print(f"\n✗ Authentication error", file=sys.stderr)
+        print("\nERROR: Authentication error", file=sys.stderr)
 
         if "429" in error_msg:
             print("  Too many requests. Please wait a few minutes and try again.", file=sys.stderr)
@@ -191,7 +197,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         return False
 
     except requests.exceptions.HTTPError as e:
-        print(f"\n✗ Network error", file=sys.stderr)
+        print("\nERROR: Network error", file=sys.stderr)
 
         if e.response is not None:
             if e.response.status_code == 429:
@@ -207,7 +213,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
     except Exception as e:
         error_msg = str(e)
-        print(f"\n✗ Unexpected error", file=sys.stderr)
+        print("\nERROR: Unexpected error", file=sys.stderr)
 
         # Only show detailed error in debug scenarios
         if "timeout" in error_msg.lower():
@@ -234,17 +240,17 @@ def verify_tokens(token_path: str) -> bool:
     info = get_token_info(token_path)
 
     if not info["exists"]:
-        print(f"✗ Tokens not found at: {info['expanded_path']}")
+        print(f"ERROR: Tokens not found at: {info['expanded_path']}")
         print("\nRun 'garmin-mcp-auth' without --verify to authenticate.")
         return False
 
     if info["valid"]:
-        print(f"✓ Tokens are valid!")
+        print("OK: Tokens are valid!")
         print(f"  Location: {info['expanded_path']}")
         print("\nYou can use the Garmin MCP server without re-authenticating.")
         return True
     else:
-        print(f"✗ Tokens are invalid: {info['error']}")
+        print(f"ERROR: Tokens are invalid: {info['error']}")
         print("\nRun 'garmin-mcp-auth --force-reauth' to re-authenticate.")
         return False
 

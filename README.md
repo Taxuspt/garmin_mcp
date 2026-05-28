@@ -16,21 +16,28 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - Manage gear and equipment
 - Access workouts and training plans
 - Weekly health aggregates (steps, stress, intensity minutes)
+- Smart historical analytics: personal baselines, anomalies, lagged correlations,
+  and weekly health review summaries
+- Custom health reports that can be grouped, saved locally, and rerun
+- Built-in auth tools to check saved tokens and log in with OTP only when Garmin
+  asks for it
 
 ### Tool Coverage
 
 This MCP server implements **95+ tools** covering ~88% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.2.38):
 
-- ✅ Activity Management (14 tools)
-- ✅ Health & Wellness (30 tools) - includes custom lightweight summary tools
-- ✅ Training & Performance (9 tools)
-- ✅ Workouts (8 tools)
-- ✅ Devices (7 tools)
-- ✅ Gear Management (5 tools)
-- ✅ Weight Tracking (5 tools)
-- ✅ Challenges & Badges (10 tools)
-- ✅ Women's Health (3 tools)
-- ✅ User Profile (3 tools)
+- Activity Management (14 tools)
+- Health & Wellness (30 tools) - includes custom lightweight summary tools
+- Training & Performance (9 tools)
+- Workouts (8 tools)
+- Devices (7 tools)
+- Gear Management (5 tools)
+- Weight Tracking (5 tools)
+- Challenges & Badges (10 tools)
+- Women's Health (3 tools)
+- User Profile (3 tools)
+- Smart Analytics (8 tools)
+- Authentication (2 tools)
 
 ### Intentionally Skipped Endpoints
 
@@ -48,7 +55,140 @@ Some endpoints are not implemented due to performance or complexity consideratio
 
 If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
 
+### Tool Reference
+
+Most Garmin data tools are direct wrappers around `python-garminconnect`.
+The tools below are extra server tools for authentication, analytics, and saved
+custom reports.
+
+#### Authentication Tools
+
+These tools are available even before Garmin login is complete. This lets the
+MCP server start cleanly in Claude Desktop, then finish login from Claude.
+
+| Tool | What it does | Main inputs | Typical result |
+| --- | --- | --- | --- |
+| `check_garmin_auth` | Checks whether saved Garmin tokens exist and still work. | `token_path` | `authenticated`, token path, token status, and next step |
+| `login_to_garmin` | Logs in to Garmin Connect, handles OTP only when Garmin asks, saves tokens, and activates the running server. | `email`, `password`, `otp_code`, `token_path`, `token_base64_path`, `force_reauth` | `authenticated`, `missing_credentials`, `mfa_required`, or `failed` |
+
+Use `check_garmin_auth` first. If it says tokens are missing or invalid, run
+`login_to_garmin`. Accounts without OTP save tokens in one call. Accounts with
+OTP return `mfa_required`, then you run `login_to_garmin` again with the code.
+
+#### Smart Analytics Tools
+
+The analytics tools fetch a bounded Garmin history window and return compact
+derived results instead of full raw Garmin payloads. The default window is
+90 days and the hard cap is 180 days, so calls stay manageable for MCP clients.
+
+| Tool | What it does | Main inputs | Typical result |
+| --- | --- | --- | --- |
+| `get_health_baselines` | Compares current health metrics with personal rolling baselines. | `end_date`, `days`, `baseline_window` | Latest value, baseline, delta, and direction per metric |
+| `get_wellness_anomalies` | Finds unusual days using z-scores against recent history. | `end_date`, `days`, `baseline_window`, `z_threshold` | Count and list of unusual metric days |
+| `get_lagged_health_correlations` | Checks whether one metric tends to lead another by 1 to 14 days. | `end_date`, `days`, `max_lag_days` | Strongest delayed metric relationships |
+| `get_weekly_health_review` | Compares the last 7 days with the prior 7 days. | `end_date` | Weekly comparison, notable anomalies, and delayed relationships |
+| `list_health_report_metrics` | Lists supported metric keys, grouping options, and aggregation options. | None | Metrics, units, directions, groups, aggregations, and report store path |
+| `run_custom_health_report` | Runs an ad hoc or saved grouped health report. | `end_date`, `days`, `metrics`, `group_by`, `aggregation`, `saved_report_name`, `include_daily_rows` | Grouped rows, chart hint, and optional daily raw rows |
+| `save_custom_health_report` | Saves a reusable custom report definition locally. | `name`, `metrics`, `group_by`, `aggregation`, `days`, `end_date`, `description` | Saved report definition |
+| `list_saved_health_reports` | Lists locally saved custom report definitions. | None | Report store path, count, and saved reports |
+
+Custom reports support these report options:
+
+- Groups: `date`, `week`, `month`
+- Aggregations: `avg`, `sum`, `min`, `max`, `latest`
+- Default metrics: `steps`, `sleep_score`, `stress_avg`, `overnight_hrv`,
+  `training_readiness`, `recovery_pressure`
+- Raw rows: set `include_daily_rows` to `true` in `run_custom_health_report`
+
+Saved report definitions are stored in `~/.garmin_mcp_reports.json` by default.
+Set `GARMIN_REPORTS_PATH` if you want a different JSON file location.
+
 ## Setup
+
+### Desktop Extension (DXT)
+
+This branch includes a Desktop Extension manifest for Claude Desktop.
+
+Build it locally:
+
+```bash
+./scripts/build_dxt.sh
+```
+
+The built file is `garmin-mcp.dxt`.
+
+The DXT package includes the server source, `pyproject.toml`, and `uv.lock`.
+It runs from Claude Desktop's installed extension directory through
+`${__dirname}`, so it does not depend on this repository path after install.
+
+When installing the extension, use a persistent token directory. If Garmin sends
+you an email or phone verification code during first login, paste that code into
+the one-time MFA code field. After the first successful login, the server saves
+OAuth tokens in the token directory, and you can leave the MFA code blank.
+
+Claude Desktop's DXT manifest does not provide a custom pre-save login button.
+This extension handles that inside the MCP server instead. The server starts
+even when Garmin is not authenticated, so you can ask Claude to:
+
+1. Run `check_garmin_auth` to see whether saved tokens exist and still work.
+2. Run `login_to_garmin` with your email and password if tokens are missing.
+3. If Garmin asks for a code, run `login_to_garmin` again with the same email
+   and password plus `otp_code`.
+
+Accounts without OTP save tokens in the first login call. Accounts with OTP get
+an `mfa_required` response first, then save tokens after the OTP call. Use a
+persistent token directory such as `~/.garminconnect` if you want to reuse the
+same Garmin session across DXT rebuilds.
+
+On macOS, `login_to_garmin` can also ask for missing credentials through a local
+system dialog. This keeps the password out of chat and out of the MCP config.
+Set `GARMIN_DISABLE_LOCAL_PROMPTS=1` if you want to disable those dialogs and
+require credentials through tool arguments or environment variables only.
+
+### Authentication Flow
+
+The server can now start even when Garmin is not authenticated. This is useful
+for Claude Desktop because MCP servers run in the background and cannot always
+ask for terminal input.
+
+Use this flow for a new setup:
+
+1. Start the server or install the DXT.
+2. Run `check_garmin_auth`.
+3. If tokens are missing or invalid, run `login_to_garmin`.
+4. If Garmin asks for a code, enter the OTP when the tool asks for it.
+5. Run `check_garmin_auth` again to confirm the saved tokens work.
+
+The token directory must be persistent. The default is `~/.garminconnect`.
+Inside that directory, Garmin token files such as `oauth1_token.json` and
+`oauth2_token.json` are created after a successful login.
+
+Important behavior:
+
+- An empty token directory is normal before the first login.
+- A missing `oauth1_token.json` file means tokens have not been saved yet.
+- The server should still stay online, so you can run the auth tools.
+- During email and password login, the server temporarily ignores
+  `GARMINTOKENS`. This avoids a Garmin library issue where an empty token
+  directory is loaded before the password login can start.
+
+Credential options:
+
+- Pass `email` and `password` directly to `login_to_garmin`.
+- Set `GARMIN_EMAIL` and `GARMIN_PASSWORD` in the MCP server environment.
+- Use `GARMIN_EMAIL_FILE` and `GARMIN_PASSWORD_FILE` for file-based secrets.
+- On macOS, leave the password out of config and let the local hidden dialog ask
+  for it when `login_to_garmin` runs.
+
+Security notes:
+
+- Garmin credentials are only needed to create or refresh tokens.
+- Saved tokens are reused after login, so normal data tools do not need the
+  password.
+- Do not commit passwords, token files, `.env` files, or local Claude Desktop
+  config files.
+- If you want to remove access, delete the token directory and authenticate
+  again later.
 
 ### Quick Start for Claude Desktop
 
@@ -391,19 +531,34 @@ For other issues, check the Claude Desktop logs at:
 
 ### Garmin Connect Multi-Factor Authentication (MFA)
 
-#### Understanding MFA with MCP Servers
+MFA can be handled in two ways. You can use the MCP auth tools from Claude, or
+you can authenticate once in a terminal before starting Claude Desktop.
 
-MCP servers run as background processes without direct terminal access. If your Garmin account has MFA enabled, you must authenticate once using the pre-authentication tool before the server can run.
+#### Option 1: Use the MCP Auth Tools
 
-#### Recommended: Pre-Authentication Tool
+This is the best option when the server is already visible in Claude.
 
-The easiest way to handle MFA is using the dedicated authentication tool:
+1. Run `check_garmin_auth`.
+2. Run `login_to_garmin`.
+3. Enter your Garmin email and password when asked.
+4. If Garmin sends an OTP, enter that code when asked.
+5. After success, the tokens are saved and normal Garmin tools can run.
+
+On macOS, the tool can ask for the password and OTP in local system dialogs.
+This means you do not need to paste the password into chat. If the dialog does
+not appear, check behind the Claude window.
+
+#### Option 2: Pre-Authentication Tool
+
+You can also authenticate in a terminal with the dedicated authentication tool:
 
 ```bash
 garmin-mcp-auth
 ```
 
-This saves OAuth tokens to `~/.garminconnect` for future use. The server will automatically use these tokens when running in Claude Desktop or other MCP clients.
+This saves OAuth tokens to `~/.garminconnect` for future use. The server will
+automatically use these tokens when running in Claude Desktop or other MCP
+clients.
 
 **Additional Options:**
 
@@ -421,7 +576,7 @@ garmin-mcp-auth --force-reauth
 garmin-mcp-auth --token-path ~/.garmin_tokens
 ```
 
-#### Alternative: Manual First Run
+#### Option 3: Manual First Run
 
 You can also authenticate by running the server once interactively:
 
@@ -440,7 +595,8 @@ GARMIN_EMAIL_FILE=~/.garmin_email GARMIN_PASSWORD_FILE=~/.garmin_password \
 # Now add to Claude Desktop config without credentials
 ```
 
-After initial authentication, configure Claude Desktop **without** credentials (tokens are already saved):
+After initial authentication, configure Claude Desktop **without** credentials.
+The tokens are already saved:
 
 ```json
 {
@@ -461,17 +617,28 @@ After initial authentication, configure Claude Desktop **without** credentials (
 
 #### Using Docker with MFA
 
-If using Docker, follow the [Handling MFA with Docker](#handling-mfa-with-docker) section above for a streamlined experience with persistent token storage.
+If using Docker, follow the [Handling MFA with Docker](#handling-mfa-with-docker)
+section above for a simple setup with persistent token storage.
 
 #### Troubleshooting MFA
 
 **Error: "MFA authentication required but no interactive terminal available"**
 
 Solution:
-1. Open terminal
-2. Run: `garmin-mcp-auth`
-3. Enter credentials and MFA code
-4. Restart Claude Desktop
+1. Run `login_to_garmin` from Claude if the auth tools are available.
+2. Or open a terminal and run `garmin-mcp-auth`.
+3. Enter credentials and MFA code.
+4. Restart Claude Desktop.
+
+**Error: "Token files not found" or "oauth1_token.json" missing**
+
+This usually means the token directory exists, but no login has saved tokens
+yet. It does not always mean the directory itself is missing.
+
+Solution:
+1. Keep the token directory, for example `~/.garminconnect`.
+2. Run `login_to_garmin` or `garmin-mcp-auth`.
+3. After login, verify with `check_garmin_auth` or `garmin-mcp-auth --verify`.
 
 **Token Expired**
 
@@ -487,7 +654,7 @@ garmin-mcp-auth --verify
 
 ## Remote Mode (Multi-User, HTTP + OAuth2)
 
-Remote mode runs the MCP server over HTTP with OAuth2 authentication, enabling multi-user access. Each user authenticates directly with their **Garmin Connect credentials** during the OAuth2 flow — no pre-created accounts or manual account linking required.
+Remote mode runs the MCP server over HTTP with OAuth2 authentication, enabling multi-user access. Each user authenticates directly with their **Garmin Connect credentials** during the OAuth2 flow - no pre-created accounts or manual account linking required.
 
 ### How It Works
 
@@ -497,23 +664,23 @@ When a client (e.g., Claude) connects to the remote server:
 2. The user is redirected to a login page asking for their **Garmin Connect email and password**
 3. If 2FA is enabled on the Garmin account, a second page asks for the verification code
 4. On success, the Garmin session tokens are stored server-side and an OAuth2 access token is returned to the client
-5. The client uses this token to access all Garmin tools — no extra setup needed
+5. The client uses this token to access all Garmin tools - no extra setup needed
 
 ```
-Client → 401 → OAuth2 discovery
-  → /authorize → redirect to /login?state=...
-  → User enters Garmin email + password
-  → POST /login/callback
-      ├─ No 2FA → create user + session → redirect with auth code
-      └─ 2FA required → redirect to /login/mfa?state=...
-           → User enters verification code
-           → POST /login/mfa/callback → create user + session → redirect with auth code
-  → Client exchanges code for tokens → access granted
+Client -> 401 -> OAuth2 discovery
+  -> /authorize -> redirect to /login?state=...
+  -> User enters Garmin email + password
+  -> POST /login/callback
+      +-- No 2FA -> create user + session -> redirect with auth code
+      +-- 2FA required -> redirect to /login/mfa?state=...
+           -> User enters verification code
+           -> POST /login/mfa/callback -> create user + session -> redirect with auth code
+  -> Client exchanges code for tokens -> access granted
 ```
 
 ### Security
 
-- Garmin credentials are **never stored** — only garth OAuth tokens are persisted on disk
+- Garmin credentials are **never stored** - only garth OAuth tokens are persisted on disk
 - The 2FA client state is held in memory only, with a 5-minute TTL and single-use (`pop`)
 - Users are identified by their Garmin email (upserted on login)
 
@@ -556,7 +723,7 @@ npx @modelcontextprotocol/inspector http://localhost:8000/mcp
 
 ## Testing
 
-This project includes comprehensive tests for all 81 MCP tools. **All 96 tests are currently passing (100%)**.
+This project includes comprehensive tests for the MCP tools. **All 175 tests are currently passing (100%)**.
 
 ### Running Tests
 
@@ -576,5 +743,7 @@ uv run pytest tests/e2e/ -m e2e -v
 
 ### Test Structure
 
-- **Integration tests** (96 tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
+- **Unit tests** (52 tests): Test auth helpers, token path handling, and CLI auth behavior
+- **Integration tests** (122 tests): Test MCP tools using FastMCP integration with mocked Garmin API responses
+- **Debug smoke test** (1 test): Confirms the MCP app can be reached directly
 - **End-to-end tests** (4 tests): Test with real MCP server and Garmin API (requires valid credentials)
