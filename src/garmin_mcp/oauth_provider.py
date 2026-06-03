@@ -271,6 +271,24 @@ class GarminOAuthProvider(
         finally:
             conn.close()
 
+    def seed_clients(self, clients: list[OAuthClientInformationFull]) -> None:
+        """Pre-register static clients that skip dynamic registration.
+
+        Some clients (e.g. Claude.ai) use a fixed ``client_id`` and go straight
+        to ``/authorize`` without calling ``/register``, so their client entry
+        must already exist. Synchronous so it can run during startup.
+        """
+        conn = self._get_conn()
+        try:
+            for client in clients:
+                conn.execute(
+                    "INSERT OR REPLACE INTO oauth_clients (client_id, client_info_json) VALUES (?, ?)",
+                    (client.client_id, client.model_dump_json()),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:

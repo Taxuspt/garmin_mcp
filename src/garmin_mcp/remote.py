@@ -18,6 +18,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from garmin_mcp.config import get_config
+from garmin_mcp import oauth_claude
 from garmin_mcp.oauth_provider import GarminOAuthProvider
 from garmin_mcp.session_manager import SessionManager
 from garmin_mcp.client_resolver import set_session_manager
@@ -68,6 +69,21 @@ def main():
         session_manager=session_manager,
     )
 
+    # Pre-register clients that skip dynamic registration (e.g. Claude.ai,
+    # which uses the static client_id "https://claude.ai").
+    oauth_provider.seed_clients(oauth_claude.build_static_clients(config.scope))
+
+    # Make OAuth discovery work for RFC 9728 clients like Claude.ai. These
+    # patch the MCP SDK before the Starlette app is built (in app.run()), so
+    # they must run before FastMCP.streamable_http_app() is invoked:
+    #   - advertise the "none" token-endpoint auth method (PKCE public clients)
+    #   - emit `resource_metadata` in WWW-Authenticate on 401s, distinguishing
+    #     "no token" (bare challenge) from "invalid token" (error=invalid_token)
+    oauth_claude.patch_token_endpoint_auth_methods()
+    oauth_claude.patch_require_auth_middleware(
+        oauth_claude.resource_metadata_url(config.server_url)
+    )
+
     # Create the MCP app with OAuth2 authentication
     app = FastMCP(
         name="Garmin Connect v1.0",
@@ -87,6 +103,17 @@ def main():
         port=config.port,
         streamable_http_path=config.path,
     )
+
+    # RFC 9728 protected resource metadata. Claude.ai requires this endpoint
+    # before it will begin OAuth discovery; in combined AS+RS mode the SDK does
+    # not register it, so we serve it ourselves.
+    @app.custom_route(
+        oauth_claude.WELL_KNOWN_PROTECTED_RESOURCE, methods=["GET", "OPTIONS"]
+    )
+    async def protected_resource_metadata(request: Request) -> Response:
+        return oauth_claude.protected_resource_response(
+            request, config.server_url, [config.scope]
+        )
 
     # Register custom routes for login pages
     @app.custom_route("/login", methods=["GET"])
