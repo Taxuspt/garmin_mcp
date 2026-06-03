@@ -372,22 +372,25 @@ def register_tools(app):
             for item in week:
                 calendar_date = item["date"]
                 workout_id = int(item["workout_id"])
-                url = f"workout-service/schedule/{workout_id}"
-                response = client.garth.post(
-                    "connectapi", url, json={"date": calendar_date}
-                )
-                if response.status_code == 200:
+                # garminconnect raises on non-2xx; isolate each item so one
+                # failure doesn't abort scheduling the rest of the week.
+                try:
+                    client.client.post(
+                        "connectapi",
+                        f"workout-service/schedule/{workout_id}",
+                        json={"date": calendar_date},
+                    )
                     results.append({
                         "date": calendar_date,
                         "workout_id": workout_id,
                         "status": "scheduled",
                     })
-                else:
+                except Exception as e:
                     results.append({
                         "date": calendar_date,
                         "workout_id": workout_id,
                         "status": "failed",
-                        "http_status": response.status_code,
+                        "error": str(e),
                     })
             return json.dumps({
                 "status": "complete",
