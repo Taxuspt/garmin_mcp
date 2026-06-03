@@ -1,18 +1,24 @@
 """
 Session manager for per-user Garmin sessions in remote mode.
 
-Manages Garmin Connect sessions using garth tokens, storing them
-per-user on disk and caching active clients in memory.
+Persists Garmin Connect sessions in garminconnect's native token format
+(``garmin_tokens.json`` with a DI bearer token) per-user on disk, and caches
+active clients in memory. The login flow obtains tokens via garth SSO and they
+are bridged into garminconnect's format on save (see
+:meth:`SessionManager.create_session_from_garth_tokens`).
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 import threading
 from typing import Dict, Optional
 
 from garminconnect import Garmin
+
+logger = logging.getLogger(__name__)
 
 
 class SessionManager:
@@ -54,14 +60,31 @@ class SessionManager:
             # Try to restore from disk
             token_dir = self._user_token_dir(user_id)
             if not os.path.isdir(token_dir):
+                logger.warning(
+                    "No Garmin session on disk for user %s (looked in %s)",
+                    user_id,
+                    token_dir,
+                )
                 return None
 
             try:
                 garmin = Garmin()
+                # NOTE: this performs live Garmin Connect API calls (social
+                # profile + user settings) and refreshes tokens if needed, so it
+                # can fail for reasons unrelated to the stored tokens being
+                # missing (expired refresh token, Garmin rate-limiting/blocking
+                # the server IP, transient network errors, etc.).
                 garmin.login(token_dir)
                 self._cache[user_id] = _CachedClient(garmin, self.CACHE_TTL)
                 return garmin
             except Exception:
+                # Don't swallow silently: the cause is otherwise invisible and
+                # surfaces only as a generic "session expired" to the user.
+                logger.exception(
+                    "Failed to restore Garmin session for user %s from %s",
+                    user_id,
+                    token_dir,
+                )
                 return None
 
     def create_session(self, user_id: str, email: str, password: str) -> Garmin:
@@ -89,22 +112,42 @@ class SessionManager:
     def create_session_from_garth_tokens(
         self, user_id: str, oauth1_token, oauth2_token
     ) -> None:
-        """Persist garth tokens and invalidate the cache.
+        """Persist an SSO login as a garminconnect-native session.
+
+        The login flow obtains tokens via garth SSO (OAuth1/OAuth2), but
+        garminconnect 0.3.2 — which makes the actual API calls when we restore
+        a session in :meth:`get_client` — no longer uses garth. It authenticates
+        with a DI bearer token persisted as a single ``garmin_tokens.json``
+        (keys: ``di_token`` / ``di_refresh_token`` / ``di_client_id``).
+
+        The garth OAuth2 access/refresh tokens ARE that DI bearer/refresh pair,
+        so we bridge them into garminconnect's client and let it persist in its
+        own format. Dumping with garth's two-file format here is what previously
+        made every restore fail with "session expired" (garminconnect looked for
+        garmin_tokens.json, found oauth{1,2}_token.json, and fell back to
+        username/password it doesn't have).
 
         Args:
             user_id: The user identifier.
-            oauth1_token: garth OAuth1Token from SSO login.
-            oauth2_token: garth OAuth2Token from SSO login.
+            oauth1_token: garth OAuth1Token from SSO login (unused; kept for the
+                call signature — garminconnect 0.3.2 does not use OAuth1).
+            oauth2_token: garth OAuth2Token from SSO login; its ``access_token``
+                is the DI bearer and ``refresh_token`` the DI refresh token.
         """
-        from garth import Client as GarthClient
-
-        garth_client = GarthClient()
-        garth_client.oauth1_token = oauth1_token
-        garth_client.oauth2_token = oauth2_token
+        garmin = Garmin()
+        client = garmin.client
+        client.di_token = oauth2_token.access_token
+        client.di_refresh_token = oauth2_token.refresh_token
+        extract = getattr(client, "_extract_client_id_from_jwt", None)
+        if extract is not None:
+            try:
+                client.di_client_id = extract(oauth2_token.access_token)
+            except Exception:
+                logger.debug("Could not extract di_client_id from JWT", exc_info=True)
 
         token_dir = self._user_token_dir(user_id)
         os.makedirs(token_dir, exist_ok=True)
-        garth_client.dump(token_dir)
+        client.dump(token_dir)  # writes garmin_tokens.json
 
         # Invalidate cache so next get_client() reloads from disk
         with self._lock:

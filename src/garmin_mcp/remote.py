@@ -9,6 +9,8 @@ Runs the Garmin MCP server in remote mode with:
 
 from __future__ import annotations
 
+import logging
+import os
 import sys
 
 from pydantic import AnyHttpUrl
@@ -44,6 +46,16 @@ from garmin_mcp import activity_analysis
 
 def main():
     """Start the remote MCP server with OAuth2 authentication."""
+    # Configure logging so our own logs (session restore failures, OAuth
+    # discovery patches) and the underlying garth/garminconnect detail are
+    # visible. Set LOG_LEVEL=DEBUG to surface garminconnect's token
+    # load/refresh failure reasons when diagnosing session issues.
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
     # Load configuration
     try:
         config = get_config()
