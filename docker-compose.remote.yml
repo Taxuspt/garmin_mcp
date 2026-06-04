@@ -1,0 +1,22 @@
+services:
+  garmin-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.remote
+    container_name: garmin-mcp-remote
+    ports:
+      - "8000:8000"
+    environment:
+      - GARMIN_MCP_SERVER_URL=${GARMIN_MCP_SERVER_URL:-http://localhost:8000}
+      - GARMIN_MCP_PORT=8000
+      - GARMIN_MCP_HOST=0.0.0.0
+      - GARMIN_MCP_PATH=/mcp
+      - DB_PATH=/data/garmin_mcp.db
+      - SESSION_STORAGE_PATH=/data/garmin_sessions
+    volumes:
+      - garmin-data:/data
+    restart: unless-stopped
+
+volumes:
+  garmin-data:
+    driver: local

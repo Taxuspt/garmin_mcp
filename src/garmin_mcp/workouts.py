@@ -5,6 +5,9 @@ import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
+from mcp.server.fastmcp import Context
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -325,12 +328,15 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
     return {k: v for k, v in summary.items() if v is not None}
 
 
-def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
+def _is_already_scheduled(client, workout_id: int, calendar_date: str) -> bool:
     """Return True if workout_id is already scheduled on calendar_date.
 
     Used to make schedule_workout / schedule_workouts idempotent. The Garmin
     schedule endpoint is not idempotent: a second POST creates a second
     calendar entry on the same day. Querying first avoids the duplicate.
+
+    The client is passed in (rather than using the module-global) so the check
+    also works in remote mode, where the client is resolved per-request.
     """
     try:
         query = {
@@ -339,7 +345,7 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
                 f'startDate:"{calendar_date}", endDate:"{calendar_date}")}}'
             )
         }
-        result = garmin_client.query_garmin_graphql(query) or {}
+        result = client.query_garmin_graphql(query) or {}
         existing = (
             result.get("data", {}).get("workoutScheduleSummariesScalar", []) or []
         )
@@ -360,14 +366,14 @@ def register_tools(app):
     """Register all workout-related tools with the MCP server app"""
 
     @app.tool()
-    async def get_workouts() -> str:
+    async def get_workouts(ctx: Context) -> str:
         """Get all workouts with curated summary list
 
         Returns a count and list of workout summaries with essential metadata only.
         For detailed workout information including segments, use get_workout_by_id.
         """
         try:
-            workouts = garmin_client.get_workouts()
+            workouts = get_client(ctx).get_workouts()
             if not workouts:
                 return "No workouts found."
 
@@ -382,7 +388,7 @@ def register_tools(app):
             return f"Error retrieving workouts: {str(e)}"
 
     @app.tool()
-    async def get_workout_by_id(workout_id: Union[int, str]) -> str:
+    async def get_workout_by_id(ctx: Context, workout_id: Union[int, str]) -> str:
         """Get detailed information for a specific workout
 
         Returns workout details including segments and step structure.
@@ -402,10 +408,10 @@ def register_tools(app):
             if is_uuid:
                 # Training plan / Garmin Coach workout - use fbt-adaptive endpoint
                 url = f"workout-service/fbt-adaptive/{workout_id_str}"
-                workout = garmin_client.connectapi(url)
+                workout = get_client(ctx).connectapi(url)
             else:
                 # Regular workout - use standard endpoint
-                workout = garmin_client.get_workout_by_id(int(workout_id_str))
+                workout = get_client(ctx).get_workout_by_id(int(workout_id_str))
 
             if not workout:
                 return f"No workout found with ID {workout_id_str}."
@@ -417,7 +423,7 @@ def register_tools(app):
             return f"Error retrieving workout: {str(e)}"
 
     @app.tool()
-    async def download_workout(workout_id: int) -> str:
+    async def download_workout(ctx: Context, workout_id: int) -> str:
         """Download a workout as a FIT file
 
         Downloads the workout in FIT format. The binary data cannot be returned
@@ -427,7 +433,7 @@ def register_tools(app):
             workout_id: ID of the workout to download
         """
         try:
-            workout_data = garmin_client.download_workout(workout_id)
+            workout_data = get_client(ctx).download_workout(workout_id)
             if not workout_data:
                 return f"No workout data found for workout with ID {workout_id}."
 
@@ -443,7 +449,7 @@ def register_tools(app):
             return f"Error downloading workout: {str(e)}"
 
     @app.tool()
-    async def upload_workout(workout_data: dict) -> str:
+    async def upload_workout(ctx: Context, workout_data: dict) -> str:
         """Upload a workout from JSON data
 
         Creates a new workout in Garmin Connect from structured workout data.
@@ -532,7 +538,7 @@ def register_tools(app):
             _fix_hr_zone_steps(workout_data)
 
             # Pass dict directly - library handles conversion
-            result = garmin_client.upload_workout(workout_data)
+            result = get_client(ctx).upload_workout(workout_data)
 
             # Curate the response
             if isinstance(result, dict):
@@ -551,7 +557,7 @@ def register_tools(app):
             return f"Error uploading workout: {str(e)}"
 
     @app.tool()
-    async def upload_workouts(workouts: list[dict]) -> str:
+    async def upload_workouts(ctx: Context, workouts: list[dict]) -> str:
         """Upload multiple workouts from JSON data in a single call
 
         Creates multiple new workouts in Garmin Connect. Each item in the list
@@ -570,11 +576,12 @@ def register_tools(app):
             workouts: List of workout dictionaries, each containing workout structure
                       (name, sport type, segments, etc.) — same format as upload_workout.
         """
+        client = get_client(ctx)
         results = []
         for workout_data in workouts:
             try:
                 _fix_hr_zone_steps(workout_data)
-                result = garmin_client.upload_workout(workout_data)
+                result = client.upload_workout(workout_data)
                 if isinstance(result, dict):
                     entry = {
                         "status": "success",
@@ -602,7 +609,7 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
-    async def delete_workout(workout_id: int) -> str:
+    async def delete_workout(ctx: Context, workout_id: int) -> str:
         """Delete a workout from Garmin Connect
 
         Permanently removes a workout from your Garmin Connect workout library.
@@ -615,7 +622,7 @@ def register_tools(app):
             # client.delete(..., api=True) returns resp.json() (a dict), not a
             # Response, so checking response.status_code raises AttributeError.
             # Delegate to the library and rely on exceptions to signal failure.
-            garmin_client.delete_workout(workout_id)
+            get_client(ctx).delete_workout(workout_id)
             return json.dumps({
                 "status": "success",
                 "workout_id": workout_id,
@@ -629,7 +636,7 @@ def register_tools(app):
             }, indent=2)
 
     @app.tool()
-    async def delete_workouts(workout_ids: list[int]) -> str:
+    async def delete_workouts(ctx: Context, workout_ids: list[int]) -> str:
         """Delete multiple workouts from Garmin Connect in a single call
 
         Permanently removes multiple workouts from your Garmin Connect workout library.
@@ -637,12 +644,13 @@ def register_tools(app):
         Args:
             workout_ids: List of workout IDs to delete (get IDs from get_workouts)
         """
+        client = get_client(ctx)
         results = []
         for workout_id in workout_ids:
             try:
                 # See note in delete_workout: high-level call avoids the
                 # garminconnect 0.3.2 dict-vs-Response trap.
-                garmin_client.delete_workout(workout_id)
+                client.delete_workout(workout_id)
                 results.append({
                     "status": "success",
                     "workout_id": workout_id,
@@ -665,7 +673,7 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
-    async def get_scheduled_workouts(start_date: str, end_date: str) -> str:
+    async def get_scheduled_workouts(ctx: Context, start_date: str, end_date: str) -> str:
         """Get scheduled workouts between two dates with curated summary list
 
         Returns workouts that have been scheduled on the Garmin Connect calendar,
@@ -680,7 +688,7 @@ def register_tools(app):
             query = {
                 "query": f'query{{workoutScheduleSummariesScalar(startDate:"{start_date}", endDate:"{end_date}")}}'
             }
-            result = garmin_client.query_garmin_graphql(query)
+            result = get_client(ctx).query_garmin_graphql(query)
 
             if not result or "data" not in result:
                 return "No scheduled workouts found or error querying data."
@@ -702,7 +710,7 @@ def register_tools(app):
             return f"Error retrieving scheduled workouts: {str(e)}"
 
     @app.tool()
-    async def get_training_plan_workouts(calendar_date: str) -> str:
+    async def get_training_plan_workouts(ctx: Context, calendar_date: str) -> str:
         """Get training plan workouts for the week containing the given date
 
         Returns workouts from your active training plan for the week containing
@@ -720,7 +728,7 @@ def register_tools(app):
             query = {
                 "query": f'query{{trainingPlanScalar(calendarDate:"{calendar_date}", lang:"en-US", firstDayOfWeek:"monday")}}'
             }
-            result = garmin_client.query_garmin_graphql(query)
+            result = get_client(ctx).query_garmin_graphql(query)
 
             if not result or "data" not in result:
                 return "No training plan data found or error querying data."
@@ -762,7 +770,7 @@ def register_tools(app):
             return f"Error retrieving training plan workouts: {str(e)}"
 
     @app.tool()
-    async def schedule_workout(workout_id: int, calendar_date: str) -> str:
+    async def schedule_workout(ctx: Context, workout_id: int, calendar_date: str) -> str:
         """Schedule a workout to a specific calendar date
 
         This adds an existing workout from your Garmin workout library
@@ -776,7 +784,7 @@ def register_tools(app):
             calendar_date: Date to schedule the workout in YYYY-MM-DD format
         """
         try:
-            if _is_already_scheduled(workout_id, calendar_date):
+            if _is_already_scheduled(get_client(ctx), workout_id, calendar_date):
                 return json.dumps({
                     "status": "success",
                     "workout_id": workout_id,
@@ -789,7 +797,7 @@ def register_tools(app):
                 }, indent=2)
 
             url = f"workout-service/schedule/{workout_id}"
-            response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
+            response = get_client(ctx).client.post("connectapi", url, json={"date": calendar_date})
 
             if response.status_code == 200:
                 return json.dumps({
@@ -810,7 +818,7 @@ def register_tools(app):
             return f"Error scheduling workout: {str(e)}"
 
     @app.tool()
-    async def schedule_workouts(schedules: list[dict]) -> str:
+    async def schedule_workouts(ctx: Context, schedules: list[dict]) -> str:
         """Schedule multiple workouts to specific calendar dates
 
         This adds workouts to your Garmin Connect calendar in a single call.
@@ -833,6 +841,7 @@ def register_tools(app):
             [{"calendar_date": "2024-01-15", "workout_data": {"workoutName": "Easy Run", ...}},
              {"workout_id": 789012, "calendar_date": "2024-01-17"}]
         """
+        client = get_client(ctx)
         results = []
         for item in schedules:
             workout_id = item.get("workout_id")
@@ -863,7 +872,7 @@ def register_tools(app):
                 if workout_data is not None:
                     # Upload the workout first, then use the returned ID to schedule
                     _fix_hr_zone_steps(workout_data)
-                    upload_result = garmin_client.upload_workout(workout_data)
+                    upload_result = client.upload_workout(workout_data)
                     if not isinstance(upload_result, dict) or upload_result.get('workoutId') is None:
                         results.append({
                             "status": "failed",
@@ -874,7 +883,7 @@ def register_tools(app):
                     workout_id = upload_result['workoutId']
                     workout_name = upload_result.get('workoutName')
 
-                if _is_already_scheduled(workout_id, calendar_date):
+                if _is_already_scheduled(client, workout_id, calendar_date):
                     entry = {
                         "status": "success",
                         "workout_id": workout_id,
@@ -891,7 +900,7 @@ def register_tools(app):
                     continue
 
                 url = f"workout-service/schedule/{workout_id}"
-                response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
+                response = client.client.post("connectapi", url, json={"date": calendar_date})
 
                 if response.status_code == 200:
                     entry = {

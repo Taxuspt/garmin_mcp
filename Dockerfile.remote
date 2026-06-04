@@ -1,0 +1,36 @@
+# Dockerfile for Garmin MCP remote server (OAuth2 + streamable HTTP)
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install uv for faster dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    UV_SYSTEM_PYTHON=1
+
+# Copy dependency files and README first for better layer caching
+COPY pyproject.toml README.md ./
+
+# Copy the application source code
+COPY src/ ./src/
+
+# Install dependencies
+RUN uv pip install -e .
+
+# Create data directories
+RUN mkdir -p /data/garmin_sessions
+
+# Expose the HTTP port
+EXPOSE 8000
+
+# Data volume for SQLite DB and Garmin session tokens
+VOLUME /data
+
+# Health check - verify the server is responding
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import httpx; r = httpx.get('http://localhost:8000/mcp'); assert r.status_code in (200, 401)"
+
+ENTRYPOINT ["garmin-mcp-remote"]

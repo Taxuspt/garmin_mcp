@@ -7,6 +7,10 @@ to the existing upload_workout / schedule_workout endpoints.
 import json
 from typing import Any, Dict, List, Optional
 
+from mcp.server.fastmcp import Context
+
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -238,6 +242,7 @@ def register_tools(app):
 
     @app.tool()
     async def create_walk_run_workout(
+        ctx: Context,
         name: str,
         run_seconds: int,
         walk_seconds: int,
@@ -269,7 +274,7 @@ def register_tools(app):
                 cooldown_min=cooldown_min,
                 hr_zone=hr_zone,
             )
-            result = garmin_client.upload_workout(workout_json)
+            result = get_client(ctx).upload_workout(workout_json)
 
             if isinstance(result, dict):
                 curated = {
@@ -286,6 +291,7 @@ def register_tools(app):
 
     @app.tool()
     async def create_z2_walk_workout(
+        ctx: Context,
         name: str,
         duration_min: int,
         hr_min: int,
@@ -306,7 +312,7 @@ def register_tools(app):
                 hr_min=hr_min,
                 hr_max=hr_max,
             )
-            result = garmin_client.upload_workout(workout_json)
+            result = get_client(ctx).upload_workout(workout_json)
 
             if isinstance(result, dict):
                 curated = {
@@ -323,6 +329,7 @@ def register_tools(app):
 
     @app.tool()
     async def create_strength_workout(
+        ctx: Context,
         name: str,
         exercises: List[Dict[str, Any]],
     ) -> str:
@@ -337,7 +344,7 @@ def register_tools(app):
         """
         try:
             workout_json = build_strength_json(name=name, exercises=exercises)
-            result = garmin_client.upload_workout(workout_json)
+            result = get_client(ctx).upload_workout(workout_json)
 
             if isinstance(result, dict):
                 curated = {
@@ -353,7 +360,7 @@ def register_tools(app):
             return f"Error creating strength workout: {str(e)}"
 
     @app.tool()
-    async def schedule_week(week: List[Dict[str, Any]]) -> str:
+    async def schedule_week(ctx: Context, week: List[Dict[str, Any]]) -> str:
         """Schedule a list of workouts for the week in a single call.
 
         Idempotent: if a workout is already scheduled for that date, it is
@@ -369,12 +376,13 @@ def register_tools(app):
         from garmin_mcp.workouts import _is_already_scheduled
 
         try:
+            client = get_client(ctx)
             results = []
             for item in week:
                 calendar_date = item["date"]
                 workout_id = int(item["workout_id"])
 
-                if _is_already_scheduled(workout_id, calendar_date):
+                if _is_already_scheduled(client, workout_id, calendar_date):
                     results.append({
                         "date": calendar_date,
                         "workout_id": workout_id,
@@ -383,23 +391,25 @@ def register_tools(app):
                     })
                     continue
 
-                # garminconnect 0.3.2 dropped the .garth attribute; use .client.
-                url = f"workout-service/schedule/{workout_id}"
-                response = garmin_client.client.post(
-                    "connectapi", url, json={"date": calendar_date}
-                )
-                if response.status_code == 200:
+                # garminconnect raises on non-2xx; isolate each item so one
+                # failure doesn't abort scheduling the rest of the week.
+                try:
+                    client.client.post(
+                        "connectapi",
+                        f"workout-service/schedule/{workout_id}",
+                        json={"date": calendar_date},
+                    )
                     results.append({
                         "date": calendar_date,
                         "workout_id": workout_id,
                         "status": "scheduled",
                     })
-                else:
+                except Exception as e:
                     results.append({
                         "date": calendar_date,
                         "workout_id": workout_id,
                         "status": "failed",
-                        "http_status": response.status_code,
+                        "error": str(e),
                     })
             return json.dumps({
                 "status": "complete",

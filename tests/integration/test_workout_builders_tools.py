@@ -8,6 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from unittest.mock import MagicMock
 
 from garmin_mcp import workouts, workout_builders
+from garmin_mcp.client_resolver import set_global_client
 
 
 @pytest.fixture
@@ -15,9 +16,9 @@ def app_with_builders(mock_garmin_client):
     """FastMCP app with workout_builders registered.
 
     Also configures `workouts` because workout_builders.schedule_week reuses
-    the `_is_already_scheduled` helper defined there, which reads from the
-    `garmin_client` module-level global in workouts.py. Both modules must
-    point at the same mock for the helper to see the right state.
+    the `_is_already_scheduled` helper defined there; the per-request client
+    resolved via get_client(ctx) is passed into it, so the resolver global
+    must point at the same mock for the helper to see the right state.
     """
     # Default: pre-check finds no existing schedules so the POST path runs.
     mock_garmin_client.query_garmin_graphql.return_value = {
@@ -25,6 +26,7 @@ def app_with_builders(mock_garmin_client):
     }
     workouts.configure(mock_garmin_client)
     workout_builders.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Workout Builders")
     app = workout_builders.register_tools(app)
     return app

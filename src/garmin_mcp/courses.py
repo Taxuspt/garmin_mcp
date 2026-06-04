@@ -22,6 +22,10 @@ import math
 import os
 from typing import Any, Dict, Optional
 
+from mcp.server.fastmcp import Context
+
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -169,14 +173,14 @@ def register_tools(app):
     """Register course management tools"""
 
     @app.tool()
-    async def get_courses() -> str:
+    async def get_courses(ctx: Context) -> str:
         """List all courses saved on Garmin Connect.
 
         Returns a curated list of courses with id, name, distance, activity type
         and creation date.
         """
         try:
-            data = garmin_client.client.connectapi("/course-service/course")
+            data = get_client(ctx).connectapi("/course-service/course")
 
             if not isinstance(data, list):
                 return json.dumps(data, indent=2)
@@ -200,6 +204,7 @@ def register_tools(app):
 
     @app.tool()
     async def upload_course(
+        ctx: Context,
         gpx_path: str,
         course_name: Optional[str] = None,
         activity_type: str = "running",
@@ -232,8 +237,9 @@ def register_tools(app):
             with open(gpx_path, "rb") as f:
                 gpx_bytes = f.read()
 
+            client = get_client(ctx)
             # Step 1: parse the GPX server-side
-            parsed = garmin_client.client.post(
+            parsed = client.client.post(
                 "connectapi",
                 "/course-service/course/import",
                 files={
@@ -260,7 +266,7 @@ def register_tools(app):
                 description=description,
             )
 
-            saved = garmin_client.client.post(
+            saved = client.client.post(
                 "connectapi", "/course-service/course", json=payload, api=True,
             )
             return json.dumps(
@@ -272,7 +278,7 @@ def register_tools(app):
                     "elevation_gain_m": saved.get("elevationGainMeter"),
                     "elevation_loss_m": saved.get("elevationLossMeter"),
                     "activity_type_id": saved.get("activityTypePk"),
-                    "url": f"https://connect.{garmin_client.client.domain}/modern/course/{saved.get('courseId')}",
+                    "url": f"https://connect.{client.client.domain}/modern/course/{saved.get('courseId')}",
                 },
                 indent=2,
             )
@@ -281,14 +287,14 @@ def register_tools(app):
             return f"Error uploading course: {str(e)}"
 
     @app.tool()
-    async def delete_course(course_id: int) -> str:
+    async def delete_course(ctx: Context, course_id: int) -> str:
         """Delete a course from Garmin Connect.
 
         Args:
             course_id: ID of the course to delete (get IDs from get_courses).
         """
         try:
-            garmin_client.client.delete(
+            get_client(ctx).client.delete(
                 "connectapi", f"/course-service/course/{course_id}"
             )
             return json.dumps(

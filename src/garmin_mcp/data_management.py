@@ -5,6 +5,9 @@ import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
+from mcp.server.fastmcp import Context
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -17,9 +20,10 @@ def configure(client):
 
 def register_tools(app):
     """Register all data management tools with the MCP server app"""
-    
+
     @app.tool()
     async def add_body_composition(
+        ctx: Context,
         date: str,
         weight: float,
         percent_fat: Optional[float] = None,
@@ -52,7 +56,7 @@ def register_tools(app):
             bmi: Body Mass Index
         """
         try:
-            result = garmin_client.add_body_composition(
+            result = get_client(ctx).add_body_composition(
                 date,
                 weight=weight,
                 percent_fat=percent_fat,
@@ -73,6 +77,7 @@ def register_tools(app):
     
     @app.tool()
     async def set_blood_pressure(
+        ctx: Context,
         systolic: int,
         diastolic: int,
         pulse: int,
@@ -87,7 +92,7 @@ def register_tools(app):
             notes: Optional notes
         """
         try:
-            result = garmin_client.set_blood_pressure(
+            result = get_client(ctx).set_blood_pressure(
                 systolic, diastolic, pulse, notes=notes
             )
             return json.dumps(result, indent=2)
@@ -96,6 +101,7 @@ def register_tools(app):
     
     @app.tool()
     async def add_hydration_data(
+        ctx: Context,
         value_in_ml: int,
         cdate: str,
         timestamp: str
@@ -108,7 +114,7 @@ def register_tools(app):
             timestamp: Timestamp in YYYY-MM-DDThh:mm:ss.sss format
         """
         try:
-            result = garmin_client.add_hydration_data(
+            result = get_client(ctx).add_hydration_data(
                 value_in_ml=value_in_ml,
                 cdate=cdate,
                 timestamp=timestamp

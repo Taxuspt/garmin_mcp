@@ -6,6 +6,7 @@ Tests workout tools using FastMCP integration with mocked Garmin API responses.
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
+from garmin_mcp.client_resolver import set_global_client
 
 from garmin_mcp import workouts
 from garmin_mcp.workouts import _fix_repeat_group_step
@@ -25,6 +26,7 @@ def app_with_workouts(mock_garmin_client):
         "data": {"workoutScheduleSummariesScalar": []}
     }
     workouts.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Workouts")
     app = workouts.register_tools(app)
     return app

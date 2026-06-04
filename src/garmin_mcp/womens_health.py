@@ -5,6 +5,9 @@ import json
 from datetime import date, timedelta
 from typing import Any, List
 
+from mcp.server.fastmcp import Context
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -44,45 +47,46 @@ def configure(client):
 
 def register_tools(app):
     """Register all women's health tools with the MCP server app"""
-    
+
     @app.tool()
-    async def get_pregnancy_summary() -> str:
+    async def get_pregnancy_summary(ctx: Context) -> str:
         """Get pregnancy summary data"""
         try:
-            summary = garmin_client.get_pregnancy_summary()
+            summary = get_client(ctx).get_pregnancy_summary()
             if not summary:
                 return "No pregnancy summary data found."
             return json.dumps(summary, indent=2)
         except Exception as e:
             return f"Error retrieving pregnancy summary: {str(e)}"
-    
+
     @app.tool()
-    async def get_menstrual_data_for_date(date: str) -> str:
+    async def get_menstrual_data_for_date(ctx: Context, date: str) -> str:
         """Get menstrual data for a specific date
-        
+
         Args:
             date: Date in YYYY-MM-DD format
         """
         try:
-            data = garmin_client.get_menstrual_data_for_date(date)
+            data = get_client(ctx).get_menstrual_data_for_date(date)
             if not data:
                 return f"No menstrual data found for {date}."
             return json.dumps(data, indent=2)
         except Exception as e:
             return f"Error retrieving menstrual data: {str(e)}"
-    
+
     @app.tool()
-    async def get_menstrual_calendar_data(start_date: str, end_date: str) -> str:
+    async def get_menstrual_calendar_data(ctx: Context, start_date: str, end_date: str) -> str:
         """Get menstrual calendar data between specified dates
 
         Automatically chunks requests longer than 92 days, Garmin's
         server-side limit, and stitches the responses together.
-        
+
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
         """
         try:
+            client = get_client(ctx)
             start = date.fromisoformat(start_date)
             end = date.fromisoformat(end_date)
             if end < start:
@@ -95,7 +99,7 @@ def register_tools(app):
                     cursor + timedelta(days=MENSTRUAL_CALENDAR_MAX_DAYS - 1),
                     end,
                 )
-                data = garmin_client.get_menstrual_calendar_data(
+                data = client.get_menstrual_calendar_data(
                     cursor.isoformat(),
                     window_end.isoformat(),
                 )

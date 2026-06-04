@@ -3,6 +3,15 @@ revision = 3
 requires-python = ">=3.10"
 
 [[package]]
+name = "aiosqlite"
+version = "0.22.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4e/8a/64761f4005f17809769d23e518d915db74e6310474e733e3593cfc854ef1/aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650", size = 14821, upload-time = "2025-12-23T19:25:43.997Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/00/b7/e3bf5133d697a08128598c8d0abc5e16377b51465a33756de24fa7dee953/aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb", size = 17405, upload-time = "2025-12-23T19:25:42.139Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -333,8 +342,11 @@ name = "garmin-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiosqlite" },
     { name = "fitparse" },
     { name = "garminconnect" },
+    { name = "garth" },
+    { name = "httpx" },
     { name = "mcp" },
     { name = "python-dotenv" },
     { name = "requests" },
@@ -350,9 +362,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "fitparse", specifier = ">=1.2.0" },
     { name = "garminconnect", specifier = "==0.3.2" },
-    { name = "mcp", specifier = ">=1.23.0" },
+    { name = "garth", specifier = ">=0.5.17,<0.6.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "mcp", specifier = ">=1.26.0" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "requests", specifier = "==2.33.0" },
 ]
@@ -377,6 +392,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d2/bf/ec89102470c240fd1b0877f18f3b5039466da3e6af8f81dc537147b567ab/garminconnect-0.3.2.tar.gz", hash = "sha256:ca9d813139cb5f81cd6fc90236a225608e7e13acd7b1034170b0facfdd072d9a", size = 51111, upload-time = "2026-04-11T09:22:05.987Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/84/6f/286e87787d11627027c5277fac5afb606040a77af4d98bdd0dade5e5dcfa/garminconnect-0.3.2-py3-none-any.whl", hash = "sha256:d0b6f332c3262209ef3e48e9a49ccf797a70ff5a7fbd9a546a9c4e9375654106", size = 46239, upload-time = "2026-04-11T09:22:04.53Z" },
+]
+
+[[package]]
+name = "garth"
+version = "0.5.21"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "requests-oauthlib" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/14/1a/e559feb5efd53e9a5d15c28007a714e240a51363c79a306727977fe1999b/garth-0.5.21.tar.gz", hash = "sha256:8d979595d1d4ea23a1b466ab4a60955d139b71f886f46490be140fcee584dab4", size = 1840358, upload-time = "2026-01-07T23:12:33.828Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c5/14/b7c77f363ff04cc0c57991277b8c3564df5210b0879894e2033f90f55ff5/garth-0.5.21-py3-none-any.whl", hash = "sha256:24b8c517ef24ef030bca14cf4e8d7ad7a191d9bc60ece6077fec6ea743a5d039", size = 33265, upload-time = "2026-01-07T23:12:32.069Z" },
 ]
 
 [[package]]
@@ -514,6 +543,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
+]
+
+[[package]]
+name = "oauthlib"
+version = "3.3.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
 ]
 
 [[package]]
@@ -838,6 +876,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/34/64/8860370b167a9721e8956ae116825caff829224fbca0ca6e7bf8ddef8430/requests-2.33.0.tar.gz", hash = "sha256:c7ebc5e8b0f21837386ad0e1c8fe8b829fa5f544d8df3b2253bff14ef29d7652", size = 134232, upload-time = "2026-03-25T15:10:41.586Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/5d/c814546c2333ceea4ba42262d8c4d55763003e767fa169adc693bd524478/requests-2.33.0-py3-none-any.whl", hash = "sha256:3324635456fa185245e24865e810cecec7b4caf933d7eb133dcde67d48cee69b", size = 65017, upload-time = "2026-03-25T15:10:40.382Z" },
+]
+
+[[package]]
+name = "requests-oauthlib"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "oauthlib" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/f2/05f29bc3913aea15eb670be136045bf5c5bbf4b99ecb839da9b422bb2c85/requests-oauthlib-2.0.0.tar.gz", hash = "sha256:b3dffaebd884d8cd778494369603a9e7b58d29111bf6b41bdc2dcd87203af4e9", size = 55650, upload-time = "2024-03-22T20:32:29.939Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl", hash = "sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36", size = 24179, upload-time = "2024-03-22T20:32:28.055Z" },
 ]
 
 [[package]]

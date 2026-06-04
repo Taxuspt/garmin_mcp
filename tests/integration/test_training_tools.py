@@ -6,6 +6,7 @@ Tests training tools using FastMCP integration with mocked Garmin API responses.
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
+from garmin_mcp.client_resolver import set_global_client
 
 import json
 
@@ -26,6 +27,7 @@ from tests.fixtures.garmin_responses import (
 def app_with_training(mock_garmin_client):
     """Create FastMCP app with training tools registered"""
     training.configure(mock_garmin_client)
+    set_global_client(mock_garmin_client)
     app = FastMCP("Test Training")
     app = training.register_tools(app)
     return app

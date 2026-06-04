@@ -23,6 +23,10 @@ try:
 except ImportError:
     FITPARSE_AVAILABLE = False
 
+from mcp.server.fastmcp import Context
+
+from garmin_mcp.client_resolver import get_client
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -441,12 +445,12 @@ def _compute_temperature_stats(records: List[Dict]) -> Optional[Dict]:
 # Weight / W/kg lookup
 # ---------------------------------------------------------------------------
 
-def _get_rider_weight_kg(activity_date_str: str) -> Optional[float]:
+def _get_rider_weight_kg(client, activity_date_str: str) -> Optional[float]:
     """Fetch rider weight from Garmin body composition for the given date."""
-    if garmin_client is None:
+    if client is None:
         return None
     try:
-        data = garmin_client.get_body_composition(activity_date_str)
+        data = client.get_body_composition(activity_date_str)
         if not data:
             return None
         # Response is typically {"startDate": ..., "endDate": ..., "dateWeightList": [...]}
@@ -950,6 +954,7 @@ def register_tools(app):
 
     @app.tool()
     async def get_activity_fit_data(
+        ctx: Context,
         activity_id: Union[int, str],
         include_records: bool = False,
     ) -> str:
@@ -993,7 +998,8 @@ def register_tools(app):
             activity_id = int(activity_id)
             from garminconnect import Garmin
 
-            fit_bytes = garmin_client.download_activity(
+            client = get_client(ctx)
+            fit_bytes = client.download_activity(
                 activity_id,
                 dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
             )
@@ -1024,7 +1030,7 @@ def register_tools(app):
             start_time_str = parsed.get("session", {}).get("start_time", "")
             activity_date = start_time_str[:10] if start_time_str else None
             if activity_date:
-                weight_kg = _get_rider_weight_kg(activity_date)
+                weight_kg = _get_rider_weight_kg(client, activity_date)
                 if weight_kg:
                     parsed["rider_weight_kg"] = weight_kg
                     # W/kg for session avg power and NP
@@ -1047,6 +1053,7 @@ def register_tools(app):
 
     @app.tool()
     async def get_power_duration_curve(
+        ctx: Context,
         num_activities: int = 20,
         activity_type: str = "cycling",
     ) -> str:
@@ -1075,8 +1082,9 @@ def register_tools(app):
         try:
             from garminconnect import Garmin
 
+            client = get_client(ctx)
             # Fetch recent activities
-            activities = garmin_client.get_activities(0, num_activities)
+            activities = client.get_activities(0, num_activities)
             if not activities:
                 return "No activities found."
 
@@ -1104,7 +1112,7 @@ def register_tools(app):
                     continue
 
                 try:
-                    fit_bytes = garmin_client.download_activity(
+                    fit_bytes = client.download_activity(
                         act_id,
                         dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
                     )
