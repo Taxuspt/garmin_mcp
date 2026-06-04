@@ -439,6 +439,57 @@ args = [
 
 Restart your MCP client after saving the file.
 
+### With opencode
+
+[opencode](https://opencode.ai) auto-loads a project-level `opencode.json` when launched from a repository root, so contributors who clone this repo get the Garmin MCP wired up against the local source with no extra config.
+
+#### From a clone of this repository (recommended for development)
+
+This repo ships an [`opencode.json`](./opencode.json) that runs the MCP via `uv run garmin-mcp`, so it always tracks the working tree.
+
+```bash
+git clone https://github.com/Taxuspt/garmin_mcp.git
+cd garmin_mcp
+uv sync                # install dependencies
+garmin-mcp-auth        # one-time Garmin login (skip if ~/.garminconnect already exists)
+opencode               # launches with the garmin MCP attached
+```
+
+Verify the server is connected:
+
+```bash
+opencode mcp list
+# ●  ✓ garmin   connected
+#       uv run garmin-mcp
+```
+
+#### From any other directory (GitHub install)
+
+Add the server to your global opencode config at `~/.config/opencode/opencode.json` after running `garmin-mcp-auth`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "garmin": {
+      "type": "local",
+      "command": [
+        "uvx",
+        "--python",
+        "3.12",
+        "--from",
+        "git+https://github.com/Taxuspt/garmin_mcp",
+        "garmin-mcp"
+      ],
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
+```
+
+Restart opencode after saving the file. The first `uvx` invocation downloads and caches the package, so the initial startup may take a few seconds.
+
 ### With Docker
 
 Docker provides an isolated and consistent environment for running the MCP server.
