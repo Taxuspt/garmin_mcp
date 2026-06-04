@@ -165,6 +165,55 @@ schedule_workout(workout_id=1560092011, date="2026-05-06")
 
 After syncing your watch, the workout appears on the Forerunner 965 calendar.
 
+### Raw `upload_workout` end conditions
+
+When building custom workout JSON for `upload_workout` or `upload_workouts`, the
+`endCondition.conditionTypeId` and `endCondition.conditionTypeKey` must match
+Garmin's canonical mapping. Garmin treats the numeric `conditionTypeId` as the
+source of truth; if the key and ID conflict, Garmin stores the condition that
+matches the ID.
+
+For example, this is invalid for a heart-rate end condition because ID `4` is
+`calories`, not `heart.rate`:
+
+```json
+{
+  "endCondition": {
+    "conditionTypeId": 4,
+    "conditionTypeKey": "heart.rate"
+  },
+  "endConditionValue": 145
+}
+```
+
+Use ID `6` for heart rate:
+
+```json
+{
+  "endCondition": {
+    "conditionTypeId": 6,
+    "conditionTypeKey": "heart.rate"
+  },
+  "endConditionValue": 145
+}
+```
+
+Common end-condition IDs:
+
+| ID | Key |
+|---:|---|
+| 1 | `lap.button` |
+| 2 | `time` |
+| 3 | `distance` |
+| 4 | `calories` |
+| 5 | `power` |
+| 6 | `heart.rate` |
+| 7 | `iterations` |
+| 8 | `fixed.rest` |
+| 9 | `fixed.repetition` |
+| 10 | `reps` |
+| 11 | `training.peaks.tss` |
+
 ## One-click Install (Claude Desktop)
 
 The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop Extension file — no JSON editing required.
