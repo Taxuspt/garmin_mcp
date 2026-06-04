@@ -8,6 +8,24 @@ from typing import Any, Dict, List, Optional, Union
 # The garmin_client will be set by the main file
 garmin_client = None
 
+END_CONDITION_TYPE_IDS = {
+    "lap.button": 1,
+    "time": 2,
+    "distance": 3,
+    "calories": 4,
+    "power": 5,
+    "heart.rate": 6,
+    "iterations": 7,
+    "fixed.rest": 8,
+    "fixed.repetition": 9,
+    "reps": 10,
+    "training.peaks.tss": 11,
+}
+END_CONDITION_TYPE_KEYS = {
+    condition_id: condition_key
+    for condition_key, condition_id in END_CONDITION_TYPE_IDS.items()
+}
+
 
 def configure(client):
     """Configure the module with the Garmin client instance"""
@@ -81,6 +99,47 @@ def _fix_hr_zone_steps(workout_data: dict) -> None:
         for step in segment.get('workoutSteps', []):
             _fix_hr_zone_step(step)
             _fix_repeat_group_step(step)
+
+
+def _validate_end_condition_step(step: dict, path: str) -> None:
+    """Reject endCondition id/key pairs Garmin would silently reinterpret."""
+    end_condition = step.get('endCondition')
+    if isinstance(end_condition, dict):
+        condition_key = end_condition.get('conditionTypeKey')
+        condition_id = end_condition.get('conditionTypeId')
+
+        expected_id = END_CONDITION_TYPE_IDS.get(condition_key)
+        expected_key = END_CONDITION_TYPE_KEYS.get(condition_id)
+
+        if expected_id is not None:
+            if condition_id is None:
+                raise ValueError(
+                    f"{path}.endCondition conditionTypeKey '{condition_key}' "
+                    f"requires conditionTypeId {expected_id}"
+                )
+            if condition_id != expected_id:
+                actual = expected_key or "unknown"
+                raise ValueError(
+                    f"{path}.endCondition conditionTypeKey '{condition_key}' "
+                    f"requires conditionTypeId {expected_id}, got {condition_id} "
+                    f"({actual})"
+                )
+        elif expected_key is not None and condition_key is not None:
+            raise ValueError(
+                f"{path}.endCondition conditionTypeId {condition_id} "
+                f"requires conditionTypeKey '{expected_key}', got '{condition_key}'"
+            )
+
+    for index, nested in enumerate(step.get('workoutSteps', [])):
+        _validate_end_condition_step(nested, f"{path}.workoutSteps[{index}]")
+
+
+def _validate_end_condition_steps(workout_data: dict) -> None:
+    """Validate all workout step endCondition blocks before upload."""
+    for segment_index, segment in enumerate(workout_data.get('workoutSegments', [])):
+        for step_index, step in enumerate(segment.get('workoutSteps', [])):
+            path = f"workoutSegments[{segment_index}].workoutSteps[{step_index}]"
+            _validate_end_condition_step(step, path)
 
 
 def _curate_workout_summary(workout: dict) -> dict:
@@ -470,6 +529,13 @@ def register_tools(app):
         IMPORTANT: Sport type IDs for workouts (different from activity API!):
         - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 11 = walking
 
+        IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
+        Garmin treats conditionTypeId as authoritative, so mismatches such as
+        {"conditionTypeId": 4, "conditionTypeKey": "heart.rate"} are rejected before
+        upload because Garmin would interpret them as "calories". Use
+        {"conditionTypeId": 6, "conditionTypeKey": "heart.rate"} for heart-rate
+        end conditions.
+
         **Available Templates:**
         Instead of building workout JSON from scratch, you can use these MCP resources as starting points:
         - workout://templates/simple-run - Basic warmup/run/cooldown structure
@@ -530,6 +596,7 @@ def register_tools(app):
         try:
             # Fix common mistake: HR zone targets using targetValueOne instead of zoneNumber
             _fix_hr_zone_steps(workout_data)
+            _validate_end_condition_steps(workout_data)
 
             # Pass dict directly - library handles conversion
             result = garmin_client.upload_workout(workout_data)
@@ -566,6 +633,9 @@ def register_tools(app):
 
         IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
 
+        IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
+        Garmin treats conditionTypeId as authoritative, so mismatches are rejected before upload.
+
         Args:
             workouts: List of workout dictionaries, each containing workout structure
                       (name, sport type, segments, etc.) — same format as upload_workout.
@@ -574,6 +644,7 @@ def register_tools(app):
         for workout_data in workouts:
             try:
                 _fix_hr_zone_steps(workout_data)
+                _validate_end_condition_steps(workout_data)
                 result = garmin_client.upload_workout(workout_data)
                 if isinstance(result, dict):
                     entry = {
