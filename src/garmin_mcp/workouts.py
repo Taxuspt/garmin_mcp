@@ -43,11 +43,47 @@ def _fix_hr_zone_step(step: dict) -> None:
         _fix_hr_zone_step(nested)
 
 
+def _fix_repeat_group_step(step: dict) -> None:
+    """Ensure RepeatGroupDTO steps have a valid endCondition and numberOfIterations.
+
+    The Garmin API silently corrupts a RepeatGroupDTO when conditionTypeId is
+    missing from its endCondition — it falls back to an unrelated condition type
+    (observed: "heart.rate") and drops numberOfIterations entirely.
+
+    This function:
+    - Adds conditionTypeId: 7 ("iterations") when conditionTypeKey is "iterations"
+      but conditionTypeId is absent.
+    - Backfills numberOfIterations from endConditionValue when the former is missing.
+    - Recurses into nested workoutSteps so nested repeat groups are also fixed.
+    """
+    if step.get('type') != 'RepeatGroupDTO':
+        for nested in step.get('workoutSteps', []):
+            _fix_repeat_group_step(nested)
+        return
+
+    end_condition = step.get('endCondition')
+    if isinstance(end_condition, dict):
+        if (
+            end_condition.get('conditionTypeKey') == 'iterations'
+            and 'conditionTypeId' not in end_condition
+        ):
+            end_condition['conditionTypeId'] = 7
+
+    if 'numberOfIterations' not in step:
+        value = step.get('endConditionValue')
+        if value is not None:
+            step['numberOfIterations'] = int(value)
+
+    for nested in step.get('workoutSteps', []):
+        _fix_repeat_group_step(nested)
+
+
 def _fix_hr_zone_steps(workout_data: dict) -> None:
     """Walk all workout steps and fix HR zone target mistakes."""
     for segment in workout_data.get('workoutSegments', []):
         for step in segment.get('workoutSteps', []):
             _fix_hr_zone_step(step)
+            _fix_repeat_group_step(step)
 
 
 def _curate_workout_summary(workout: dict) -> dict:
@@ -292,6 +328,40 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
     return {k: v for k, v in summary.items() if v is not None}
 
 
+def _is_already_scheduled(client, workout_id: int, calendar_date: str) -> bool:
+    """Return True if workout_id is already scheduled on calendar_date.
+
+    Used to make schedule_workout / schedule_workouts idempotent. The Garmin
+    schedule endpoint is not idempotent: a second POST creates a second
+    calendar entry on the same day. Querying first avoids the duplicate.
+
+    The client is passed in (rather than using the module-global) so the check
+    also works in remote mode, where the client is resolved per-request.
+    """
+    try:
+        query = {
+            "query": (
+                f'query{{workoutScheduleSummariesScalar('
+                f'startDate:"{calendar_date}", endDate:"{calendar_date}")}}'
+            )
+        }
+        result = client.query_garmin_graphql(query) or {}
+        existing = (
+            result.get("data", {}).get("workoutScheduleSummariesScalar", []) or []
+        )
+        for entry in existing:
+            if (
+                entry.get("workoutId") == workout_id
+                and entry.get("scheduleDate") == calendar_date
+            ):
+                return True
+    except Exception:
+        # If the pre-check itself fails, fall through to the normal POST
+        # path so we don't block a legitimate scheduling attempt.
+        return False
+    return False
+
+
 def register_tools(app):
     """Register all workout-related tools with the MCP server app"""
 
@@ -386,7 +456,10 @@ def register_tools(app):
 
         IMPORTANT: Step types must use Garmin's DTO format:
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
-        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
+        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations.
+          Always include endCondition with conditionTypeId 7 and conditionTypeKey
+          "iterations"; omitting conditionTypeId causes the API to silently corrupt
+          the repeat count.
 
         IMPORTANT: Heart rate targets come in two forms:
         - Named zone (e.g. Zone 2): set targetType to "heart.rate.zone" and use "zoneNumber" (1-5).
@@ -492,7 +565,10 @@ def register_tools(app):
 
         IMPORTANT: Step types must use Garmin's DTO format:
         - Use "ExecutableStepDTO" for regular steps (warmup, interval, cooldown, recovery)
-        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations
+        - Use "RepeatGroupDTO" for repeat/interval groups with numberOfIterations.
+          Always include endCondition with conditionTypeId 7 and conditionTypeKey
+          "iterations"; omitting conditionTypeId causes the API to silently corrupt
+          the repeat count.
 
         IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
 
@@ -542,25 +618,22 @@ def register_tools(app):
             workout_id: ID of the workout to delete (get IDs from get_workouts)
         """
         try:
-            client = get_client(ctx)
-            url = f"{client.garmin_workouts}/workout/{workout_id}"
-            response = client.client.delete("connectapi", url, api=True)
-
-            if response.status_code == 204 or response.status_code == 200:
-                return json.dumps({
-                    "status": "success",
-                    "workout_id": workout_id,
-                    "message": f"Workout {workout_id} deleted successfully"
-                }, indent=2)
-            else:
-                return json.dumps({
-                    "status": "failed",
-                    "workout_id": workout_id,
-                    "http_status": response.status_code,
-                    "message": f"Failed to delete workout: HTTP {response.status_code}"
-                }, indent=2)
+            # Use the high-level garminconnect method. In garminconnect 0.3.2,
+            # client.delete(..., api=True) returns resp.json() (a dict), not a
+            # Response, so checking response.status_code raises AttributeError.
+            # Delegate to the library and rely on exceptions to signal failure.
+            get_client(ctx).delete_workout(workout_id)
+            return json.dumps({
+                "status": "success",
+                "workout_id": workout_id,
+                "message": f"Workout {workout_id} deleted successfully"
+            }, indent=2)
         except Exception as e:
-            return f"Error deleting workout: {str(e)}"
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "message": f"Failed to delete workout: {str(e)}"
+            }, indent=2)
 
     @app.tool()
     async def delete_workouts(ctx: Context, workout_ids: list[int]) -> str:
@@ -575,22 +648,14 @@ def register_tools(app):
         results = []
         for workout_id in workout_ids:
             try:
-                url = f"{client.garmin_workouts}/workout/{workout_id}"
-                response = client.client.delete("connectapi", url, api=True)
-
-                if response.status_code in (200, 204):
-                    results.append({
-                        "status": "success",
-                        "workout_id": workout_id,
-                        "message": f"Workout {workout_id} deleted successfully"
-                    })
-                else:
-                    results.append({
-                        "status": "failed",
-                        "workout_id": workout_id,
-                        "http_status": response.status_code,
-                        "message": f"Failed to delete workout: HTTP {response.status_code}"
-                    })
+                # See note in delete_workout: high-level call avoids the
+                # garminconnect 0.3.2 dict-vs-Response trap.
+                client.delete_workout(workout_id)
+                results.append({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "message": f"Workout {workout_id} deleted successfully"
+                })
             except Exception as e:
                 results.append({
                     "status": "error",
@@ -711,11 +776,26 @@ def register_tools(app):
         This adds an existing workout from your Garmin workout library
         to your Garmin Connect calendar on the specified date.
 
+        Idempotent: if the workout is already scheduled for that date, this
+        is a no-op that reports success without creating a duplicate entry.
+
         Args:
             workout_id: ID of the workout to schedule (get IDs from get_workouts)
             calendar_date: Date to schedule the workout in YYYY-MM-DD format
         """
         try:
+            if _is_already_scheduled(get_client(ctx), workout_id, calendar_date):
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "idempotent": True,
+                    "message": (
+                        f"Workout {workout_id} already scheduled for "
+                        f"{calendar_date} — no action taken"
+                    )
+                }, indent=2)
+
             url = f"workout-service/schedule/{workout_id}"
             response = get_client(ctx).client.post("connectapi", url, json={"date": calendar_date})
 
@@ -802,6 +882,22 @@ def register_tools(app):
                         continue
                     workout_id = upload_result['workoutId']
                     workout_name = upload_result.get('workoutName')
+
+                if _is_already_scheduled(client, workout_id, calendar_date):
+                    entry = {
+                        "status": "success",
+                        "workout_id": workout_id,
+                        "scheduled_date": calendar_date,
+                        "idempotent": True,
+                        "message": (
+                            f"Workout {workout_id} already scheduled for "
+                            f"{calendar_date} — no action taken"
+                        )
+                    }
+                    if workout_name:
+                        entry["workout_name"] = workout_name
+                    results.append(entry)
+                    continue
 
                 url = f"workout-service/schedule/{workout_id}"
                 response = client.client.post("connectapi", url, json={"date": calendar_date})

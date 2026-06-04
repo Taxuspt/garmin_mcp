@@ -22,32 +22,98 @@ def register_tools(app):
     """Register all activity management tools with the MCP server app"""
 
     @app.tool()
-    async def get_activities_by_date(ctx: Context, start_date: str, end_date: str, activity_type: str = "") -> str:
-        """Get activities data between specified dates, optionally filtered by activity type
+    async def get_activities_by_date(
+        ctx: Context,
+        start_date: str,
+        end_date: str,
+        activity_type: str = "",
+        page: int = 0,
+        page_size: int = 100,
+    ) -> str:
+        """Get activities between specified dates with pagination support.
+
+        For accounts with large activity histories, broad date ranges can return
+        thousands of activities in a single response. Use page and page_size to
+        retrieve activities in manageable chunks and avoid "result too large" errors.
+        Activities are ordered newest-first.
+
+        Pagination: when has_more is true the response includes next_page — pass
+        that value as page on the next call to retrieve the following page. Repeat
+        until has_more is false.
+
+        Note: total_count for a date range is not available from the Garmin API
+        without fetching all results. Use has_more / next_page to walk pages.
+
+        Each activity includes an event_type field with values such as:
+          - "race"          — explicitly tagged as a race by the user
+          - "training"      — explicitly tagged as a training activity
+          - "uncategorized" — no event type set; common for Peloton imports and
+                              untagged outdoor runs. Distinct from "training":
+                              filter for races with event_type == "race" rather
+                              than excluding "training", since many non-race
+                              activities appear as "uncategorized" not "training"
+          - field omitted   — activity pre-dates event type support in the API
 
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
             activity_type: Optional activity type filter (e.g., cycling, running, swimming)
+            page: Zero-based page number (default 0)
+            page_size: Number of activities per page, max 200 (default 100)
         """
         try:
-            activities = get_client(ctx).get_activities_by_date(start_date, end_date, activity_type)
-            if not activities:
-                return f"No activities found between {start_date} and {end_date}" + \
-                       (f" for activity type '{activity_type}'" if activity_type else "")
+            # Clamp page_size to [1, 200]
+            page_size = min(max(1, page_size), 200)
+            start = page * page_size
 
-            # Curate the activity list
-            curated = {
-                "count": len(activities),
-                "date_range": {"start": start_date, "end": end_date},
-                "activities": []
+            # Call the Garmin API directly with explicit pagination params.
+            # The library's get_activities_by_date auto-fetches ALL matching
+            # activities in a loop (hardcoded limit=20 per request), which causes
+            # "Tool result is too large" errors on accounts with large histories.
+            # Calling connectapi directly lets us fetch exactly one page at a time.
+            params: Dict[str, Any] = {
+                "startDate": start_date,
+                "endDate": end_date,
+                "start": str(start),
+                "limit": str(page_size),
             }
+            if activity_type:
+                params["activityType"] = activity_type
+
+            client = get_client(ctx)
+            activities = client.connectapi(
+                client.garmin_connect_activities,
+                params=params,
+            )
+
+            if not activities:
+                return json.dumps({
+                    "count": 0,
+                    "page": page,
+                    "page_size": page_size,
+                    "has_more": False,
+                    "date_range": {"start": start_date, "end": end_date},
+                    "activities": [],
+                }, indent=2)
+
+            has_more = len(activities) == page_size
+            curated: Dict[str, Any] = {
+                "count": len(activities),
+                "page": page,
+                "page_size": page_size,
+                "has_more": has_more,
+                "date_range": {"start": start_date, "end": end_date},
+                "activities": [],
+            }
+            if has_more:
+                curated["next_page"] = page + 1
 
             for a in activities:
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
@@ -96,6 +162,7 @@ def register_tools(app):
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),
@@ -115,13 +182,20 @@ def register_tools(app):
             return f"Error retrieving activities for date: {str(e)}"
 
     @app.tool()
-    async def get_activity(ctx: Context, activity_id: int) -> str:
-        """Get basic activity information
+    async def get_activity(ctx: Context, activity_id: Union[int, str]) -> str:
+        """Get detailed information for a single activity.
+
+        Returns a comprehensive summary including timing, distance, heart rate,
+        elevation, training effect, and an event_type field. Common event_type
+        values: "race", "training", "uncategorized" (no event type set by the
+        user). The field is omitted for very old activities that pre-date event
+        type support in the Garmin API.
 
         Args:
             activity_id: ID of the activity to retrieve
         """
         try:
+            activity_id = int(activity_id)
             activity = get_client(ctx).get_activity(activity_id)
             if not activity:
                 return f"No activity found with ID {activity_id}"
@@ -135,6 +209,7 @@ def register_tools(app):
                 "id": activity.get('activityId'),
                 "name": activity.get('activityName'),
                 "type": activity_type.get('typeKey'),
+                "event_type": (activity.get('eventType') or {}).get('typeKey'),
                 "parent_type": activity_type.get('parentTypeId'),
 
                 # Timing
@@ -209,7 +284,7 @@ def register_tools(app):
             return f"Error retrieving activity: {str(e)}"
 
     @app.tool()
-    async def set_activity_name(ctx: Context, activity_id: int, activity_name: str) -> str:
+    async def set_activity_name(ctx: Context, activity_id: Union[int, str], activity_name: str) -> str:
         """Set or update the name of an activity.
 
         Args:
@@ -217,6 +292,7 @@ def register_tools(app):
             activity_name: New activity name
         """
         try:
+            activity_id = int(activity_id)
             activity_name = activity_name.strip()
             if not activity_name:
                 return "Activity name cannot be empty"
@@ -236,13 +312,14 @@ def register_tools(app):
             return f"Error updating activity name: {str(e)}"
 
     @app.tool()
-    async def get_activity_splits(ctx: Context, activity_id: int) -> str:
+    async def get_activity_splits(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get splits for an activity
 
         Args:
             activity_id: ID of the activity to retrieve splits for
         """
         try:
+            activity_id = int(activity_id)
             splits = get_client(ctx).get_activity_splits(activity_id)
             if not splits:
                 return f"No splits found for activity with ID {activity_id}"
@@ -317,13 +394,14 @@ def register_tools(app):
             return f"Error retrieving activity splits: {str(e)}"
 
     @app.tool()
-    async def get_activity_typed_splits(ctx: Context, activity_id: int) -> str:
+    async def get_activity_typed_splits(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get typed splits for an activity
 
         Args:
             activity_id: ID of the activity to retrieve typed splits for
         """
         try:
+            activity_id = int(activity_id)
             typed_splits = get_client(ctx).get_activity_typed_splits(activity_id)
             if not typed_splits:
                 return f"No typed splits found for activity with ID {activity_id}"
@@ -333,13 +411,14 @@ def register_tools(app):
             return f"Error retrieving activity typed splits: {str(e)}"
 
     @app.tool()
-    async def get_activity_split_summaries(ctx: Context, activity_id: int) -> str:
+    async def get_activity_split_summaries(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get split summaries for an activity
 
         Args:
             activity_id: ID of the activity to retrieve split summaries for
         """
         try:
+            activity_id = int(activity_id)
             split_summaries = get_client(ctx).get_activity_split_summaries(activity_id)
             if not split_summaries:
                 return f"No split summaries found for activity with ID {activity_id}"
@@ -349,13 +428,14 @@ def register_tools(app):
             return f"Error retrieving activity split summaries: {str(e)}"
 
     @app.tool()
-    async def get_activity_weather(ctx: Context, activity_id: int) -> str:
+    async def get_activity_weather(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get weather data for an activity
 
         Args:
             activity_id: ID of the activity to retrieve weather data for
         """
         try:
+            activity_id = int(activity_id)
             weather = get_client(ctx).get_activity_weather(activity_id)
             if not weather:
                 return f"No weather data found for activity with ID {activity_id}"
@@ -382,13 +462,14 @@ def register_tools(app):
             return f"Error retrieving activity weather data: {str(e)}"
 
     @app.tool()
-    async def get_activity_hr_in_timezones(ctx: Context, activity_id: int) -> str:
+    async def get_activity_hr_in_timezones(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get heart rate data in different time zones for an activity
 
         Args:
             activity_id: ID of the activity to retrieve heart rate time zone data for
         """
         try:
+            activity_id = int(activity_id)
             hr_zones = get_client(ctx).get_activity_hr_in_timezones(activity_id)
             if not hr_zones:
                 return f"No heart rate time zone data found for activity with ID {activity_id}"
@@ -398,7 +479,7 @@ def register_tools(app):
             return f"Error retrieving activity heart rate time zone data: {str(e)}"
 
     @app.tool()
-    async def get_activity_power_in_timezones(ctx: Context, activity_id: int) -> str:
+    async def get_activity_power_in_timezones(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get power distribution across training zones for an activity.
 
         Returns time spent in each power zone with watt thresholds and duration.
@@ -408,6 +489,7 @@ def register_tools(app):
             activity_id: ID of the activity to retrieve power zone data for
         """
         try:
+            activity_id = int(activity_id)
             power_zones = get_client(ctx).get_activity_power_in_timezones(activity_id)
             if not power_zones:
                 return f"No power zone data found for activity {activity_id}. Ensure the activity was recorded with a power meter."
@@ -417,13 +499,14 @@ def register_tools(app):
             return f"Error retrieving activity power zone data: {str(e)}"
 
     @app.tool()
-    async def get_activity_gear(ctx: Context, activity_id: int) -> str:
+    async def get_activity_gear(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get gear data used for an activity
 
         Args:
             activity_id: ID of the activity to retrieve gear data for
         """
         try:
+            activity_id = int(activity_id)
             gear = get_client(ctx).get_activity_gear(activity_id)
             if not gear:
                 return f"No gear data found for activity with ID {activity_id}"
@@ -433,13 +516,14 @@ def register_tools(app):
             return f"Error retrieving activity gear data: {str(e)}"
 
     @app.tool()
-    async def get_activity_exercise_sets(ctx: Context, activity_id: int) -> str:
+    async def get_activity_exercise_sets(ctx: Context, activity_id: Union[int, str]) -> str:
         """Get exercise sets for strength training activities
 
         Args:
             activity_id: ID of the activity to retrieve exercise sets for
         """
         try:
+            activity_id = int(activity_id)
             exercise_sets = get_client(ctx).get_activity_exercise_sets(activity_id)
             if not exercise_sets:
                 return f"No exercise sets found for activity with ID {activity_id}"
@@ -468,13 +552,20 @@ def register_tools(app):
 
     @app.tool()
     async def get_activities(ctx: Context, start: int = 0, limit: int = 20) -> str:
-        """Get activities with pagination support
+        """Get activities with pagination support.
 
-        Retrieves a paginated list of activities. Use this for browsing through
-        large activity lists more efficiently than get_activities_by_date.
+        Retrieves a paginated list of activities ordered newest-first. Use this
+        for browsing through large activity lists when you do not need to filter
+        by date range, or as a complement to get_activities_by_date.
+
+        Each activity includes an event_type field. Common values: "race",
+        "training", "uncategorized" (no event type set by the user — common for
+        Peloton imports and untagged runs). Filter for races with
+        event_type == "race" rather than excluding "training", as many non-race
+        activities appear as "uncategorized" rather than "training".
 
         Args:
-            start: Starting index (default 0, activities are ordered newest first)
+            start: Starting index (default 0)
             limit: Maximum number of activities to return (default 20, max 100)
         """
         try:
@@ -500,6 +591,7 @@ def register_tools(app):
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
                     "type": a.get('activityType', {}).get('typeKey'),
+                    "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
                     "duration_seconds": a.get('duration'),

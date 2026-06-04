@@ -290,7 +290,7 @@ async def test_get_inprogress_virtual_challenges_tool(app_with_challenges, mock_
 
     # Verify
     assert result is not None
-    mock_garmin_client.get_inprogress_virtual_challenges.assert_called_once_with(0, 20)
+    mock_garmin_client.get_inprogress_virtual_challenges.assert_called_once_with(1, 20)
 
 
 # Error handling tests

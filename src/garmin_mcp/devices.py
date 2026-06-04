@@ -95,17 +95,32 @@ def register_tools(app):
             return f"Error retrieving last used device: {str(e)}"
 
     @app.tool()
-    async def get_device_settings(ctx: Context, device_id: Union[int, str]) -> str:
+    async def get_device_settings(ctx: Context, device_id: Optional[Union[int, str]] = None) -> str:
         """Get settings for a specific Garmin device
 
         Returns device configuration including time/date format, units,
         activity tracking settings, and alarm information.
 
         Args:
-            device_id: Device ID (can be obtained from get_devices or get_device_last_used)
+            device_id: Device ID (optional; defaults to the most recently used
+                device when omitted; can be obtained from get_devices or
+                get_device_last_used)
         """
         try:
-            settings = get_client(ctx).get_device_settings(device_id)
+            client = get_client(ctx)
+            if device_id is None:
+                last_used = client.get_device_last_used()
+                if not last_used:
+                    return (
+                        "No default device found. Pass device_id explicitly or "
+                        "register a device with Garmin Connect."
+                    )
+
+                device_id = last_used.get("userDeviceId")
+                if not device_id:
+                    return "Default device has no userDeviceId. Pass device_id explicitly."
+
+            settings = client.get_device_settings(device_id)
             if not settings:
                 return f"No settings found for device ID {device_id}."
 

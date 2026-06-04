@@ -33,37 +33,47 @@ def app_with_activity_management(mock_garmin_client):
 @pytest.mark.asyncio
 async def test_get_activities_by_date_tool(app_with_activity_management, mock_garmin_client):
     """Test get_activities_by_date tool returns activities in date range"""
-    # Setup mock
-    mock_garmin_client.get_activities_by_date.return_value = MOCK_ACTIVITIES
+    # Tool now calls connectapi directly with explicit pagination params
+    mock_garmin_client.connectapi.return_value = MOCK_ACTIVITIES
 
-    # Call tool
     result = await app_with_activity_management.call_tool(
         "get_activities_by_date",
         {"start_date": "2024-01-08", "end_date": "2024-01-15"}
     )
 
-    # Verify
     assert result is not None
-    mock_garmin_client.get_activities_by_date.assert_called_once_with("2024-01-08", "2024-01-15", "")
+    mock_garmin_client.connectapi.assert_called_once_with(
+        mock_garmin_client.garmin_connect_activities,
+        params={
+            "startDate": "2024-01-08",
+            "endDate": "2024-01-15",
+            "start": "0",
+            "limit": "100",
+        },
+    )
 
 
 @pytest.mark.asyncio
 async def test_get_activities_by_date_with_type(app_with_activity_management, mock_garmin_client):
     """Test get_activities_by_date tool with activity type filter"""
-    # Setup mock
     filtered_activities = [MOCK_ACTIVITIES[0]]  # Only running activities
-    mock_garmin_client.get_activities_by_date.return_value = filtered_activities
+    mock_garmin_client.connectapi.return_value = filtered_activities
 
-    # Call tool
     result = await app_with_activity_management.call_tool(
         "get_activities_by_date",
         {"start_date": "2024-01-08", "end_date": "2024-01-15", "activity_type": "running"}
     )
 
-    # Verify
     assert result is not None
-    mock_garmin_client.get_activities_by_date.assert_called_once_with(
-        "2024-01-08", "2024-01-15", "running"
+    mock_garmin_client.connectapi.assert_called_once_with(
+        mock_garmin_client.garmin_connect_activities,
+        params={
+            "startDate": "2024-01-08",
+            "endDate": "2024-01-15",
+            "start": "0",
+            "limit": "100",
+            "activityType": "running",
+        },
     )
 
 
@@ -100,6 +110,27 @@ async def test_get_activity_tool(app_with_activity_management, mock_garmin_clien
     # Verify
     assert result is not None
     mock_garmin_client.get_activity.assert_called_once_with(activity_id)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_accepts_string_id(app_with_activity_management, mock_garmin_client):
+    """Test get_activity accepts large IDs serialized as strings
+
+    Some MCP clients stringify large numeric IDs in tool call arguments
+    (Zod schema receives string instead of integer). The tool must coerce
+    to int internally so the underlying Garmin call still gets an integer.
+    Regression test for the 'Expected number, received string' bug.
+    """
+    mock_garmin_client.get_activity.return_value = MOCK_ACTIVITY_DETAILS
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": "22833209898"}  # string, not int
+    )
+
+    assert result is not None
+    # Library must have been called with an int, not a string
+    mock_garmin_client.get_activity.assert_called_once_with(22833209898)
 
 
 @pytest.mark.asyncio
@@ -422,22 +453,87 @@ async def test_get_activity_types_tool(app_with_activity_management, mock_garmin
     mock_garmin_client.get_activity_types.assert_called_once()
 
 
-# Error handling tests
 @pytest.mark.asyncio
-async def test_get_activities_by_date_no_data(app_with_activity_management, mock_garmin_client):
-    """Test get_activities_by_date tool when no activities found"""
-    # Setup mock to return empty list
-    mock_garmin_client.get_activities_by_date.return_value = []
+async def test_get_activities_includes_event_type(app_with_activity_management, mock_garmin_client):
+    """Test get_activities returns event_type field for each activity"""
+    mock_garmin_client.get_activities.return_value = MOCK_ACTIVITIES
 
-    # Call tool
+    result = await app_with_activity_management.call_tool(
+        "get_activities",
+        {"start": 0, "limit": 20}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities"][0]["event_type"] == "race"
+    assert data["activities"][1]["event_type"] == "training"
+
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_includes_event_type(app_with_activity_management, mock_garmin_client):
+    """Test get_activities_by_date returns event_type field for each activity"""
+    mock_garmin_client.connectapi.return_value = MOCK_ACTIVITIES
+
     result = await app_with_activity_management.call_tool(
         "get_activities_by_date",
         {"start_date": "2024-01-08", "end_date": "2024-01-15"}
     )
 
-    # Verify error message is returned
+    data = json.loads(result[0][0].text)
+    assert data["activities"][0]["event_type"] == "race"
+    assert data["activities"][1]["event_type"] == "training"
+
+
+@pytest.mark.asyncio
+async def test_get_activities_omits_event_type_when_absent(app_with_activity_management, mock_garmin_client):
+    """Test that event_type is omitted gracefully when not present in the API response"""
+    activity_without_event_type = {
+        "activityId": 99999,
+        "activityName": "Old Activity",
+        "activityType": {"typeKey": "running", "typeId": 1},
+        "startTimeLocal": "2024-01-01 08:00:00",
+        "duration": 1200.0,
+    }
+    mock_garmin_client.get_activities.return_value = [activity_without_event_type]
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities",
+        {"start": 0, "limit": 20}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert "event_type" not in data["activities"][0]
+
+
+@pytest.mark.asyncio
+async def test_get_activity_includes_event_type(app_with_activity_management, mock_garmin_client):
+    """Test get_activity detail view returns event_type field"""
+    mock_garmin_client.get_activity.return_value = MOCK_ACTIVITY_DETAILS
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": 12345678901}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["event_type"] == "race"
+
+
+# Error handling tests
+@pytest.mark.asyncio
+async def test_get_activities_by_date_no_data(app_with_activity_management, mock_garmin_client):
+    """Test get_activities_by_date tool when no activities found returns empty JSON"""
+    mock_garmin_client.connectapi.return_value = []
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+
     assert result is not None
-    # Should contain helpful message about no activities found
+    data = json.loads(result[0][0].text)
+    assert data["count"] == 0
+    assert data["has_more"] is False
+    assert data["activities"] == []
 
 
 @pytest.mark.asyncio
@@ -486,3 +582,120 @@ async def test_set_activity_name_exception(app_with_activity_management, mock_ga
 
     assert result is not None
     assert result[0][0].text == "Error updating activity name: API Error"
+
+
+# ── Pagination tests ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_pagination_metadata_first_page(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test that pagination metadata is included on the first page"""
+    mock_garmin_client.connectapi.return_value = MOCK_ACTIVITIES
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-01", "end_date": "2024-01-31"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["page"] == 0
+    assert data["page_size"] == 100
+    assert data["count"] == len(MOCK_ACTIVITIES)
+    assert "date_range" in data
+    assert data["date_range"]["start"] == "2024-01-01"
+    assert data["date_range"]["end"] == "2024-01-31"
+
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_has_more_when_full_page(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test has_more=True and next_page present when a full page is returned"""
+    # Return exactly page_size activities to simulate a full page
+    page_size = 3
+    full_page = [MOCK_ACTIVITIES[0], MOCK_ACTIVITIES[1], MOCK_ACTIVITIES[0]]
+    mock_garmin_client.connectapi.return_value = full_page
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-01", "end_date": "2024-12-31", "page_size": page_size}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["has_more"] is True
+    assert data["next_page"] == 1
+    assert data["count"] == page_size
+
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_no_more_on_partial_page(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test has_more=False and no next_page when fewer than page_size results returned"""
+    mock_garmin_client.connectapi.return_value = MOCK_ACTIVITIES  # 2 activities < page_size 100
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-01", "end_date": "2024-01-31"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["has_more"] is False
+    assert "next_page" not in data
+
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_second_page_offset(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test that page=1 sends the correct start offset to the Garmin API"""
+    mock_garmin_client.connectapi.return_value = MOCK_ACTIVITIES
+
+    await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-01", "end_date": "2024-12-31", "page": 1, "page_size": 50}
+    )
+
+    mock_garmin_client.connectapi.assert_called_once_with(
+        mock_garmin_client.garmin_connect_activities,
+        params={
+            "startDate": "2024-01-01",
+            "endDate": "2024-12-31",
+            "start": "50",   # page=1 * page_size=50
+            "limit": "50",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_page_size_capped_at_200(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test that page_size is silently capped at 200"""
+    mock_garmin_client.connectapi.return_value = MOCK_ACTIVITIES
+
+    await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-01", "end_date": "2024-12-31", "page_size": 999}
+    )
+
+    call_params = mock_garmin_client.connectapi.call_args[1]["params"]
+    assert call_params["limit"] == "200"
+
+
+@pytest.mark.asyncio
+async def test_get_activities_by_date_default_page_size_is_100(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test that the default page_size of 100 is used when not specified"""
+    mock_garmin_client.connectapi.return_value = MOCK_ACTIVITIES
+
+    await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-01", "end_date": "2024-01-31"}
+    )
+
+    call_params = mock_garmin_client.connectapi.call_args[1]["params"]
+    assert call_params["limit"] == "100"
+    assert call_params["start"] == "0"

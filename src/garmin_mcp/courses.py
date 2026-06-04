@@ -239,8 +239,7 @@ def register_tools(app):
 
             client = get_client(ctx)
             # Step 1: parse the GPX server-side
-            parse_response = client.client.request(
-                "POST",
+            parsed = client.client.post(
                 "connectapi",
                 "/course-service/course/import",
                 files={
@@ -250,8 +249,8 @@ def register_tools(app):
                         "application/gpx+xml",
                     )
                 },
+                api=True,
             )
-            parsed = parse_response.json()
 
             effective_name = (
                 course_name
@@ -267,34 +266,9 @@ def register_tools(app):
                 description=description,
             )
 
-            # garminconnect injects the Authorization (Bearer DI token) header;
-            # we only add the browser-like headers the course-service expects.
-            domain = client.client.domain
-            create_response = client.client.post(
-                "connectapi",
-                "/course-service/course",
-                json=payload,
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Origin": f"https://connect.{domain}",
-                    "Referer": f"https://connect.{domain}/modern/courses",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "NK": "NT",
-                    "DI-Backend": f"connectapi.{domain}",
-                },
+            saved = client.client.post(
+                "connectapi", "/course-service/course", json=payload, api=True,
             )
-
-            if create_response.status_code != 200:
-                return json.dumps(
-                    {
-                        "status": "failed",
-                        "http_status": create_response.status_code,
-                        "body": create_response.text[:600],
-                    },
-                    indent=2,
-                )
-
-            saved = create_response.json()
             return json.dumps(
                 {
                     "status": "success",
@@ -304,7 +278,7 @@ def register_tools(app):
                     "elevation_gain_m": saved.get("elevationGainMeter"),
                     "elevation_loss_m": saved.get("elevationLossMeter"),
                     "activity_type_id": saved.get("activityTypePk"),
-                    "url": f"https://connect.{domain}/modern/course/{saved.get('courseId')}",
+                    "url": f"https://connect.{client.client.domain}/modern/course/{saved.get('courseId')}",
                 },
                 indent=2,
             )
@@ -320,37 +294,14 @@ def register_tools(app):
             course_id: ID of the course to delete (get IDs from get_courses).
         """
         try:
-            client = get_client(ctx)
-            domain = client.client.domain
-            response = client.client.delete(
-                "connectapi",
-                f"/course-service/course/{course_id}",
-                headers={
-                    "Accept": "application/json, text/plain, */*",
-                    "Origin": f"https://connect.{domain}",
-                    "Referer": f"https://connect.{domain}/modern/courses",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "NK": "NT",
-                    "DI-Backend": f"connectapi.{domain}",
-                },
+            get_client(ctx).client.delete(
+                "connectapi", f"/course-service/course/{course_id}"
             )
-
-            if response.status_code in (200, 204):
-                return json.dumps(
-                    {
-                        "status": "success",
-                        "course_id": course_id,
-                        "message": f"Course {course_id} deleted",
-                    },
-                    indent=2,
-                )
-
             return json.dumps(
                 {
-                    "status": "failed",
+                    "status": "success",
                     "course_id": course_id,
-                    "http_status": response.status_code,
-                    "message": response.text[:300],
+                    "message": f"Course {course_id} deleted",
                 },
                 indent=2,
             )

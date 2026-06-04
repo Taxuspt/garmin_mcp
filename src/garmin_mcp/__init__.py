@@ -88,6 +88,69 @@ tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64
 is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
 
+# --- Tool filtering ---------------------------------------------------------
+# Optionally expose only a subset of tools, to reduce the context an LLM must
+# carry. No modules are removed; tools are simply not registered when filtered.
+#   GARMIN_ENABLED_TOOLS  - comma-separated allowlist; if set, ONLY these register
+#   GARMIN_DISABLED_TOOLS - comma-separated denylist; ignored if an allowlist is set
+# Tool names are case-insensitive. Unset = all tools register (default behaviour).
+def _parse_tool_set(value):
+    if not value:
+        return set()
+    return {name.strip().lower() for name in value.split(",") if name.strip()}
+
+
+enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
+disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+
+
+class _ToolFilter:
+    """Wraps a FastMCP app to conditionally register tools by function name.
+
+    Modules register via ``@app.tool()``; we intercept that decorator and skip
+    registration for any tool not permitted by the env-var filter. All other
+    attribute access (``run``, ``resource``, ...) passes through to the app.
+    """
+
+    def __init__(self, app, enabled, disabled):
+        self._app = app
+        self._enabled = enabled
+        self._disabled = disabled
+        self._seen = set()  # tool names encountered, for typo detection
+
+    def _allowed(self, name):
+        name = name.lower()
+        if self._enabled:
+            return name in self._enabled
+        return name not in self._disabled
+
+    def tool(self, *args, **kwargs):
+        decorator = self._app.tool(*args, **kwargs)
+        # Prefer the explicit registered name if given (@app.tool(name="x")),
+        # so the env-var filter matches what the user actually configures.
+        explicit = kwargs.get("name") or (
+            args[0] if args and isinstance(args[0], str) else None
+        )
+
+        def wrapper(fn):
+            name = explicit or getattr(fn, "__name__", "")
+            self._seen.add(name.lower())
+            if self._allowed(name):
+                return decorator(fn)
+            return fn  # skip registration; tool never reaches the LLM
+
+        return wrapper
+
+    def unknown_filter_names(self):
+        """Configured names that never matched a real tool (likely typos)."""
+        configured = self._enabled or self._disabled
+        return sorted(configured - self._seen)
+
+    def __getattr__(self, item):
+        return getattr(self._app, item)
+# ---------------------------------------------------------------------------
+
+
 def init_api(email, password):
     """Initialize Garmin API with your credentials."""
     import io
@@ -244,8 +307,12 @@ def main():
     courses.configure(garmin_client)
     activity_analysis.configure(garmin_client)
 
-    # Create the MCP app
-    app = FastMCP("Garmin Connect v1.0")
+    # Create the MCP app, wrapped so the env-var filter can drop tools
+    app = _ToolFilter(FastMCP("Garmin Connect v1.0"), enabled_tools, disabled_tools)
+    if enabled_tools:
+        print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
+    elif disabled_tools:
+        print(f"Tool filter: denylist of {len(disabled_tools)} tool(s).", file=sys.stderr)
 
     # Register tools from all modules
     app = activity_management.register_tools(app)
@@ -266,6 +333,14 @@ def main():
 
     # Register resources (workout templates)
     app = workout_templates.register_resources(app)
+
+    # Warn about filter entries that matched no tool (most likely typos)
+    unknown = app.unknown_filter_names()
+    if unknown:
+        print(
+            f"Tool filter: warning — name(s) not found and ignored: {', '.join(unknown)}",
+            file=sys.stderr,
+        )
 
     # Run the MCP server
     app.run()

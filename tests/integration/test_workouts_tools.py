@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from garmin_mcp.client_resolver import set_global_client
 
 from garmin_mcp import workouts
+from garmin_mcp.workouts import _fix_repeat_group_step
 from tests.fixtures.garmin_responses import (
     MOCK_WORKOUTS,
     MOCK_WORKOUT_DETAILS,
@@ -19,6 +20,11 @@ from tests.fixtures.garmin_responses import (
 @pytest.fixture
 def app_with_workouts(mock_garmin_client):
     """Create FastMCP app with workouts tools registered"""
+    # Default: pre-check used by schedule_* tools sees no existing schedule
+    # so the POST path runs as before. Individual tests override this.
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {"workoutScheduleSummariesScalar": []}
+    }
     workouts.configure(mock_garmin_client)
     set_global_client(mock_garmin_client)
     app = FastMCP("Test Workouts")
@@ -503,97 +509,64 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
 
 # Delete workout tests
 @pytest.mark.asyncio
-async def test_delete_workout_success_204(app_with_workouts, mock_garmin_client):
-    """Test delete_workout tool with 204 response"""
+async def test_delete_workout_success(app_with_workouts, mock_garmin_client):
+    """Test delete_workout tool when the library call succeeds"""
     import json as json_module
-    from unittest.mock import MagicMock
 
-    # Setup mock for client.delete call
-    mock_response = MagicMock()
-    mock_response.status_code = 204
-    mock_garmin_client.client.delete.return_value = mock_response
+    # The MCP tool now delegates to garmin_client.delete_workout(id)
+    # (high-level method). Success is signalled by absence of exception.
+    mock_garmin_client.delete_workout.return_value = {}
 
-    # Call tool
     workout_id = 123456
     result = await app_with_workouts.call_tool(
         "delete_workout",
         {"workout_id": workout_id}
     )
 
-    # Verify
     assert result is not None
     result_data = json_module.loads(result[0][0].text)
     assert result_data["status"] == "success"
     assert result_data["workout_id"] == 123456
     assert "deleted successfully" in result_data["message"]
-
-
-@pytest.mark.asyncio
-async def test_delete_workout_success_200(app_with_workouts, mock_garmin_client):
-    """Test delete_workout tool with 200 response"""
-    import json as json_module
-    from unittest.mock import MagicMock
-
-    # Setup mock for client.delete call
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_garmin_client.client.delete.return_value = mock_response
-
-    # Call tool
-    workout_id = 789012
-    result = await app_with_workouts.call_tool(
-        "delete_workout",
-        {"workout_id": workout_id}
-    )
-
-    # Verify
-    assert result is not None
-    result_data = json_module.loads(result[0][0].text)
-    assert result_data["status"] == "success"
-    assert result_data["workout_id"] == 789012
+    mock_garmin_client.delete_workout.assert_called_once_with(workout_id)
 
 
 @pytest.mark.asyncio
 async def test_delete_workout_failure(app_with_workouts, mock_garmin_client):
-    """Test delete_workout tool when deletion fails (non-200/204 status)"""
+    """Test delete_workout tool when the library raises (e.g. 404)"""
     import json as json_module
-    from unittest.mock import MagicMock
 
-    # Setup mock for client.delete call with error status
-    mock_response = MagicMock()
-    mock_response.status_code = 404
-    mock_garmin_client.client.delete.return_value = mock_response
+    mock_garmin_client.delete_workout.side_effect = Exception("API Error 404")
 
-    # Call tool
     workout_id = 999999
     result = await app_with_workouts.call_tool(
         "delete_workout",
         {"workout_id": workout_id}
     )
 
-    # Verify
     assert result is not None
     result_data = json_module.loads(result[0][0].text)
     assert result_data["status"] == "failed"
     assert result_data["workout_id"] == 999999
-    assert result_data["http_status"] == 404
+    assert "404" in result_data["message"]
 
 
 @pytest.mark.asyncio
 async def test_delete_workout_exception(app_with_workouts, mock_garmin_client):
-    """Test delete_workout tool when an exception is raised"""
-    # Setup mock to raise exception
-    mock_garmin_client.client.delete.side_effect = Exception("Network error")
+    """Test delete_workout tool with a network-level exception"""
+    import json as json_module
 
-    # Call tool
+    mock_garmin_client.delete_workout.side_effect = Exception("Network error")
+
     result = await app_with_workouts.call_tool(
         "delete_workout",
         {"workout_id": 123456}
     )
 
-    # Verify error is handled gracefully
     assert result is not None
-    assert "Error deleting workout" in result[0][0].text
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert "Network error" in result_data["message"]
 
 
 # Error handling tests
@@ -634,11 +607,8 @@ async def test_upload_workout_exception(app_with_workouts, mock_garmin_client):
 async def test_delete_workouts_single(app_with_workouts, mock_garmin_client):
     """Test delete_workouts with a single workout ID"""
     import json as json_module
-    from unittest.mock import MagicMock
 
-    mock_response = MagicMock()
-    mock_response.status_code = 204
-    mock_garmin_client.client.delete.return_value = mock_response
+    mock_garmin_client.delete_workout.return_value = {}
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -658,11 +628,8 @@ async def test_delete_workouts_single(app_with_workouts, mock_garmin_client):
 async def test_delete_workouts_multiple(app_with_workouts, mock_garmin_client):
     """Test delete_workouts with multiple workout IDs"""
     import json as json_module
-    from unittest.mock import MagicMock
 
-    mock_response = MagicMock()
-    mock_response.status_code = 204
-    mock_garmin_client.client.delete.return_value = mock_response
+    mock_garmin_client.delete_workout.return_value = {}
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -674,21 +641,18 @@ async def test_delete_workouts_multiple(app_with_workouts, mock_garmin_client):
     assert result_data["total"] == 3
     assert result_data["succeeded"] == 3
     assert result_data["failed"] == 0
-    assert mock_garmin_client.client.delete.call_count == 3
+    assert mock_garmin_client.delete_workout.call_count == 3
 
 
 @pytest.mark.asyncio
 async def test_delete_workouts_partial_failure(app_with_workouts, mock_garmin_client):
     """Test delete_workouts when some deletions fail"""
     import json as json_module
-    from unittest.mock import MagicMock
 
-    ok_response = MagicMock()
-    ok_response.status_code = 204
-    err_response = MagicMock()
-    err_response.status_code = 404
-
-    mock_garmin_client.client.delete.side_effect = [ok_response, err_response]
+    mock_garmin_client.delete_workout.side_effect = [
+        {},
+        Exception("API Error 404"),
+    ]
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -701,8 +665,8 @@ async def test_delete_workouts_partial_failure(app_with_workouts, mock_garmin_cl
     assert result_data["succeeded"] == 1
     assert result_data["failed"] == 1
     assert result_data["results"][0]["status"] == "success"
-    assert result_data["results"][1]["status"] == "failed"
-    assert result_data["results"][1]["http_status"] == 404
+    assert result_data["results"][1]["status"] == "error"
+    assert "404" in result_data["results"][1]["message"]
 
 
 @pytest.mark.asyncio
@@ -710,7 +674,7 @@ async def test_delete_workouts_exception(app_with_workouts, mock_garmin_client):
     """Test delete_workouts when an exception is raised"""
     import json as json_module
 
-    mock_garmin_client.client.delete.side_effect = Exception("Network error")
+    mock_garmin_client.delete_workout.side_effect = Exception("Network error")
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
@@ -934,6 +898,45 @@ async def test_schedule_workouts_exception(app_with_workouts, mock_garmin_client
 
 
 @pytest.mark.asyncio
+async def test_schedule_workouts_idempotent(app_with_workouts, mock_garmin_client):
+    """Test schedule_workouts is a no-op when workout is already scheduled
+
+    The schedule endpoint on Garmin is NOT idempotent — a second POST creates
+    a duplicate calendar entry. The MCP tool pre-checks via GraphQL and skips
+    the POST when the same workout_id is already on that date.
+    """
+    import json as json_module
+
+    # GraphQL pre-check returns an existing schedule for this workout/date
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "workoutScheduleSummariesScalar": [
+                {
+                    "workoutId": 123456,
+                    "scheduleDate": "2024-01-15",
+                    "workoutName": "Easy Run",
+                }
+            ]
+        }
+    }
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {"schedules": [{"workout_id": 123456, "calendar_date": "2024-01-15"}]}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["total"] == 1
+    assert result_data["succeeded"] == 1
+    assert result_data["failed"] == 0
+    assert result_data["results"][0]["status"] == "success"
+    assert result_data["results"][0]["idempotent"] is True
+    # Critically: the schedule POST must NOT be called
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_client):
     """Test schedule_workouts with inline workout_data uploads-and-schedules in one call"""
     import json as json_module
@@ -1036,3 +1039,77 @@ async def test_schedule_workouts_inline_upload_no_id_returned(app_with_workouts,
     assert result_data["failed"] == 1
     assert result_data["results"][0]["status"] == "failed"
     mock_garmin_client.client.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _fix_repeat_group_step (unit tests)
+# ---------------------------------------------------------------------------
+
+def test_fix_repeat_group_adds_missing_condition_type_id():
+    """Adds conditionTypeId:7 when conditionTypeKey is 'iterations' but id is absent."""
+    step = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 5,
+        "endCondition": {"conditionTypeKey": "iterations"},
+        "endConditionValue": 5,
+        "workoutSteps": [],
+    }
+    _fix_repeat_group_step(step)
+    assert step["endCondition"]["conditionTypeId"] == 7
+    assert step["endCondition"]["conditionTypeKey"] == "iterations"
+
+
+def test_fix_repeat_group_leaves_existing_condition_type_id_unchanged():
+    """Does not overwrite conditionTypeId when already present."""
+    step = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 3,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 3,
+        "workoutSteps": [],
+    }
+    _fix_repeat_group_step(step)
+    assert step["endCondition"]["conditionTypeId"] == 7
+
+
+def test_fix_repeat_group_backfills_number_of_iterations_from_end_condition_value():
+    """numberOfIterations is set from endConditionValue when missing."""
+    step = {
+        "type": "RepeatGroupDTO",
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 4,
+        "workoutSteps": [],
+    }
+    _fix_repeat_group_step(step)
+    assert step["numberOfIterations"] == 4
+
+
+def test_fix_repeat_group_does_not_modify_non_repeat_steps():
+    """Steps that are not RepeatGroupDTO are not modified."""
+    step = {
+        "type": "ExecutableStepDTO",
+        "endCondition": {"conditionTypeKey": "time"},
+        "endConditionValue": 300.0,
+    }
+    _fix_repeat_group_step(step)
+    assert "conditionTypeId" not in step["endCondition"]
+
+
+def test_fix_repeat_group_recurses_into_nested_repeat_groups():
+    """Nested RepeatGroupDTOs inside another are also fixed."""
+    inner = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 2,
+        "endCondition": {"conditionTypeKey": "iterations"},
+        "endConditionValue": 2,
+        "workoutSteps": [],
+    }
+    outer = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 3,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 3,
+        "workoutSteps": [inner],
+    }
+    _fix_repeat_group_step(outer)
+    assert inner["endCondition"]["conditionTypeId"] == 7

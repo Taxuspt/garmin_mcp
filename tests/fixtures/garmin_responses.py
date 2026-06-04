@@ -11,6 +11,7 @@ MOCK_ACTIVITIES = [
         "activityId": 12345678901,
         "activityName": "Morning Run",
         "activityType": {"typeKey": "running", "typeId": 1},
+        "eventType": {"typeKey": "race", "typeId": 1},  # production values: "race", "training", "uncategorized"
         "startTimeLocal": "2024-01-15 07:00:00",
         "distance": 5000.0,
         "duration": 1800.0,
@@ -24,6 +25,7 @@ MOCK_ACTIVITIES = [
         "activityId": 12345678902,
         "activityName": "Cycling",
         "activityType": {"typeKey": "cycling", "typeId": 2},
+        "eventType": {"typeKey": "training", "typeId": 6},
         "startTimeLocal": "2024-01-14 16:00:00",
         "distance": 20000.0,
         "duration": 3600.0,
@@ -37,6 +39,7 @@ MOCK_ACTIVITY_DETAILS = {
     "activityId": 12345678901,
     "activityName": "Morning Run",
     "activityType": {"typeKey": "running", "typeId": 1},
+    "eventType": {"typeKey": "race", "typeId": 1},
     "startTimeLocal": "2024-01-15 07:00:00",
     "distance": 5000.0,
     "duration": 1800.0,
