@@ -2,8 +2,16 @@
 Workout-related functions for Garmin Connect MCP Server
 """
 import json
+import re
 import datetime
 from typing import Any, Dict, List, Optional, Union
+
+_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def _validate_date(value: str, field: str = "date") -> str:
+    if not _DATE_RE.match(value):
+        raise ValueError(f"Invalid {field} '{value}': expected YYYY-MM-DD")
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -333,6 +341,7 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
     calendar entry on the same day. Querying first avoids the duplicate.
     """
     try:
+        _validate_date(calendar_date, "calendar_date")
         query = {
             "query": (
                 f'query{{workoutScheduleSummariesScalar('
@@ -676,6 +685,8 @@ def register_tools(app):
             end_date: End date in YYYY-MM-DD format
         """
         try:
+            _validate_date(start_date, "start_date")
+            _validate_date(end_date, "end_date")
             # Query for scheduled workouts using GraphQL
             query = {
                 "query": f'query{{workoutScheduleSummariesScalar(startDate:"{start_date}", endDate:"{end_date}")}}'
@@ -716,6 +727,7 @@ def register_tools(app):
             calendar_date: Reference date in YYYY-MM-DD format (returns week's workouts)
         """
         try:
+            _validate_date(calendar_date, "calendar_date")
             # Query for training plan workouts using GraphQL
             query = {
                 "query": f'query{{trainingPlanScalar(calendarDate:"{calendar_date}", lang:"en-US", firstDayOfWeek:"monday")}}'
