@@ -934,6 +934,7 @@ def register_tools(app):
                 if workout_data is not None:
                     # Upload the workout first, then use the returned ID to schedule
                     _fix_hr_zone_steps(workout_data)
+                    _validate_end_condition_steps(workout_data)
                     upload_result = garmin_client.upload_workout(workout_data)
                     if not isinstance(upload_result, dict) or upload_result.get('workoutId') is None:
                         results.append({

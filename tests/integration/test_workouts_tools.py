@@ -1139,6 +1139,38 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
 
 
 @pytest.mark.asyncio
+async def test_schedule_workouts_inline_upload_rejects_end_condition_mismatch(
+    app_with_workouts, mock_garmin_client
+):
+    """Inline workout_data follows the same validation as upload_workout."""
+    import json as json_module
+
+    inline_data = _running_workout_with_steps([{
+        "type": "ExecutableStepDTO",
+        "stepOrder": 1,
+        "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
+        "endCondition": {"conditionTypeId": 4, "conditionTypeKey": "heart.rate"},
+        "endConditionValue": 145.0,
+        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+    }], name="Invalid Inline HR Workout")
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {"schedules": [{"workout_data": inline_data, "calendar_date": "2024-02-01"}]}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["total"] == 1
+    assert result_data["succeeded"] == 0
+    assert result_data["failed"] == 1
+    assert result_data["results"][0]["status"] == "error"
+    assert "conditionTypeKey 'heart.rate' requires conditionTypeId 6" in result_data["results"][0]["message"]
+    mock_garmin_client.upload_workout.assert_not_called()
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_schedule_workouts_mixed_inline_and_id(app_with_workouts, mock_garmin_client):
     """Test schedule_workouts mixing inline workout_data and existing workout_id"""
     import json as json_module
