@@ -1213,4 +1213,29 @@ def register_tools(app):
         except Exception as e:
             return f"Error computing power duration curve: {str(e)}"
 
+    @app.tool()
+    async def set_fit_download_dir(path: str) -> str:
+        """Set and persist the default directory for downloaded activity files.
+
+        Stores the absolute path in a small JSON config file
+        (~/.garminconnect_fit_config.json, overridable via GARMIN_FIT_CONFIG) so
+        download_activity_file can save files without asking again.
+
+        Args:
+            path: Directory where activity files (.fit/.gpx/.tcx/.csv) are saved.
+                  Pass the current working directory to keep files where the
+                  server runs.
+        """
+        try:
+            abspath = os.path.abspath(os.path.expanduser(path))
+            os.makedirs(abspath, exist_ok=True)
+            _write_fit_config(abspath)
+            return json.dumps({
+                "download_dir": abspath,
+                "config_path": os.path.expanduser(_get_fit_config_path()),
+                "message": "Default FIT download directory configured.",
+            }, indent=2)
+        except Exception as e:
+            return f"Error setting FIT download directory: {str(e)}"
+
     return app

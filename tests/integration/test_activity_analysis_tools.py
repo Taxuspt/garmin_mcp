@@ -962,3 +962,23 @@ def test_read_fit_config_non_dict_returns_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("GARMIN_FIT_CONFIG", str(cfg))
     cfg.write_text("[1, 2, 3]")
     assert activity_analysis._read_fit_config() == {}
+
+
+# ---------------------------------------------------------------------------
+# set_fit_download_dir tool
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_set_fit_download_dir_persists(app_with_activity_analysis, monkeypatch, tmp_path):
+    cfg = tmp_path / "fit_config.json"
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(cfg))
+    target = tmp_path / "downloads"
+
+    result = await app_with_activity_analysis.call_tool(
+        "set_fit_download_dir", {"path": str(target)}
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["download_dir"] == os.path.abspath(str(target))
+    assert os.path.isdir(str(target))  # directory was created
+    assert json.loads(cfg.read_text())["download_dir"] == os.path.abspath(str(target))
