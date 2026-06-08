@@ -1095,4 +1095,26 @@ async def test_download_activity_file_none_response(
     )
     text = result[0][0].text
 
-    assert "No fit data" in text or "Error" in text
+    assert "No fit data returned" in text
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_fit_extraction_failure(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    # A ZIP with no .fit entry makes _extract_fit_bytes raise; the tool should
+    # return a debug JSON payload and write nothing.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("notes.txt", b"no fit here")
+    mock_garmin_client.download_activity.return_value = buf.getvalue()
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "error" in data
+    assert "first_16_bytes_hex" in data["debug"]
+    assert not (tmp_path / f"{ACTIVITY_ID}.fit").exists()
