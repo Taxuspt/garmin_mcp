@@ -4,6 +4,7 @@ Integration tests for activity_analysis module MCP tools
 Tests the get_activity_fit_data tool using mocked Garmin API and fitparse responses.
 """
 import json
+import os
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from mcp.server.fastmcp import FastMCP
@@ -909,3 +910,38 @@ async def test_fit_hrv_lap_below_minimum_gets_no_hrv(app_with_activity_analysis,
     assert len(data["laps"]) == 2
     assert "hrv" in data["laps"][0]
     assert "hrv" not in data["laps"][1]
+
+
+# ---------------------------------------------------------------------------
+# Download config / directory resolution helpers
+# ---------------------------------------------------------------------------
+
+def test_resolve_download_dir_prefers_output_dir_arg(monkeypatch, tmp_path):
+    monkeypatch.setenv("GARMIN_FIT_DOWNLOAD_DIR", str(tmp_path / "env"))
+    result = activity_analysis._resolve_download_dir(str(tmp_path / "arg"))
+    assert result == os.path.abspath(str(tmp_path / "arg"))
+
+
+def test_resolve_download_dir_uses_env_var(monkeypatch, tmp_path):
+    monkeypatch.setenv("GARMIN_FIT_DOWNLOAD_DIR", str(tmp_path / "env"))
+    result = activity_analysis._resolve_download_dir(None)
+    assert result == os.path.abspath(str(tmp_path / "env"))
+
+
+def test_resolve_download_dir_uses_config_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "fit_config.json"))
+    activity_analysis._write_fit_config(str(tmp_path / "saved"))
+    result = activity_analysis._resolve_download_dir(None)
+    assert result == os.path.abspath(str(tmp_path / "saved"))
+
+
+def test_resolve_download_dir_returns_none_when_unconfigured(monkeypatch, tmp_path):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "missing.json"))
+    assert activity_analysis._resolve_download_dir(None) is None
+
+
+def test_read_fit_config_missing_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "missing.json"))
+    assert activity_analysis._read_fit_config() == {}

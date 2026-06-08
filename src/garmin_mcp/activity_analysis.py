@@ -14,6 +14,7 @@ Exposes data not available through the REST API:
 import gzip
 import io
 import json
+import os
 import zipfile
 from typing import Any, Dict, List, Optional, Union
 
@@ -110,6 +111,58 @@ def _extract_fit_bytes(raw: bytes) -> bytes:
         return gzip.decompress(raw)
 
     return raw
+
+
+# ---------------------------------------------------------------------------
+# Download directory config (for download_activity_file / set_fit_download_dir)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_FIT_CONFIG = "~/.garminconnect_fit_config.json"
+
+
+def _get_fit_config_path() -> str:
+    """Path to the JSON config that stores the default download directory."""
+    return os.getenv("GARMIN_FIT_CONFIG") or _DEFAULT_FIT_CONFIG
+
+
+def _read_fit_config() -> dict:
+    """Read the FIT download config. Returns {} if missing or invalid."""
+    path = os.path.expanduser(_get_fit_config_path())
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_fit_config(dir_path: str) -> None:
+    """Persist the default download directory to the JSON config."""
+    path = os.path.expanduser(_get_fit_config_path())
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"download_dir": dir_path}, f, indent=2)
+
+
+def _resolve_download_dir(output_dir: Optional[str]) -> Optional[str]:
+    """Resolve the directory for saving activity files (first match wins):
+
+    1. output_dir argument (one-off; not persisted)
+    2. GARMIN_FIT_DOWNLOAD_DIR environment variable
+    3. persisted config (download_dir)
+    Returns an absolute path, or None when nothing is configured.
+    """
+    if output_dir:
+        return os.path.abspath(os.path.expanduser(output_dir))
+    env_dir = os.getenv("GARMIN_FIT_DOWNLOAD_DIR")
+    if env_dir:
+        return os.path.abspath(os.path.expanduser(env_dir))
+    cfg_dir = _read_fit_config().get("download_dir")
+    if cfg_dir:
+        return os.path.abspath(os.path.expanduser(cfg_dir))
+    return None
 
 
 def _safe_avg(values: list) -> Optional[float]:
