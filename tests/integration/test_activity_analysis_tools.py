@@ -3,8 +3,10 @@ Integration tests for activity_analysis module MCP tools
 
 Tests the get_activity_fit_data tool using mocked Garmin API and fitparse responses.
 """
+import io
 import json
 import os
+import zipfile
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from mcp.server.fastmcp import FastMCP
@@ -982,3 +984,115 @@ async def test_set_fit_download_dir_persists(app_with_activity_analysis, monkeyp
     assert data["download_dir"] == os.path.abspath(str(target))
     assert os.path.isdir(str(target))  # directory was created
     assert json.loads(cfg.read_text())["download_dir"] == os.path.abspath(str(target))
+
+
+# ---------------------------------------------------------------------------
+# download_activity_file tool
+# ---------------------------------------------------------------------------
+
+def _make_fit_zip(fit_bytes: bytes) -> bytes:
+    """Build an in-memory ZIP containing a single .fit file (as Garmin returns)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("activity.fit", fit_bytes)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_fit_saves_file(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    from garminconnect import Garmin
+
+    fit_bytes = b"\x0e\x10FITDATA"
+    mock_garmin_client.download_activity.return_value = _make_fit_zip(fit_bytes)
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    expected = tmp_path / f"{ACTIVITY_ID}.fit"
+    assert expected.read_bytes() == fit_bytes
+    assert data["file_path"] == os.path.abspath(str(expected))
+    assert data["format"] == "fit"
+    assert data["size_bytes"] == len(fit_bytes)
+    mock_garmin_client.download_activity.assert_called_once_with(
+        ACTIVITY_ID, dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt,enum_attr", [
+    ("gpx", "GPX"),
+    ("tcx", "TCX"),
+    ("csv", "CSV"),
+])
+async def test_download_activity_file_other_formats_write_raw_bytes(
+    app_with_activity_analysis, mock_garmin_client, tmp_path, fmt, enum_attr
+):
+    from garminconnect import Garmin
+
+    payload = f"<{fmt}>data</{fmt}>".encode()
+    mock_garmin_client.download_activity.return_value = payload
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "format": fmt, "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    expected = tmp_path / f"{ACTIVITY_ID}.{fmt}"
+    assert expected.read_bytes() == payload
+    assert data["format"] == fmt
+    mock_garmin_client.download_activity.assert_called_once_with(
+        ACTIVITY_ID, dl_fmt=getattr(Garmin.ActivityDownloadFormat, enum_attr)
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_invalid_format(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "format": "pdf", "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "Invalid format" in data["error"]
+    assert "fit" in data["valid_formats"]
+    mock_garmin_client.download_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_needs_setup(
+    app_with_activity_analysis, mock_garmin_client, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "missing.json"))
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file", {"activity_id": ACTIVITY_ID}
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["status"] == "needs_setup"
+    assert "suggested_default" in data
+    mock_garmin_client.download_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_none_response(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    mock_garmin_client.download_activity.return_value = None
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "output_dir": str(tmp_path)},
+    )
+    text = result[0][0].text
+
+    assert "No fit data" in text or "Error" in text

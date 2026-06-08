@@ -1214,6 +1214,106 @@ def register_tools(app):
             return f"Error computing power duration curve: {str(e)}"
 
     @app.tool()
+    async def download_activity_file(
+        activity_id: Union[int, str],
+        format: str = "fit",
+        output_dir: Optional[str] = None,
+    ) -> str:
+        """Download an activity and save it to disk as a file.
+
+        Saves the activity in the requested format. Defaults to the original .fit
+        file; Garmin also supports gpx, tcx, and csv.
+
+        Directory resolution (first match wins):
+          1. output_dir argument (one-off; not persisted)
+          2. GARMIN_FIT_DOWNLOAD_DIR environment variable
+          3. persisted config (set via set_fit_download_dir)
+        If none is configured, returns status "needs_setup" with a suggested
+        default (the server's current working directory). In that case, ask the
+        user where to save, call set_fit_download_dir(path), then call this tool
+        again.
+
+        Files are named "{activity_id}.{ext}" and overwrite any existing file.
+
+        Args:
+            activity_id: Garmin activity ID
+            format: One of fit, gpx, tcx, csv (default fit)
+            output_dir: Optional one-off directory override (not persisted)
+        """
+        try:
+            fmt = str(format).strip().lower()
+            from garminconnect import Garmin
+
+            format_map = {
+                "fit": Garmin.ActivityDownloadFormat.ORIGINAL,
+                "gpx": Garmin.ActivityDownloadFormat.GPX,
+                "tcx": Garmin.ActivityDownloadFormat.TCX,
+                "csv": Garmin.ActivityDownloadFormat.CSV,
+            }
+            if fmt not in format_map:
+                return json.dumps({
+                    "error": f"Invalid format '{format}'.",
+                    "valid_formats": list(format_map.keys()),
+                }, indent=2)
+
+            download_dir = _resolve_download_dir(output_dir)
+            if download_dir is None:
+                return json.dumps({
+                    "status": "needs_setup",
+                    "suggested_default": os.getcwd(),
+                    "config_path": os.path.expanduser(_get_fit_config_path()),
+                    "message": (
+                        "No download directory configured. Ask the user where to "
+                        "save activity files (offer the current working directory "
+                        "as the default), then call set_fit_download_dir(path) "
+                        "before downloading."
+                    ),
+                }, indent=2)
+
+            activity_id = int(activity_id)
+            os.makedirs(download_dir, exist_ok=True)
+
+            data = garmin_client.download_activity(
+                activity_id, dl_fmt=format_map[fmt]
+            )
+            if not data:
+                return f"No {fmt} data returned for activity {activity_id}"
+
+            raw = bytes(data)
+            if fmt == "fit":
+                try:
+                    payload = _extract_fit_bytes(raw)
+                except Exception as extract_err:
+                    return json.dumps({
+                        "error": str(extract_err),
+                        "debug": {
+                            "total_bytes": len(raw),
+                            "first_16_bytes_hex": raw[:16].hex(),
+                            "hint": (
+                                "1f8b = gzip, 504b = ZIP, 0e10/0c10 = raw FIT, "
+                                "3c or 7b = HTML/JSON error from Garmin"
+                            ),
+                        },
+                    }, indent=2)
+            else:
+                payload = raw
+
+            file_path = os.path.join(download_dir, f"{activity_id}.{fmt}")
+            with open(file_path, "wb") as f:
+                f.write(payload)
+
+            return json.dumps({
+                "activity_id": activity_id,
+                "format": fmt,
+                "file_path": os.path.abspath(file_path),
+                "size_bytes": len(payload),
+                "message": "Activity file saved.",
+            }, indent=2)
+
+        except Exception as e:
+            return f"Error downloading activity {activity_id}: {str(e)}"
+
+    @app.tool()
     async def set_fit_download_dir(path: str) -> str:
         """Set and persist the default directory for downloaded activity files.
 
