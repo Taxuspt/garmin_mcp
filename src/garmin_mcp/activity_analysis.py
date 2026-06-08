@@ -142,8 +142,10 @@ def _write_fit_config(dir_path: str) -> None:
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+    cfg = _read_fit_config()
+    cfg["download_dir"] = dir_path
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"download_dir": dir_path}, f, indent=2)
+        json.dump(cfg, f, indent=2)
 
 
 def _resolve_download_dir(output_dir: Optional[str]) -> Optional[str]:

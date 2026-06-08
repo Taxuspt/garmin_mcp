@@ -918,6 +918,8 @@ async def test_fit_hrv_lap_below_minimum_gets_no_hrv(app_with_activity_analysis,
 
 def test_resolve_download_dir_prefers_output_dir_arg(monkeypatch, tmp_path):
     monkeypatch.setenv("GARMIN_FIT_DOWNLOAD_DIR", str(tmp_path / "env"))
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "fit_config.json"))
+    activity_analysis._write_fit_config(str(tmp_path / "cfg"))
     result = activity_analysis._resolve_download_dir(str(tmp_path / "arg"))
     assert result == os.path.abspath(str(tmp_path / "arg"))
 
@@ -944,4 +946,19 @@ def test_resolve_download_dir_returns_none_when_unconfigured(monkeypatch, tmp_pa
 
 def test_read_fit_config_missing_returns_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "missing.json"))
+    assert activity_analysis._read_fit_config() == {}
+
+
+def test_resolve_download_dir_config_missing_key_returns_none(monkeypatch, tmp_path):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(cfg))
+    cfg.write_text('{"other": "value"}')
+    assert activity_analysis._resolve_download_dir(None) is None
+
+
+def test_read_fit_config_non_dict_returns_empty(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(cfg))
+    cfg.write_text("[1, 2, 3]")
     assert activity_analysis._read_fit_config() == {}
