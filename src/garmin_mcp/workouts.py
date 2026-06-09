@@ -34,6 +34,13 @@ END_CONDITION_TYPE_KEYS = {
     for condition_key, condition_id in END_CONDITION_TYPE_IDS.items()
 }
 
+TARGET_TYPE_IDS = {
+    1: "no.target",
+    4: "heart.rate.zone",
+    6: "pace.zone",
+}
+
+TARGET_TYPE_KEYS = {key: target_id for target_id, key in TARGET_TYPE_IDS.items()}
 
 def configure(client):
     """Configure the module with the Garmin client instance"""
@@ -148,6 +155,45 @@ def _validate_end_condition_steps(workout_data: dict) -> None:
         for step_index, step in enumerate(segment.get('workoutSteps', [])):
             path = f"workoutSegments[{segment_index}].workoutSteps[{step_index}]"
             _validate_end_condition_step(step, path)
+
+
+def _validate_target_type_step(step: dict, path: str) -> None:
+    """Reject targetType id/key pairs Garmin would silently reinterpret."""
+    target_type = step.get('targetType')
+    if isinstance(target_type, dict):
+        target_key = target_type.get('workoutTargetTypeKey')
+        target_id = target_type.get('workoutTargetTypeId')
+
+        if target_id is not None:
+            try:
+                target_id = int(target_id)
+            except (TypeError, ValueError):
+                raise ValueError(f"{path}.targetType.workoutTargetTypeId must be numeric")
+
+        expected_key = TARGET_TYPE_IDS.get(target_id)
+        if expected_key is not None and target_key is not None and target_key != expected_key:
+            raise ValueError(
+                f"{path}.targetType mismatch: workoutTargetTypeId {target_id} is "
+                f"{expected_key!r}, not {target_key!r}"
+            )
+
+        expected_id = TARGET_TYPE_KEYS.get(target_key)
+        if expected_id is not None and target_id is not None and target_id != expected_id:
+            raise ValueError(
+                f"{path}.targetType mismatch: workoutTargetTypeKey {target_key!r} "
+                f"requires workoutTargetTypeId {expected_id}, not {target_id}"
+            )
+
+    for index, nested in enumerate(step.get('workoutSteps', [])):
+        _validate_target_type_step(nested, f"{path}.workoutSteps[{index}]")
+
+
+def _validate_target_type_steps(workout_data: dict) -> None:
+    """Walk all workout steps and validate known targetType id/key pairs."""
+    for segment_index, segment in enumerate(workout_data.get('workoutSegments', [])):
+        for step_index, step in enumerate(segment.get('workoutSteps', [])):
+            path = f"workoutSegments[{segment_index}].workoutSteps[{step_index}]"
+            _validate_target_type_step(step, path)
 
 
 def _curate_workout_summary(workout: dict) -> dict:
@@ -535,6 +581,13 @@ def register_tools(app):
         to catch the common mistake of putting a zone index in targetValueOne. Typical bpm values
         (e.g. 105, 143) are not affected.
 
+        IMPORTANT: Target type IDs and keys must match Garmin's canonical mapping.
+        Garmin treats workoutTargetTypeId as authoritative, so mismatches such as
+        {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "heart.rate"} are rejected
+        before upload because Garmin would interpret them as "pace.zone". Use
+        {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"} with
+        targetValueOne/targetValueTwo for custom heart-rate ranges.
+
         IMPORTANT: Sport type IDs for workouts (different from activity API!):
         - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 11 = walking
 
@@ -606,6 +659,7 @@ def register_tools(app):
             # Fix common mistake: HR zone targets using targetValueOne instead of zoneNumber
             _fix_hr_zone_steps(workout_data)
             _validate_end_condition_steps(workout_data)
+            _validate_target_type_steps(workout_data)
 
             # Pass dict directly - library handles conversion
             result = garmin_client.upload_workout(workout_data)
@@ -640,7 +694,10 @@ def register_tools(app):
           "iterations"; omitting conditionTypeId causes the API to silently corrupt
           the repeat count.
 
-        IMPORTANT: For heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
+        IMPORTANT: For named heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
+        For custom heart-rate ranges, use targetType {"workoutTargetTypeId": 4,
+        "workoutTargetTypeKey": "heart.rate.zone"} with targetValueOne/targetValueTwo.
+        Target type IDs and keys must match Garmin's canonical mapping.
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
         Garmin treats conditionTypeId as authoritative, so mismatches are rejected before upload.
@@ -654,6 +711,7 @@ def register_tools(app):
             try:
                 _fix_hr_zone_steps(workout_data)
                 _validate_end_condition_steps(workout_data)
+                _validate_target_type_steps(workout_data)
                 result = garmin_client.upload_workout(workout_data)
                 if isinstance(result, dict):
                     entry = {
@@ -947,6 +1005,7 @@ def register_tools(app):
                     # Upload the workout first, then use the returned ID to schedule
                     _fix_hr_zone_steps(workout_data)
                     _validate_end_condition_steps(workout_data)
+                    _validate_target_type_steps(workout_data)
                     upload_result = garmin_client.upload_workout(workout_data)
                     if not isinstance(upload_result, dict) or upload_result.get('workoutId') is None:
                         results.append({
