@@ -410,6 +410,9 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
 
     summary = {
         "date": scheduled.get('scheduleDate'),
+        # Calendar-entry id (distinct from workout_id). Pass this to
+        # unschedule_workout to remove the entry from the calendar.
+        "scheduled_workout_id": scheduled.get('scheduledWorkoutId'),
         "workout_uuid": scheduled.get('workoutUuid'),
         "workout_id": scheduled.get('workoutId'),
         "name": scheduled.get('workoutName'),
@@ -1069,6 +1072,82 @@ def register_tools(app):
                     "workout_id": workout_id,
                     "scheduled_date": calendar_date,
                     "message": f"Error scheduling workout: {str(e)}"
+                })
+
+        total = len(results)
+        succeeded = sum(1 for r in results if r["status"] == "success")
+        return json.dumps({
+            "total": total,
+            "succeeded": succeeded,
+            "failed": total - succeeded,
+            "results": results
+        }, indent=2)
+
+    @app.tool()
+    async def unschedule_workout(scheduled_workout_id: int) -> str:
+        """Remove a scheduled workout from the Garmin Connect calendar
+
+        Deletes a calendar entry without deleting the underlying workout
+        template — the workout stays in your library and can be re-scheduled.
+
+        IMPORTANT: scheduled_workout_id is the calendar-entry id, which is
+        different from the workout's id. Get it from get_scheduled_workouts
+        (the "scheduled_workout_id" field), not from get_workouts.
+
+        Note: the scheduled-workouts listing is an eventually-consistent index.
+        If you just scheduled this workout, allow a moment before unscheduling
+        so the id is available.
+
+        Args:
+            scheduled_workout_id: Calendar-entry id from get_scheduled_workouts
+        """
+        try:
+            # Delegate to the high-level garminconnect method. Its client.delete
+            # returns a dict ({}), not a Response, so we rely on exceptions to
+            # signal failure rather than checking a status code — same pattern
+            # as delete_workout.
+            garmin_client.unschedule_workout(scheduled_workout_id)
+            return json.dumps({
+                "status": "success",
+                "scheduled_workout_id": scheduled_workout_id,
+                "message": f"Scheduled workout {scheduled_workout_id} removed from calendar"
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "failed",
+                "scheduled_workout_id": scheduled_workout_id,
+                "message": f"Failed to unschedule workout: {str(e)}"
+            }, indent=2)
+
+    @app.tool()
+    async def unschedule_workouts(scheduled_workout_ids: list[int]) -> str:
+        """Remove multiple scheduled workouts from the Garmin Connect calendar
+
+        Deletes multiple calendar entries in a single call. The underlying
+        workout templates are left intact in your library.
+
+        IMPORTANT: each id is a calendar-entry id (the "scheduled_workout_id"
+        field from get_scheduled_workouts), not a workout id.
+
+        Args:
+            scheduled_workout_ids: List of calendar-entry ids from get_scheduled_workouts
+        """
+        results = []
+        for scheduled_workout_id in scheduled_workout_ids:
+            try:
+                # See note in unschedule_workout: high-level call returns a dict,
+                # so rely on exceptions to signal failure.
+                garmin_client.unschedule_workout(scheduled_workout_id)
+                results.append({
+                    "status": "success",
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "message": f"Scheduled workout {scheduled_workout_id} removed from calendar"
+                })
+            except Exception as e:
+                results.append({
+                    "status": "error",
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "message": f"Error unscheduling workout: {str(e)}"
                 })
 
         total = len(results)
