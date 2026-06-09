@@ -34,13 +34,16 @@ END_CONDITION_TYPE_KEYS = {
     for condition_key, condition_id in END_CONDITION_TYPE_IDS.items()
 }
 
-TARGET_TYPE_IDS = {
+# Verified from Garmin-created workouts and live upload/fetch probes. Unknown
+# target type IDs are allowed so we do not block valid Garmin targets that are
+# not in this partial mapping yet.
+KNOWN_TARGET_TYPE_IDS = {
     1: "no.target",
     4: "heart.rate.zone",
     6: "pace.zone",
 }
 
-TARGET_TYPE_KEYS = {key: target_id for target_id, key in TARGET_TYPE_IDS.items()}
+KNOWN_TARGET_TYPE_KEYS = {key: target_id for target_id, key in KNOWN_TARGET_TYPE_IDS.items()}
 
 def configure(client):
     """Configure the module with the Garmin client instance"""
@@ -170,14 +173,14 @@ def _validate_target_type_step(step: dict, path: str) -> None:
             except (TypeError, ValueError):
                 raise ValueError(f"{path}.targetType.workoutTargetTypeId must be numeric")
 
-        expected_key = TARGET_TYPE_IDS.get(target_id)
+        expected_key = KNOWN_TARGET_TYPE_IDS.get(target_id)
         if expected_key is not None and target_key is not None and target_key != expected_key:
             raise ValueError(
                 f"{path}.targetType mismatch: workoutTargetTypeId {target_id} is "
                 f"{expected_key!r}, not {target_key!r}"
             )
 
-        expected_id = TARGET_TYPE_KEYS.get(target_key)
+        expected_id = KNOWN_TARGET_TYPE_KEYS.get(target_key)
         if expected_id is not None and target_id is not None and target_id != expected_id:
             raise ValueError(
                 f"{path}.targetType mismatch: workoutTargetTypeKey {target_key!r} "
