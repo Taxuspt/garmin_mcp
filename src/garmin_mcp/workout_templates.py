@@ -249,8 +249,14 @@ WORKOUT_STRUCTURE_REFERENCE = {
         "1": {"conditionTypeKey": "lap.button", "description": "Manual lap press (use for warmup/cooldown in strength workouts)"},
         "2": {"conditionTypeKey": "time", "description": "Duration in seconds"},
         "3": {"conditionTypeKey": "distance", "description": "Distance in meters"},
+        "4": {"conditionTypeKey": "calories", "description": "Calories in kcal"},
+        "5": {"conditionTypeKey": "power", "description": "Power in watts"},
+        "6": {"conditionTypeKey": "heart.rate", "description": "Heart rate in bpm"},
         "7": {"conditionTypeKey": "iterations", "description": "Number of iterations (used internally by RepeatGroupDTO)"},
-        "10": {"conditionTypeKey": "reps", "description": "Number of repetitions (use for strength exercises)"}
+        "8": {"conditionTypeKey": "fixed.rest", "description": "Fixed rest duration"},
+        "9": {"conditionTypeKey": "fixed.repetition", "description": "Fixed repetition count"},
+        "10": {"conditionTypeKey": "reps", "description": "Number of repetitions (use for strength exercises)"},
+        "11": {"conditionTypeKey": "training.peaks.tss", "description": "TrainingPeaks TSS"}
     },
     "targetType_values": {
         "1": {"workoutTargetTypeKey": "no.target", "description": "No specific target"},
