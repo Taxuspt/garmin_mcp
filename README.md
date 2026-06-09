@@ -214,6 +214,39 @@ Common end-condition IDs:
 | 10 | `reps` |
 | 11 | `training.peaks.tss` |
 
+### Raw `upload_workout` target types
+
+When building raw Garmin workout JSON, `targetType.workoutTargetTypeId` and
+`targetType.workoutTargetTypeKey` must use Garmin's canonical mapping. Garmin
+treats the numeric ID as authoritative: a mismatched payload such as
+`{"workoutTargetTypeId": 6, "workoutTargetTypeKey": "heart.rate"}` is stored as
+`pace.zone`, because ID `6` means `pace.zone`.
+
+For a custom heart-rate range, use target type ID `4` with `heart.rate.zone` and
+put the bpm range in `targetValueOne` / `targetValueTwo`:
+
+```json
+{
+  "targetType": {
+    "workoutTargetTypeId": 4,
+    "workoutTargetTypeKey": "heart.rate.zone"
+  },
+  "targetValueOne": 143,
+  "targetValueTwo": 157
+}
+```
+
+For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
+
+```json
+{
+  "targetType": {
+    "workoutTargetTypeId": 4,
+    "workoutTargetTypeKey": "heart.rate.zone"
+  },
+  "zoneNumber": 3
+}
+```
 ## One-click Install (Claude Desktop)
 
 The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop Extension file — no JSON editing required.
