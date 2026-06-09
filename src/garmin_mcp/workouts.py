@@ -61,7 +61,7 @@ def _fix_hr_zone_step(step: dict) -> None:
     Custom HR bpm ranges (e.g. targetValueOne=105, targetValueTwo=143) are left
     unchanged — these are legitimate custom heart rate targets in Garmin Connect.
     """
-    target_type = step.get('targetType', {})
+    target_type = step.get('targetType') or {}
     target_key = target_type.get('workoutTargetTypeKey', '')
 
     if target_key == 'heart.rate.zone' and 'zoneNumber' not in step:

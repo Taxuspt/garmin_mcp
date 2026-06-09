@@ -596,7 +596,7 @@ async def test_upload_workout_rejects_missing_end_condition_id(
 @pytest.mark.asyncio
 async def test_upload_workout_rejects_secondary_target_type_mismatch(app_with_workouts, mock_garmin_client):
     """Reject mismatched secondaryTargetType blocks before Garmin reinterprets them."""
-    step = _timed_interval_step({"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"})
+    step = _timed_interval_step(None)
     step["secondaryTargetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "heart.rate"}
     step["secondaryTargetValueOne"] = 143
     step["secondaryTargetValueTwo"] = 157
@@ -616,11 +616,42 @@ async def test_upload_workout_rejects_secondary_target_type_mismatch(app_with_wo
 
 
 @pytest.mark.asyncio
+async def test_upload_workout_accepts_secondary_target_type_with_null_primary(
+    app_with_workouts, mock_garmin_client
+):
+    """Swim-style secondary targets may use targetType null."""
+    import json as json_module
+
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 123461,
+        "workoutName": "Secondary Pace Target",
+    }
+    step = _timed_interval_step(None)
+    step["secondaryTargetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+    step["secondaryTargetValueOne"] = 0.45
+    step["secondaryTargetValueTwo"] = 0.6916667
+    workout_data = _running_workout_with_steps("Secondary Pace Target", [step])
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data}
+    )
+
+    called_data = mock_garmin_client.upload_workout.call_args[0][0]
+    called_step = called_data["workoutSegments"][0]["workoutSteps"][0]
+    assert called_step["targetType"] is None
+    assert called_step["secondaryTargetType"]["workoutTargetTypeKey"] == "pace.zone"
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+
+
+@pytest.mark.asyncio
 async def test_upload_workout_rejects_nested_secondary_target_type_mismatch(
     app_with_workouts, mock_garmin_client
 ):
     """Reject mismatched secondaryTargetType blocks inside RepeatGroupDTO steps."""
-    bad_step = _timed_interval_step({"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"})
+    bad_step = _timed_interval_step(None)
     bad_step["secondaryTargetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "heart.rate"}
     workout_data = _running_workout_with_steps(
         [{
