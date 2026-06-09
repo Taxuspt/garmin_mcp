@@ -594,6 +594,57 @@ async def test_upload_workout_rejects_missing_end_condition_id(
 
 
 @pytest.mark.asyncio
+async def test_upload_workout_rejects_secondary_target_type_mismatch(app_with_workouts, mock_garmin_client):
+    """Reject mismatched secondaryTargetType blocks before Garmin reinterprets them."""
+    step = _timed_interval_step({"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"})
+    step["secondaryTargetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "heart.rate"}
+    step["secondaryTargetValueOne"] = 143
+    step["secondaryTargetValueTwo"] = 157
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Bad Secondary HR Target",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data}
+    )
+
+    assert "secondaryTargetType mismatch" in result[0][0].text
+    assert "workoutTargetTypeId 6 is 'pace.zone', not 'heart.rate'" in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_rejects_nested_secondary_target_type_mismatch(
+    app_with_workouts, mock_garmin_client
+):
+    """Reject mismatched secondaryTargetType blocks inside RepeatGroupDTO steps."""
+    bad_step = _timed_interval_step({"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"})
+    bad_step["secondaryTargetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "heart.rate"}
+    workout_data = _running_workout_with_steps(
+        [{
+            "type": "RepeatGroupDTO",
+            "stepOrder": 1,
+            "numberOfIterations": 2,
+            "workoutSteps": [bad_step],
+        }],
+        name="Nested Bad Secondary HR Target",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data}
+    )
+
+    assert (
+        "workoutSegments[0].workoutSteps[0].workoutSteps[0].secondaryTargetType mismatch"
+        in result[0][0].text
+    )
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client):
     """Test get_scheduled_workouts tool - uses GraphQL query"""
     import json as json_module

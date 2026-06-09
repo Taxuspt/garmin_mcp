@@ -160,9 +160,9 @@ def _validate_end_condition_steps(workout_data: dict) -> None:
             _validate_end_condition_step(step, path)
 
 
-def _validate_target_type_step(step: dict, path: str) -> None:
-    """Reject targetType id/key pairs Garmin would silently reinterpret."""
-    target_type = step.get('targetType')
+def _validate_target_type_block(step: dict, path: str, target_field: str) -> None:
+    """Reject a target type id/key pair Garmin would silently reinterpret."""
+    target_type = step.get(target_field)
     if isinstance(target_type, dict):
         target_key = target_type.get('workoutTargetTypeKey')
         target_id = target_type.get('workoutTargetTypeId')
@@ -171,21 +171,27 @@ def _validate_target_type_step(step: dict, path: str) -> None:
             try:
                 target_id = int(target_id)
             except (TypeError, ValueError):
-                raise ValueError(f"{path}.targetType.workoutTargetTypeId must be numeric")
+                raise ValueError(f"{path}.{target_field}.workoutTargetTypeId must be numeric")
 
         expected_key = KNOWN_TARGET_TYPE_IDS.get(target_id)
         if expected_key is not None and target_key is not None and target_key != expected_key:
             raise ValueError(
-                f"{path}.targetType mismatch: workoutTargetTypeId {target_id} is "
+                f"{path}.{target_field} mismatch: workoutTargetTypeId {target_id} is "
                 f"{expected_key!r}, not {target_key!r}"
             )
 
         expected_id = KNOWN_TARGET_TYPE_KEYS.get(target_key)
         if expected_id is not None and target_id is not None and target_id != expected_id:
             raise ValueError(
-                f"{path}.targetType mismatch: workoutTargetTypeKey {target_key!r} "
+                f"{path}.{target_field} mismatch: workoutTargetTypeKey {target_key!r} "
                 f"requires workoutTargetTypeId {expected_id}, not {target_id}"
             )
+
+
+def _validate_target_type_step(step: dict, path: str) -> None:
+    """Reject targetType id/key pairs Garmin would silently reinterpret."""
+    _validate_target_type_block(step, path, 'targetType')
+    _validate_target_type_block(step, path, 'secondaryTargetType')
 
     for index, nested in enumerate(step.get('workoutSteps', [])):
         _validate_target_type_step(nested, f"{path}.workoutSteps[{index}]")
