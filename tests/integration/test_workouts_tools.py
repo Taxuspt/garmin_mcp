@@ -630,7 +630,7 @@ async def test_upload_workout_accepts_secondary_target_type_with_null_primary(
     step["secondaryTargetType"] = {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
     step["secondaryTargetValueOne"] = 0.45
     step["secondaryTargetValueTwo"] = 0.6916667
-    workout_data = _running_workout_with_steps("Secondary Pace Target", [step])
+    workout_data = _running_workout_with_steps([step], name="Secondary Pace Target")
 
     result = await app_with_workouts.call_tool(
         "upload_workout",
