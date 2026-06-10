@@ -1536,3 +1536,125 @@ def test_fix_repeat_group_recurses_into_nested_repeat_groups():
     }
     _fix_repeat_group_step(outer)
     assert inner["endCondition"]["conditionTypeId"] == 7
+
+
+# unschedule_workout tests
+@pytest.mark.asyncio
+async def test_unschedule_workout_success(app_with_workouts, mock_garmin_client):
+    """Test unschedule_workout tool when the library call succeeds"""
+    import json as json_module
+
+    # The SDK's unschedule_workout returns {} (a dict), not a Response;
+    # success is signalled by the absence of an exception.
+    mock_garmin_client.unschedule_workout.return_value = {}
+
+    scheduled_workout_id = 1677275789
+    result = await app_with_workouts.call_tool(
+        "unschedule_workout",
+        {"scheduled_workout_id": scheduled_workout_id}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["scheduled_workout_id"] == scheduled_workout_id
+    assert "removed from calendar" in result_data["message"]
+    mock_garmin_client.unschedule_workout.assert_called_once_with(scheduled_workout_id)
+
+
+@pytest.mark.asyncio
+async def test_unschedule_workout_error(app_with_workouts, mock_garmin_client):
+    """Test unschedule_workout tool surfaces failures from the library"""
+    import json as json_module
+
+    mock_garmin_client.unschedule_workout.side_effect = Exception("Network error")
+
+    result = await app_with_workouts.call_tool(
+        "unschedule_workout",
+        {"scheduled_workout_id": 999}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert result_data["scheduled_workout_id"] == 999
+    assert "Network error" in result_data["message"]
+
+
+# unschedule_workouts (batch) tests
+@pytest.mark.asyncio
+async def test_unschedule_workouts_multiple(app_with_workouts, mock_garmin_client):
+    """Test unschedule_workouts batch tool with multiple ids"""
+    import json as json_module
+
+    mock_garmin_client.unschedule_workout.return_value = {}
+
+    result = await app_with_workouts.call_tool(
+        "unschedule_workouts",
+        {"scheduled_workout_ids": [111, 222, 333]}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["total"] == 3
+    assert result_data["succeeded"] == 3
+    assert result_data["failed"] == 0
+    assert mock_garmin_client.unschedule_workout.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_unschedule_workouts_partial_failure(app_with_workouts, mock_garmin_client):
+    """Test unschedule_workouts batch tool when some calls fail"""
+    import json as json_module
+
+    mock_garmin_client.unschedule_workout.side_effect = [
+        {},
+        Exception("API Error 404"),
+    ]
+
+    result = await app_with_workouts.call_tool(
+        "unschedule_workouts",
+        {"scheduled_workout_ids": [111, 999]}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["total"] == 2
+    assert result_data["succeeded"] == 1
+    assert result_data["failed"] == 1
+    assert result_data["results"][0]["status"] == "success"
+    assert result_data["results"][1]["status"] == "error"
+    assert "404" in result_data["results"][1]["message"]
+
+
+@pytest.mark.asyncio
+async def test_get_scheduled_workouts_exposes_scheduled_id(app_with_workouts, mock_garmin_client):
+    """get_scheduled_workouts surfaces the calendar-entry id for unscheduling"""
+    import json as json_module
+
+    graphql_response = {
+        "data": {
+            "workoutScheduleSummariesScalar": [
+                {
+                    "scheduledWorkoutId": 555,
+                    "workoutUuid": None,
+                    "workoutId": 123456,
+                    "workoutName": "5K Tempo Run",
+                    "workoutType": "running",
+                    "scheduleDate": "2024-01-15",
+                    "associatedActivityId": None,
+                }
+            ]
+        }
+    }
+    mock_garmin_client.query_garmin_graphql.return_value = graphql_response
+
+    result = await app_with_workouts.call_tool(
+        "get_scheduled_workouts",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    workout = result_data["scheduled_workouts"][0]
+    assert workout["scheduled_workout_id"] == 555
+    assert workout["workout_id"] == 123456
