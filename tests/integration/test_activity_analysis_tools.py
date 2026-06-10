@@ -3,7 +3,10 @@ Integration tests for activity_analysis module MCP tools
 
 Tests the get_activity_fit_data tool using mocked Garmin API and fitparse responses.
 """
+import io
 import json
+import os
+import zipfile
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from mcp.server.fastmcp import FastMCP
@@ -909,3 +912,209 @@ async def test_fit_hrv_lap_below_minimum_gets_no_hrv(app_with_activity_analysis,
     assert len(data["laps"]) == 2
     assert "hrv" in data["laps"][0]
     assert "hrv" not in data["laps"][1]
+
+
+# ---------------------------------------------------------------------------
+# Download config / directory resolution helpers
+# ---------------------------------------------------------------------------
+
+def test_resolve_download_dir_prefers_output_dir_arg(monkeypatch, tmp_path):
+    monkeypatch.setenv("GARMIN_FIT_DOWNLOAD_DIR", str(tmp_path / "env"))
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "fit_config.json"))
+    activity_analysis._write_fit_config(str(tmp_path / "cfg"))
+    result = activity_analysis._resolve_download_dir(str(tmp_path / "arg"))
+    assert result == os.path.abspath(str(tmp_path / "arg"))
+
+
+def test_resolve_download_dir_uses_env_var(monkeypatch, tmp_path):
+    monkeypatch.setenv("GARMIN_FIT_DOWNLOAD_DIR", str(tmp_path / "env"))
+    result = activity_analysis._resolve_download_dir(None)
+    assert result == os.path.abspath(str(tmp_path / "env"))
+
+
+def test_resolve_download_dir_uses_config_file(monkeypatch, tmp_path):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "fit_config.json"))
+    activity_analysis._write_fit_config(str(tmp_path / "saved"))
+    result = activity_analysis._resolve_download_dir(None)
+    assert result == os.path.abspath(str(tmp_path / "saved"))
+
+
+def test_resolve_download_dir_returns_none_when_unconfigured(monkeypatch, tmp_path):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "missing.json"))
+    assert activity_analysis._resolve_download_dir(None) is None
+
+
+def test_read_fit_config_missing_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "missing.json"))
+    assert activity_analysis._read_fit_config() == {}
+
+
+def test_resolve_download_dir_config_missing_key_returns_none(monkeypatch, tmp_path):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(cfg))
+    cfg.write_text('{"other": "value"}')
+    assert activity_analysis._resolve_download_dir(None) is None
+
+
+def test_read_fit_config_non_dict_returns_empty(monkeypatch, tmp_path):
+    cfg = tmp_path / "cfg.json"
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(cfg))
+    cfg.write_text("[1, 2, 3]")
+    assert activity_analysis._read_fit_config() == {}
+
+
+# ---------------------------------------------------------------------------
+# set_fit_download_dir tool
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_set_fit_download_dir_persists(app_with_activity_analysis, monkeypatch, tmp_path):
+    cfg = tmp_path / "fit_config.json"
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(cfg))
+    target = tmp_path / "downloads"
+
+    result = await app_with_activity_analysis.call_tool(
+        "set_fit_download_dir", {"path": str(target)}
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["download_dir"] == os.path.abspath(str(target))
+    assert os.path.isdir(str(target))  # directory was created
+    assert json.loads(cfg.read_text())["download_dir"] == os.path.abspath(str(target))
+
+
+# ---------------------------------------------------------------------------
+# download_activity_file tool
+# ---------------------------------------------------------------------------
+
+def _make_fit_zip(fit_bytes: bytes) -> bytes:
+    """Build an in-memory ZIP containing a single .fit file (as Garmin returns)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("activity.fit", fit_bytes)
+    return buf.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_fit_saves_file(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    from garminconnect import Garmin
+
+    fit_bytes = b"\x0e\x10FITDATA"
+    mock_garmin_client.download_activity.return_value = _make_fit_zip(fit_bytes)
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    expected = tmp_path / f"{ACTIVITY_ID}.fit"
+    assert expected.read_bytes() == fit_bytes
+    assert data["file_path"] == os.path.abspath(str(expected))
+    assert data["format"] == "fit"
+    assert data["size_bytes"] == len(fit_bytes)
+    mock_garmin_client.download_activity.assert_called_once_with(
+        ACTIVITY_ID, dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fmt,enum_attr", [
+    ("gpx", "GPX"),
+    ("tcx", "TCX"),
+    ("csv", "CSV"),
+])
+async def test_download_activity_file_other_formats_write_raw_bytes(
+    app_with_activity_analysis, mock_garmin_client, tmp_path, fmt, enum_attr
+):
+    from garminconnect import Garmin
+
+    payload = f"<{fmt}>data</{fmt}>".encode()
+    mock_garmin_client.download_activity.return_value = payload
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "format": fmt, "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    expected = tmp_path / f"{ACTIVITY_ID}.{fmt}"
+    assert expected.read_bytes() == payload
+    assert data["format"] == fmt
+    mock_garmin_client.download_activity.assert_called_once_with(
+        ACTIVITY_ID, dl_fmt=getattr(Garmin.ActivityDownloadFormat, enum_attr)
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_invalid_format(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "format": "pdf", "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "Invalid format" in data["error"]
+    assert "fit" in data["valid_formats"]
+    mock_garmin_client.download_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_needs_setup(
+    app_with_activity_analysis, mock_garmin_client, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(tmp_path / "missing.json"))
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file", {"activity_id": ACTIVITY_ID}
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["status"] == "needs_setup"
+    assert "suggested_default" in data
+    mock_garmin_client.download_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_none_response(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    mock_garmin_client.download_activity.return_value = None
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "output_dir": str(tmp_path)},
+    )
+    text = result[0][0].text
+
+    assert "No fit data returned" in text
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_fit_extraction_failure(
+    app_with_activity_analysis, mock_garmin_client, tmp_path
+):
+    # A ZIP with no .fit entry makes _extract_fit_bytes raise; the tool should
+    # return a debug JSON payload and write nothing.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("notes.txt", b"no fit here")
+    mock_garmin_client.download_activity.return_value = buf.getvalue()
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "error" in data
+    assert "first_16_bytes_hex" in data["debug"]
+    assert not (tmp_path / f"{ACTIVITY_ID}.fit").exists()
