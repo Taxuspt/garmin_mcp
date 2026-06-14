@@ -129,7 +129,8 @@ class TestAuthenticate:
     @patch("garmin_mcp.auth_cli.validate_tokens")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
-    def test_existing_valid_tokens_with_force(self, mock_garmin, mock_get_creds, mock_validate, mock_exists):
+    @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
+    def test_existing_valid_tokens_with_force(self, mock_verify, mock_garmin, mock_get_creds, mock_validate, mock_exists):
         """Test that force flag re-authenticates even with valid tokens."""
         mock_exists.return_value = True
         mock_validate.return_value = (True, "")
@@ -138,7 +139,6 @@ class TestAuthenticate:
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
-        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -151,7 +151,8 @@ class TestAuthenticate:
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
-    def test_successful_authentication(self, mock_garmin, mock_get_creds, mock_exists):
+    @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
+    def test_successful_authentication(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
         """Test successful authentication flow."""
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "secret")
@@ -159,7 +160,6 @@ class TestAuthenticate:
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
-        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         token_data = '{"token": "test"}'
@@ -174,9 +174,32 @@ class TestAuthenticate:
         assert result is True
         mock_garmin_instance.login.assert_called_once()
         mock_garmin_instance.client.dump.assert_called_once_with(tmpdir)
-        mock_garmin_instance.get_full_name.assert_called_once()
+        # Tokens are verified by an independent token-based login
+        mock_verify.assert_called_once()
         # Verify base64-encoded token data was written to the base64 file
         m().write.assert_called_once_with(expected_b64)
+
+    @patch("garmin_mcp.auth_cli.token_exists")
+    @patch("garmin_mcp.auth_cli.get_credentials")
+    @patch("garmin_mcp.auth_cli.Garmin")
+    @patch("garmin_mcp.auth_cli._verify_saved_tokens")
+    def test_unverifiable_tokens_fail(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
+        """Login that produces unauthenticated tokens must fail, not report success."""
+        mock_exists.return_value = False
+        mock_get_creds.return_value = ("test@example.com", "secret")
+        # Login "succeeds" but the saved tokens don't actually authenticate.
+        mock_verify.return_value = (False, "session is not authenticated (no profile returned)")
+
+        mock_garmin_instance = Mock()
+        mock_garmin_instance.login = Mock(return_value=(None, None))
+        mock_garmin_instance.client = Mock()
+        mock_garmin.return_value = mock_garmin_instance
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("builtins.open", mock_open(read_data="{}")):
+                result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
+
+        assert result is False
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
@@ -367,7 +390,8 @@ class TestAuthenticateIsCn:
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
-    def test_authenticate_passes_is_cn_true(self, mock_garmin, mock_get_creds, mock_exists):
+    @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
+    def test_authenticate_passes_is_cn_true(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
         """Test that is_cn=True is passed to Garmin constructor."""
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "secret")
@@ -375,7 +399,6 @@ class TestAuthenticateIsCn:
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
-        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -383,7 +406,7 @@ class TestAuthenticateIsCn:
                 result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False, is_cn=True)
 
         assert result is True
-        # Verify Garmin was called with is_cn=True
+        # Verify Garmin was called with is_cn=True (verification login is mocked out)
         mock_garmin.assert_called_once_with(
             email="test@example.com",
             password="secret",
@@ -395,7 +418,8 @@ class TestAuthenticateIsCn:
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
-    def test_authenticate_passes_is_cn_false(self, mock_garmin, mock_get_creds, mock_exists):
+    @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
+    def test_authenticate_passes_is_cn_false(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
         """Test that is_cn=False is passed to Garmin constructor by default."""
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "secret")
@@ -403,7 +427,6 @@ class TestAuthenticateIsCn:
         mock_garmin_instance = Mock()
         mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
-        mock_garmin_instance.get_full_name = Mock(return_value="Test User")
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -411,7 +434,7 @@ class TestAuthenticateIsCn:
                 result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
 
         assert result is True
-        # Verify Garmin was called with is_cn=False
+        # Verify Garmin was called with is_cn=False (verification login is mocked out)
         mock_garmin.assert_called_once_with(
             email="test@example.com",
             password="secret",
