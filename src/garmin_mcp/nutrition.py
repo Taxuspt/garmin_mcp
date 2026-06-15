@@ -473,21 +473,21 @@ def register_tools(app):
             return f"Error logging food: {str(e)}"
 
     @app.tool()
-    async def delete_food_log(log_id: str) -> str:
+    async def delete_food_log(log_id: str, meal_date: str) -> str:
         """Delete a food log entry
 
         Permanently removes a logged food item from the nutrition log.
-        Use get_nutrition_daily_food_log to find the logId of the entry
-        to delete.
+        Works for both QUICK_ADD and REGULAR_LOG entry types.
+        Use get_nutrition_daily_food_log to find the logId and date.
 
         Args:
-            log_id: Log entry ID to delete — a string, often a 32-char hex UUID
+            log_id: Log entry ID to delete — a 32-char hex UUID
                 (from get_nutrition_daily_food_log)
+            meal_date: Date of the log entry in YYYY-MM-DD format
         """
         try:
-            url = f"/nutrition-service/food/logs/{log_id}"
-            resp = garmin_client.client.delete("connectapi", url, api=True)
-            # _run_request raises GarminConnectConnectionError for 4xx/5xx; any return is success.
+            url = f"/nutrition-service/food/logs/{meal_date}"
+            garmin_client.client.delete("connectapi", url, json={"logIds": [log_id]}, api=True)
             return json.dumps({"status": "success", "log_id": log_id, "message": f"Food log entry {log_id} deleted successfully."}, indent=2)
         except GarminConnectConnectionError as e:
             body = ""

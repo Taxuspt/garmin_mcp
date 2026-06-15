@@ -529,16 +529,17 @@ async def test_log_custom_food_error(app_with_nutrition, mock_garmin_client):
 
 @pytest.mark.asyncio
 async def test_delete_food_log(app_with_nutrition, mock_garmin_client):
-    """Test delete_food_log removes a food log entry using a hex UUID log ID"""
+    """Test delete_food_log removes a food log entry using date + hex UUID"""
     mock_garmin_client.client.delete.return_value = {}
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": "581f7dc8797f421f8d7eea83e5d2c939"}
+        {"log_id": "581f7dc8797f421f8d7eea83e5d2c939", "meal_date": "2024-01-15"}
     )
     assert "success" in result[0][0].text
     assert "581f7dc8797f421f8d7eea83e5d2c939" in result[0][0].text
     mock_garmin_client.client.delete.assert_called_once_with(
-        "connectapi", "/nutrition-service/food/logs/581f7dc8797f421f8d7eea83e5d2c939", api=True
+        "connectapi", "/nutrition-service/food/logs/2024-01-15",
+        json={"logIds": ["581f7dc8797f421f8d7eea83e5d2c939"]}, api=True
     )
 
 
@@ -548,7 +549,7 @@ async def test_delete_food_log_error(app_with_nutrition, mock_garmin_client):
     mock_garmin_client.client.delete.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": "99001"}
+        {"log_id": "99001", "meal_date": "2024-01-15"}
     )
     assert "Error deleting food log" in result[0][0].text
 
@@ -662,16 +663,17 @@ async def test_log_food_no_attribute_error_on_success(app_with_nutrition, mock_g
 
 @pytest.mark.asyncio
 async def test_delete_food_log_accepts_hex_uuid(app_with_nutrition, mock_garmin_client):
-    """Regression for Bug 2: delete_food_log must accept 32-char hex UUID strings.
-    Previously declared log_id: int, causing Pydantic validation failure before any API call."""
+    """Regression for Bug 2: delete_food_log must accept 32-char hex UUID log IDs
+    and require meal_date; uses DELETE /food/logs/{date} with body logIds."""
     hex_log_id = "581f7dc8797f421f8d7eea83e5d2c939"
     mock_garmin_client.client.delete.return_value = {}
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": hex_log_id}
+        {"log_id": hex_log_id, "meal_date": "2024-01-15"}
     )
     assert "success" in result[0][0].text
     assert hex_log_id in result[0][0].text
     mock_garmin_client.client.delete.assert_called_once_with(
-        "connectapi", f"/nutrition-service/food/logs/{hex_log_id}", api=True
+        "connectapi", "/nutrition-service/food/logs/2024-01-15",
+        json={"logIds": [hex_log_id]}, api=True
     )
