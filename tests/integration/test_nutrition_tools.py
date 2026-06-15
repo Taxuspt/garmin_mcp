@@ -525,6 +525,35 @@ async def test_log_custom_food_error(app_with_nutrition, mock_garmin_client):
     assert "Error logging food" in result[0][0].text
 
 
+# delete_custom_food tests
+
+@pytest.mark.asyncio
+async def test_delete_custom_food(app_with_nutrition, mock_garmin_client):
+    """Test delete_custom_food calls DELETE /customFood/{foodId} and returns success"""
+    mock_garmin_client.client.delete.return_value = {}
+    food_id = "08b27145e29d41479e36d8d3788fcccf"
+    result = await app_with_nutrition.call_tool(
+        "delete_custom_food",
+        {"food_id": food_id},
+    )
+    assert "success" in result[0][0].text
+    assert food_id in result[0][0].text
+    mock_garmin_client.client.delete.assert_called_once_with(
+        "connectapi", f"/nutrition-service/customFood/{food_id}", api=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_food_error(app_with_nutrition, mock_garmin_client):
+    """Test delete_custom_food handles API errors"""
+    mock_garmin_client.client.delete.side_effect = Exception("API error")
+    result = await app_with_nutrition.call_tool(
+        "delete_custom_food",
+        {"food_id": "08b27145e29d41479e36d8d3788fcccf"},
+    )
+    assert "Error deleting custom food" in result[0][0].text
+
+
 # delete_food_log tests
 
 @pytest.mark.asyncio
