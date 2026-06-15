@@ -307,6 +307,34 @@ def register_tools(app):
             return f"Error updating custom food: {str(e)}"
 
     @app.tool()
+    async def delete_custom_food(food_id: str) -> str:
+        """Delete a custom food from the user's Garmin nutrition library
+
+        Permanently removes a custom food entry. The food must not be
+        actively referenced in a logged meal to be deleted.
+        Use get_custom_foods to find the foodId.
+
+        Args:
+            food_id: ID of the custom food to delete — a 32-char hex string
+                (from get_custom_foods or create_custom_food)
+        """
+        try:
+            url = f"/nutrition-service/customFood/{food_id}"
+            resp = garmin_client.client.delete("connectapi", url, api=True)
+            return json.dumps(
+                {"status": "success", "food_id": food_id,
+                 "message": f"Custom food {food_id} deleted successfully."},
+                indent=2,
+            )
+        except GarminConnectConnectionError as e:
+            body = ""
+            if hasattr(e, "error") and hasattr(e.error, "response"):
+                body = getattr(e.error.response, "text", "")
+            return f"Error deleting custom food: {e} | Response: {body}"
+        except Exception as e:
+            return f"Error deleting custom food: {str(e)}"
+
+    @app.tool()
     async def log_custom_food(
         meal_date: str,
         meal_time: str,
