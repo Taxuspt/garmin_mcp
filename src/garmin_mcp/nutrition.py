@@ -238,7 +238,11 @@ def register_tools(app):
     ) -> str:
         """Update an existing custom food in the user's Garmin nutrition library
 
-        Modifies a custom food's name and/or nutritional information.
+        Fetches the food's current nutrition before writing so that omitted
+        optional fields (carbs, protein, fat, etc.) preserve their existing
+        values rather than being cleared. Only the fields you explicitly pass
+        are changed; everything else is carried forward from the current record.
+
         Use get_custom_foods first to find the foodId and servingId.
 
         Args:
@@ -259,13 +263,25 @@ def register_tools(app):
             potassium: Potassium in mg per serving
         """
         try:
-            nutrition = {
-                "servingId": serving_id,
-                "servingUnit": serving_unit,
-                "numberOfUnits": _num_to_str(number_of_units),
-                "calories": _num_to_str(calories),
-            }
-            optional_fields = {
+            # Fetch current nutrition so omitted fields are preserved (not wiped).
+            existing_nutrition: dict = {}
+            try:
+                search_url = (
+                    f"/nutrition-service/customFood"
+                    f"?searchExpression={quote(food_name)}"
+                    f"&start=0&limit=20&includeContent=true"
+                )
+                search_data = garmin_client.connectapi(search_url)
+                foods = search_data.get("customFoods", []) if isinstance(search_data, dict) else []
+                for f in foods:
+                    if str(f.get("foodMetaData", {}).get("foodId", "")) == food_id:
+                        existing_nutrition = (f.get("nutritionContents") or [{}])[0]
+                        break
+            except Exception:
+                pass  # proceed without existing data; caller's values win
+
+            # API field name → optional param value (None means "not supplied by caller")
+            optional_updates = {
                 "carbs": carbs,
                 "protein": protein,
                 "fat": fat,
@@ -276,7 +292,18 @@ def register_tools(app):
                 "cholesterol": cholesterol,
                 "potassium": potassium,
             }
-            for key, value in optional_fields.items():
+            nutrition: dict = {
+                "servingId": serving_id,
+                "servingUnit": serving_unit,
+                "numberOfUnits": _num_to_str(number_of_units),
+                "calories": _num_to_str(calories),
+            }
+            # Carry forward existing optional fields, then overlay caller-supplied values.
+            preserved_keys = set(optional_updates.keys())
+            for key, existing_val in existing_nutrition.items():
+                if key in preserved_keys and existing_val is not None:
+                    nutrition[key] = _num_to_str(existing_val)
+            for key, value in optional_updates.items():
                 if value is not None:
                     nutrition[key] = _num_to_str(value)
 
@@ -568,7 +595,7 @@ def register_tools(app):
                 f"&start=0&limit=10&includeContent=true"
             )
             search_data = garmin_client.connectapi(search_url)
-            foods = search_data if isinstance(search_data, list) else []
+            foods = search_data.get("customFoods", []) if isinstance(search_data, dict) else []
 
             food_id = None
             serving_id = None
@@ -621,7 +648,7 @@ def register_tools(app):
                         f"&start=0&limit=10&includeContent=true"
                     )
                     lookup_data = garmin_client.connectapi(lookup_url)
-                    lookup_foods = lookup_data if isinstance(lookup_data, list) else []
+                    lookup_foods = lookup_data.get("customFoods", []) if isinstance(lookup_data, dict) else []
                     for f in lookup_foods:
                         meta = f.get("foodMetaData", f)
                         if meta.get("foodName", "").lower() == food_name.lower():

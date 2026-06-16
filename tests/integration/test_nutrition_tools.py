@@ -585,12 +585,14 @@ async def test_delete_food_log_error(app_with_nutrition, mock_garmin_client):
 
 # upsert_and_log tests
 
-MOCK_CUSTOM_FOODS = [
-    {
-        "foodMetaData": {"foodId": "food001", "foodName": "Greek Yogurt"},
-        "nutritionContents": [{"servingId": "srv001", "calories": "100"}],
-    }
-]
+MOCK_CUSTOM_FOODS = {
+    "customFoods": [
+        {
+            "foodMetaData": {"foodId": "food001", "foodName": "Greek Yogurt"},
+            "nutritionContents": [{"servingId": "srv001", "calories": "100"}],
+        }
+    ]
+}
 
 
 @pytest.mark.asyncio
@@ -628,8 +630,8 @@ async def test_upsert_and_log_creates_new_food(app_with_nutrition, mock_garmin_c
         "nutritionContents": [{"servingId": "srv999"}],
     }
     mock_garmin_client.connectapi.side_effect = [
-        [],           # search returns empty
-        MOCK_MEALS,   # meal resolution
+        {"customFoods": []},  # search returns empty
+        MOCK_MEALS,           # meal resolution
     ]
     mock_garmin_client.client.put.side_effect = [created_food, {}]
     result = await app_with_nutrition.call_tool(
