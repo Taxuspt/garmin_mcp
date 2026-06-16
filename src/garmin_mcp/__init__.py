@@ -103,22 +103,62 @@ enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
 disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
 
 
-# --- Transport configuration ------------------------------------------------
-# By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
-# Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP, e.g.
-# when running in Kubernetes behind a reverse proxy that handles auth.
-#   GARMIN_MCP_TRANSPORT - stdio (default) | streamable-http | sse
-#   GARMIN_MCP_HOST      - bind address for HTTP transports (default 0.0.0.0)
-#   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
-transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
-if transport not in _VALID_TRANSPORTS:
-    raise ValueError(
-        f"Invalid GARMIN_MCP_TRANSPORT {transport!r}; "
-        f"expected one of {', '.join(_VALID_TRANSPORTS)}"
-    )
-http_host = os.getenv("GARMIN_MCP_HOST", "0.0.0.0")
-http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+
+
+class _GarminProxy:
+    """Wraps the Garmin client to translate known runtime exceptions into clear messages.
+
+    Without this, token expiry or rate-limiting during a tool call surfaces raw
+    library tracebacks to the MCP client. The proxy intercepts each attribute
+    access and, if the result is callable, wraps the call so that known Garmin
+    exceptions become user-friendly strings rather than server errors.
+    """
+
+    _MESSAGES = {
+        GarminConnectAuthenticationError: (
+            "Garmin authentication expired. "
+            "Re-run 'garmin-mcp-auth' to refresh your tokens and restart the server."
+        ),
+        GarminConnectTooManyRequestsError: (
+            "Garmin rate limit hit. Wait a few minutes before retrying."
+        ),
+        GarminConnectConnectionError: (
+            "Garmin Connect is unreachable. Check your network connection or try again later."
+        ),
+    }
+
+    def __init__(self, client):
+        self._client = client
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+
+        def _call(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            except tuple(self._MESSAGES) as exc:
+                for exc_type, msg in self._MESSAGES.items():
+                    if isinstance(exc, exc_type):
+                        raise type(exc)(msg) from None
+                raise
+
+        return _call
+
+
+def _parse_transport_config() -> tuple[str, str, int]:
+    """Read and validate HTTP transport env vars. Raises ValueError on bad input."""
+    transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
+    if transport not in _VALID_TRANSPORTS:
+        raise ValueError(
+            f"Invalid GARMIN_MCP_TRANSPORT {transport!r}; "
+            f"expected one of {', '.join(_VALID_TRANSPORTS)}"
+        )
+    http_host = os.getenv("GARMIN_MCP_HOST", "0.0.0.0")
+    http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+    return transport, http_host, http_port
 
 
 class _ToolFilter:
@@ -296,6 +336,18 @@ def init_api(email, password):
 def main():
     """Initialize the MCP server and register all tools"""
 
+    # --- Transport configuration --------------------------------------------
+    # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
+    # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.
+    #   GARMIN_MCP_TRANSPORT - stdio (default) | streamable-http | sse
+    #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 0.0.0.0)
+    #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
+    try:
+        transport, http_host, http_port = _parse_transport_config()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+
     # Initialize Garmin client
     garmin_client = init_api(email, password)
     if not garmin_client:
@@ -303,6 +355,9 @@ def main():
         return
 
     print("Garmin Connect client initialized successfully.", file=sys.stderr)
+
+    # Wrap client so runtime auth/rate-limit errors surface as clear messages
+    garmin_client = _GarminProxy(garmin_client)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)

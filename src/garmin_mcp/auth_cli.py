@@ -22,6 +22,14 @@ from garmin_mcp.token_utils import (
 )
 
 
+def _secure_token_dir(path: str) -> None:
+    """Set owner-only permissions on a token directory and all files inside it."""
+    os.chmod(path, 0o700)
+    for entry in os.scandir(path):
+        if entry.is_file():
+            os.chmod(entry.path, 0o600)
+
+
 def get_mfa() -> str:
     """Get MFA code from user input."""
     print("\nGarmin Connect MFA required. Please check your email/phone for the code.")
@@ -163,10 +171,11 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
         # Save tokens to directory
         garmin.client.dump(token_path)
-        print(f"\n✓ OAuth tokens saved to: {os.path.expanduser(token_path)}")
+        expanded_token_path = os.path.expanduser(token_path)
+        _secure_token_dir(expanded_token_path)
+        print(f"\n✓ OAuth tokens saved to: {expanded_token_path}")
 
         # Save tokens as base64
-        expanded_token_path = os.path.expanduser(token_path)
         token_json_path = os.path.join(expanded_token_path, "garmin_tokens.json")
         expanded_base64_path = os.path.expanduser(token_base64_path)
         with open(token_json_path, "r") as f:
@@ -174,6 +183,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         token_base64 = base64.b64encode(token_data.encode()).decode()
         with open(expanded_base64_path, "w") as token_file:
             token_file.write(token_base64)
+        os.chmod(expanded_base64_path, 0o600)
         print(f"✓ OAuth tokens (base64) saved to: {expanded_base64_path}")
 
         # Verify tokens work with an independent token-based login. The login
