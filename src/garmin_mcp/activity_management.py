@@ -15,6 +15,34 @@ def configure(client):
     garmin_client = client
 
 
+def _put_activity_update(activity_id: int, payload: Dict[str, Any]) -> Any:
+    """Send a partial activity update via PUT to the activity-service endpoint.
+
+    Garmin's activity endpoint accepts a partial ActivityDTO keyed by
+    activityId, so callers only include the top-level fields they want to
+    change. This mirrors how the library's set_activity_name works.
+    """
+    url = f"{garmin_client.garmin_connect_activity}/{activity_id}"
+    body = {"activityId": activity_id, **payload}
+    return garmin_client.client.put("connectapi", url, json=body, api=True)
+
+
+def _update_activity_summary(activity_id: int, fields: Dict[str, Any]) -> Any:
+    """Update fields nested in an activity's summaryDTO.
+
+    Garmin merges a partial summaryDTO into the stored summary, so we send only
+    the fields being changed and the other recorded metrics are preserved.
+
+    We deliberately avoid a read-modify-write. The full summaryDTO returned by
+    get_activity contains a complete GPS coordinate pair (startLatitude and
+    startLongitude); PUTting both halves of a coordinate together is rejected by
+    the endpoint with a 400. Each field is individually writable, so it is the
+    coordinate pair specifically that trips validation, and a minimal update
+    sidesteps it.
+    """
+    return _put_activity_update(activity_id, {"summaryDTO": fields})
+
+
 def register_tools(app):
     """Register all activity management tools with the MCP server app"""
 
@@ -305,6 +333,204 @@ def register_tools(app):
             )
         except Exception as e:
             return f"Error updating activity name: {str(e)}"
+
+    @app.tool()
+    async def set_activity_type(activity_id: Union[int, str], type_key: str) -> str:
+        """Change the activity type (sport) of an activity.
+
+        Useful for reclassifying a mislabelled activity, e.g. flipping a run
+        logged as 'trail_running' to 'running', or a 'treadmill_running' walk to
+        'treadmill_walking'. Call get_activity_types to see all valid type keys.
+
+        Args:
+            activity_id: ID of the activity to update
+            type_key: Target activity type key (e.g. 'running', 'trail_running',
+                'treadmill_running', 'cycling', 'lap_swimming')
+        """
+        try:
+            activity_id = int(activity_id)
+            type_key = type_key.strip()
+
+            types = garmin_client.get_activity_types() or []
+            match = next((t for t in types if t.get("typeKey") == type_key), None)
+            if not match:
+                valid = ", ".join(
+                    sorted(t.get("typeKey") for t in types if t.get("typeKey"))
+                )
+                return f"Unknown activity type '{type_key}'. Valid type keys: {valid}"
+
+            garmin_client.set_activity_type(
+                activity_id,
+                match["typeId"],
+                match["typeKey"],
+                match.get("parentTypeId"),
+            )
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "type_key": match["typeKey"],
+                    "type_id": match["typeId"],
+                    "message": "Activity type successfully updated",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity type: {str(e)}"
+
+    @app.tool()
+    async def set_activity_description(
+        activity_id: Union[int, str], description: str
+    ) -> str:
+        """Set or update the free-text description (notes) of an activity.
+
+        This is the notes field shown on the activity page — useful for
+        recording how a session felt, kit used, conditions, niggles, etc.
+        Pass an empty string to clear an existing description.
+
+        Args:
+            activity_id: ID of the activity to update
+            description: New description text (empty string clears it)
+        """
+        try:
+            activity_id = int(activity_id)
+            _put_activity_update(activity_id, {"description": description})
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "description": description,
+                    "message": "Activity description successfully updated",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity description: {str(e)}"
+
+    @app.tool()
+    async def set_activity_event_type(
+        activity_id: Union[int, str], event_type: str
+    ) -> str:
+        """Set the event type of an activity.
+
+        Event type categorises the activity's purpose. Valid keys:
+        race, recreation, specialEvent, training, transportation, touring,
+        geocaching, fitness, uncategorized.
+
+        Args:
+            activity_id: ID of the activity to update
+            event_type: Target event type key (e.g. 'race', 'training')
+        """
+        try:
+            activity_id = int(activity_id)
+            event_type = event_type.strip()
+
+            event_types = (
+                garmin_client.connectapi("/activity-service/activity/eventTypes") or []
+            )
+            match = next(
+                (e for e in event_types if e.get("typeKey") == event_type), None
+            )
+            if not match:
+                valid = ", ".join(e.get("typeKey") for e in event_types if e.get("typeKey"))
+                return f"Unknown event type '{event_type}'. Valid event types: {valid}"
+
+            _put_activity_update(
+                activity_id,
+                {
+                    "eventTypeDTO": {
+                        "typeId": match["typeId"],
+                        "typeKey": match["typeKey"],
+                        "sortOrder": match.get("sortOrder"),
+                    }
+                },
+            )
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "event_type": match["typeKey"],
+                    "message": "Activity event type successfully updated",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity event type: {str(e)}"
+
+    @app.tool()
+    async def set_perceived_effort(
+        activity_id: Union[int, str], rpe: float
+    ) -> str:
+        """Set the perceived effort (RPE) for an activity.
+
+        Mirrors Garmin Connect's 'Perceived Effort' rating on a 0-10 scale,
+        where 0 clears the rating. Internally Garmin stores this multiplied by
+        10 (so RPE 7 is stored as 70); this tool handles the conversion.
+
+        Args:
+            activity_id: ID of the activity to update
+            rpe: Perceived effort from 0 to 10 (0 clears the rating)
+        """
+        try:
+            activity_id = int(activity_id)
+            rpe = float(rpe)
+            if not 0 <= rpe <= 10:
+                return "rpe must be between 0 and 10"
+
+            _update_activity_summary(
+                activity_id, {"directWorkoutRpe": int(round(rpe * 10))}
+            )
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "rpe": rpe,
+                    "message": "Perceived effort successfully updated",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating perceived effort: {str(e)}"
+
+    @app.tool()
+    async def set_activity_feel(activity_id: Union[int, str], feel: int) -> str:
+        """Set how an activity felt ('How did you feel?').
+
+        Mirrors Garmin Connect's 5-point feel rating, stored as one of:
+          0   = very tired / poor
+          25  = tired
+          50  = normal
+          75  = good
+          100 = strong
+        Higher is better.
+
+        Args:
+            activity_id: ID of the activity to update
+            feel: One of 0, 25, 50, 75, 100
+        """
+        try:
+            activity_id = int(activity_id)
+            feel = int(feel)
+            if feel not in (0, 25, 50, 75, 100):
+                return "feel must be one of 0, 25, 50, 75, 100"
+
+            _update_activity_summary(activity_id, {"directWorkoutFeel": feel})
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "feel": feel,
+                    "message": "Activity feel successfully updated",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity feel: {str(e)}"
 
     @app.tool()
     async def get_activity_splits(activity_id: Union[int, str]) -> str:
