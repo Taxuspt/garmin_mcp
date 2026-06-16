@@ -139,6 +139,7 @@ def register_tools(app):
         calories: float,
         serving_unit: str = "G",
         number_of_units: float = 100,
+        brand_name: Optional[str] = None,
         carbs: Optional[float] = None,
         protein: Optional[float] = None,
         fat: Optional[float] = None,
@@ -148,6 +149,10 @@ def register_tools(app):
         sodium: Optional[float] = None,
         cholesterol: Optional[float] = None,
         potassium: Optional[float] = None,
+        trans_fat: Optional[float] = None,
+        calcium: Optional[float] = None,
+        iron: Optional[float] = None,
+        vitamin_d: Optional[float] = None,
     ) -> str:
         """Create a custom food in the user's Garmin nutrition library
 
@@ -156,11 +161,16 @@ def register_tools(app):
         log_custom_food. If the API returns no data (204), use
         get_custom_foods(search=food_name) to retrieve those IDs.
 
+        All nutrient amounts are ABSOLUTE values per serving, not %DV.
+        Nutrition labels often print %DV for calcium/iron/vitamin D —
+        convert to absolute units before passing.
+
         Args:
             food_name: Name of the custom food (e.g. "Homemade Chocolate Cookies")
             calories: Calories per serving
             serving_unit: Unit for serving size (e.g. "G", "ML", "OZ"). Default "G"
             number_of_units: Serving size in the specified unit. Default 100
+            brand_name: Brand or vendor name (e.g. "Three Bridges")
             carbs: Carbohydrates in grams per serving
             protein: Protein in grams per serving
             fat: Total fat in grams per serving
@@ -170,6 +180,10 @@ def register_tools(app):
             sodium: Sodium in mg per serving
             cholesterol: Cholesterol in mg per serving
             potassium: Potassium in mg per serving
+            trans_fat: Trans fat in grams per serving
+            calcium: Calcium in mg per serving (NOT %DV)
+            iron: Iron in mg per serving (NOT %DV)
+            vitamin_d: Vitamin D in mcg per serving (NOT %DV)
         """
         try:
             nutrition = {
@@ -188,19 +202,27 @@ def register_tools(app):
                 "sodium": sodium,
                 "cholesterol": cholesterol,
                 "potassium": potassium,
+                "transFat": trans_fat,
+                "calcium": calcium,
+                "iron": iron,
+                "vitaminD": vitamin_d,
             }
             for key, value in optional_fields.items():
                 if value is not None:
                     nutrition[key] = _num_to_str(value)
 
+            food_meta: dict = {
+                "foodName": food_name,
+                "foodType": "GENERIC",
+                "source": "GARMIN",
+                "regionCode": "US",
+                "languageCode": "en",
+            }
+            if brand_name is not None:
+                food_meta["brandName"] = brand_name
+
             payload = {
-                "foodMetaData": {
-                    "foodName": food_name,
-                    "foodType": "GENERIC",
-                    "source": "GARMIN",
-                    "regionCode": "US",
-                    "languageCode": "en",
-                },
+                "foodMetaData": food_meta,
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
@@ -226,6 +248,7 @@ def register_tools(app):
         calories: float,
         serving_unit: str = "G",
         number_of_units: float = 100,
+        brand_name: Optional[str] = None,
         carbs: Optional[float] = None,
         protein: Optional[float] = None,
         fat: Optional[float] = None,
@@ -235,13 +258,21 @@ def register_tools(app):
         sodium: Optional[float] = None,
         cholesterol: Optional[float] = None,
         potassium: Optional[float] = None,
+        trans_fat: Optional[float] = None,
+        calcium: Optional[float] = None,
+        iron: Optional[float] = None,
+        vitamin_d: Optional[float] = None,
     ) -> str:
         """Update an existing custom food in the user's Garmin nutrition library
 
-        Fetches the food's current nutrition before writing so that omitted
-        optional fields (carbs, protein, fat, etc.) preserve their existing
-        values rather than being cleared. Only the fields you explicitly pass
-        are changed; everything else is carried forward from the current record.
+        Fetches the food's current record before writing so that omitted optional
+        fields (brand, carbs, protein, fat, micros, etc.) preserve their existing
+        values rather than being cleared. Only the fields you explicitly pass are
+        changed; everything else is carried forward from the current record.
+
+        All nutrient amounts are ABSOLUTE values per serving, not %DV.
+        Nutrition labels often print %DV for calcium/iron/vitamin D —
+        convert to absolute units before passing.
 
         Use get_custom_foods first to find the foodId and servingId.
 
@@ -252,6 +283,7 @@ def register_tools(app):
             calories: Calories per serving
             serving_unit: Unit for serving size (e.g. "G", "ML", "OZ"). Default "G"
             number_of_units: Serving size in the specified unit. Default 100
+            brand_name: Brand or vendor name; omit to preserve the existing value
             carbs: Carbohydrates in grams per serving
             protein: Protein in grams per serving
             fat: Total fat in grams per serving
@@ -261,10 +293,15 @@ def register_tools(app):
             sodium: Sodium in mg per serving
             cholesterol: Cholesterol in mg per serving
             potassium: Potassium in mg per serving
+            trans_fat: Trans fat in grams per serving
+            calcium: Calcium in mg per serving (NOT %DV)
+            iron: Iron in mg per serving (NOT %DV)
+            vitamin_d: Vitamin D in mcg per serving (NOT %DV)
         """
         try:
-            # Fetch current nutrition so omitted fields are preserved (not wiped).
+            # Fetch current record so omitted fields are preserved (not wiped).
             existing_nutrition: dict = {}
+            existing_brand: Optional[str] = None
             try:
                 search_url = (
                     f"/nutrition-service/customFood"
@@ -276,6 +313,7 @@ def register_tools(app):
                 for f in foods:
                     if str(f.get("foodMetaData", {}).get("foodId", "")) == food_id:
                         existing_nutrition = (f.get("nutritionContents") or [{}])[0]
+                        existing_brand = f.get("foodMetaData", {}).get("brandName")
                         break
             except Exception:
                 pass  # proceed without existing data; caller's values win
@@ -291,6 +329,10 @@ def register_tools(app):
                 "sodium": sodium,
                 "cholesterol": cholesterol,
                 "potassium": potassium,
+                "transFat": trans_fat,
+                "calcium": calcium,
+                "iron": iron,
+                "vitaminD": vitamin_d,
             }
             nutrition: dict = {
                 "servingId": serving_id,
@@ -307,15 +349,22 @@ def register_tools(app):
                 if value is not None:
                     nutrition[key] = _num_to_str(value)
 
+            # Effective brand: caller-supplied wins, else preserve existing, else omit.
+            effective_brand = brand_name if brand_name is not None else existing_brand
+
+            food_meta: dict = {
+                "foodId": food_id,
+                "foodName": food_name,
+                "foodType": "GENERIC",
+                "source": "GARMIN",
+                "regionCode": "US",
+                "languageCode": "en",
+            }
+            if effective_brand is not None:
+                food_meta["brandName"] = effective_brand
+
             payload = {
-                "foodMetaData": {
-                    "foodId": food_id,
-                    "foodName": food_name,
-                    "foodType": "GENERIC",
-                    "source": "GARMIN",
-                    "regionCode": "US",
-                    "languageCode": "en",
-                },
+                "foodMetaData": food_meta,
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
