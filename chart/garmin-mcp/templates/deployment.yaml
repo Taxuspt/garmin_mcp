@@ -1,0 +1,111 @@
+{{- $http := ne .Values.transport.mode "stdio" -}}
+{{- $tokenMode := include "garmin-mcp.tokenMode" . -}}
+{{- $usePvc := and .Values.persistence.enabled (not $tokenMode) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "garmin-mcp.fullname" . }}
+  labels:
+    {{- include "garmin-mcp.labels" . | nindent 4 }}
+spec:
+  # Keep at 1: the Garmin session/tokens are per-pod and FastMCP HTTP sessions
+  # are stateful. Scaling >1 needs stateless HTTP plus shared token storage.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # Single RWO volume: avoid two pods mounting it during rollouts.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "garmin-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "garmin-mcp.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: GARMIN_MCP_TRANSPORT
+              value: {{ .Values.transport.mode | quote }}
+            {{- if $http }}
+            - name: GARMIN_MCP_HOST
+              value: {{ .Values.transport.host | quote }}
+            - name: GARMIN_MCP_PORT
+              value: {{ .Values.transport.port | quote }}
+            {{- end }}
+            {{- if .Values.garmin.isCn }}
+            - name: GARMIN_IS_CN
+              value: "true"
+            {{- end }}
+            {{- if $usePvc }}
+            - name: GARMINTOKENS
+              value: {{ .Values.persistence.mountPath | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "garmin-mcp.secretName" . }}
+          {{- if $http }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.transport.port }}
+          {{- if .Values.probes.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if $usePvc }}
+          volumeMounts:
+            - name: tokens
+              mountPath: {{ .Values.persistence.mountPath }}
+          {{- end }}
+      {{- if $usePvc }}
+      volumes:
+        - name: tokens
+          persistentVolumeClaim:
+            claimName: {{ include "garmin-mcp.pvcName" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
