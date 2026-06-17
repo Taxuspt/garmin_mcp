@@ -203,8 +203,9 @@ def register_tools(app):
             curated = {
                 "id": activity.get('activityId'),
                 "name": activity.get('activityName'),
+                "description": activity.get('description'),
                 "type": activity_type.get('typeKey'),
-                "event_type": (activity.get('eventType') or {}).get('typeKey'),
+                "event_type": (activity.get('eventTypeDTO') or {}).get('typeKey'),
                 "parent_type": activity_type.get('parentTypeId'),
 
                 # Timing

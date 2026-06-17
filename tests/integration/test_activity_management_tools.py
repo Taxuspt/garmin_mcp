@@ -516,6 +516,52 @@ async def test_get_activity_includes_event_type(app_with_activity_management, mo
     assert data["event_type"] == "race"
 
 
+@pytest.mark.asyncio
+async def test_get_activity_includes_description(app_with_activity_management, mock_garmin_client):
+    """Test get_activity surfaces the free-text description field.
+
+    Regression: the detail view previously never extracted 'description', so a
+    description set via set_activity_description could be written but not read
+    back through this tool.
+    """
+    mock_garmin_client.get_activity.return_value = MOCK_ACTIVITY_DETAILS
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": 12345678901}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["description"] == "Felt strong throughout. New shoes."
+
+
+@pytest.mark.asyncio
+async def test_get_activity_event_type_uses_event_type_dto(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test get_activity reads event type from eventTypeDTO, not eventType.
+
+    Regression: the single-activity detail endpoint returns eventTypeDTO (the
+    list endpoint returns eventType). The detail tool read the wrong key, so
+    event_type was always missing from get_activity against the real API.
+    """
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 1,
+        "activityName": "Race",
+        "eventTypeDTO": {"typeKey": "race", "typeId": 1},
+        "eventType": None,  # the wrong key the detail API does not populate
+        "summaryDTO": {},
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": 1}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["event_type"] == "race"
+
+
 # Error handling tests
 @pytest.mark.asyncio
 async def test_get_activities_by_date_no_data(app_with_activity_management, mock_garmin_client):
