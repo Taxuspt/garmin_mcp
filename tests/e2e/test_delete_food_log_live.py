@@ -4,7 +4,7 @@ Live integration test for delete_food_log (Bug 2 fix).
 Requires valid Garmin tokens at ~/.garminconnect/garmin_tokens.json.
 Skipped automatically when tokens are absent.
 
-Run with: pytest tests/e2e/test_delete_food_log_live.py -m live -s
+Run with: pytest tests/e2e/test_delete_food_log_live.py -m e2e -s
 """
 import os
 import time
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
-pytestmark = pytest.mark.live
+pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture(scope="module")
