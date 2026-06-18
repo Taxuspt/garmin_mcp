@@ -4,7 +4,7 @@ Live integration tests for Bug A (upsert_and_log dedup) and Bug B (update_custom
 Requires valid Garmin tokens at ~/.garminconnect/garmin_tokens.json.
 Skipped automatically when tokens are absent.
 
-Run with: pytest tests/e2e/test_upsert_dedup_and_update_merge_live.py -m live -s
+Run with: pytest tests/e2e/test_upsert_dedup_and_update_merge_live.py -m e2e -s
 """
 import os
 import sys
@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
-pytestmark = pytest.mark.live
+pytestmark = pytest.mark.e2e
 
 TEST_DATE = datetime.now().strftime("%Y-%m-%d")
 

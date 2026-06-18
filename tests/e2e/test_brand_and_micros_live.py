@@ -5,7 +5,7 @@ iron, vitaminD) on create_custom_food and update_custom_food.
 Requires valid Garmin tokens at ~/.garminconnect/garmin_tokens.json.
 Skipped automatically when tokens are absent.
 
-Run with: pytest tests/e2e/test_brand_and_micros_live.py -m live -s
+Run with: pytest tests/e2e/test_brand_and_micros_live.py -m e2e -s
 
 Validation scenarios:
   1. Create with brand + all four micros → read back → assert all fields present
@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
-pytestmark = pytest.mark.live
+pytestmark = pytest.mark.e2e
 
 _FOOD_NAME = "ZZ Live Brand Micros Test"
 _BRAND_1 = "TestBrand Alpha"
