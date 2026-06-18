@@ -4,7 +4,7 @@ Live integration test for delete_custom_food.
 Requires valid Garmin tokens at ~/.garminconnect/garmin_tokens.json.
 Skipped automatically when tokens are absent.
 
-Run with: pytest tests/e2e/test_delete_custom_food_live.py -m live -s
+Run with: pytest tests/e2e/test_delete_custom_food_live.py -m e2e -s
 """
 import os
 import sys
@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
-pytestmark = pytest.mark.live
+pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture(scope="module")
