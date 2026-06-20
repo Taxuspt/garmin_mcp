@@ -11,6 +11,46 @@ from mcp.server.fastmcp import FastMCP
 
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
+
+class _GarminClientProxy:
+    """Wraps the Garmin client to translate API exceptions into actionable messages.
+
+    The login flow already has detailed error handling, but the same exceptions
+    at runtime (expired tokens, rate limits, connection drops) surface as raw
+    library tracebacks. This proxy catches them in one place so individual tool
+    functions don't need to distinguish error types.
+    """
+
+    def __init__(self, client):
+        self._client = client
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+
+        def wrapper(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            except GarminConnectAuthenticationError as e:
+                raise RuntimeError(
+                    "Garmin authentication expired. Re-authenticate and restart "
+                    f"the server. (Original error: {e})"
+                ) from e
+            except GarminConnectTooManyRequestsError as e:
+                raise RuntimeError(
+                    "Garmin rate limit hit. Wait a few minutes before retrying. "
+                    f"(Original error: {e})"
+                ) from e
+            except GarminConnectConnectionError as e:
+                raise RuntimeError(
+                    "Garmin Connect unreachable. Check network or try again later. "
+                    f"(Original error: {e})"
+                ) from e
+
+        return wrapper
+
+
 # Import all modules
 from garmin_mcp import activity_management
 from garmin_mcp import health_wellness
@@ -279,12 +319,13 @@ def main():
     """Initialize the MCP server and register all tools"""
 
     # Initialize Garmin client
-    garmin_client = init_api(email, password)
-    if not garmin_client:
+    raw_client = init_api(email, password)
+    if not raw_client:
         print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
         return
 
     print("Garmin Connect client initialized successfully.", file=sys.stderr)
+    garmin_client = _GarminClientProxy(raw_client)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)
