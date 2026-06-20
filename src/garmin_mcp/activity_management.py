@@ -3,6 +3,8 @@ Activity Management functions for Garmin Connect MCP Server
 """
 import json
 import datetime
+import re
+import zoneinfo
 from typing import Any, Dict, List, Optional, Union
 
 # The garmin_client will be set by the main file
@@ -640,5 +642,107 @@ def register_tools(app):
             return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving activity types: {str(e)}"
+
+    @app.tool()
+    async def create_manual_activity(
+        activity_type: str,
+        date: str,
+        duration_minutes: int,
+        activity_name: str = "",
+        distance_km: float = 0.0,
+        start_time: str = "09:00",
+        time_zone: str = "UTC",
+    ) -> str:
+        """Create a manual activity in Garmin Connect (for activities done without a watch).
+
+        Use get_activity_types to find valid activity_type values. Common ones:
+        yoga, strength_training, indoor_cycling, pilates, breathwork, meditation.
+
+        Args:
+            activity_type: Garmin type_key (e.g. "yoga", "strength_training"). Use get_activity_types to list valid values.
+            date: Date the activity was done, YYYY-MM-DD format
+            duration_minutes: Duration in minutes (1-600)
+            activity_name: Optional display name (defaults to the activity type)
+            distance_km: Distance in km (default 0, ignored for non-distance activities)
+            start_time: Time the activity started, HH:MM in 24h format (default "09:00")
+            time_zone: IANA timezone (default UTC)
+        """
+        try:
+            activity_type = activity_type.strip()
+            if not activity_type:
+                return "Error: activity_type is required"
+            if not re.match(r'^[a-z][a-z0-9_]{0,63}$', activity_type):
+                return (
+                    "Error: activity_type must be a lowercase alphanumeric "
+                    "type_key (e.g. 'yoga', 'strength_training'). "
+                    "Use get_activity_types to list valid values."
+                )
+
+            if not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+                return "Error: date must be in YYYY-MM-DD format"
+            try:
+                parsed_date = datetime.date.fromisoformat(date)
+            except ValueError:
+                return f"Error: invalid date '{date}'"
+            if parsed_date > datetime.date.today() + datetime.timedelta(days=1):
+                return "Error: date cannot be in the future"
+            if parsed_date < datetime.date(2000, 1, 1):
+                return "Error: date must be after 2000-01-01"
+
+            if duration_minutes < 1 or duration_minutes > 600:
+                return "Error: duration_minutes must be between 1 and 600"
+
+            if distance_km < 0 or distance_km > 1000:
+                return "Error: distance_km must be between 0 and 1000"
+
+            time_zone = time_zone.strip()
+            if time_zone not in zoneinfo.available_timezones():
+                return f"Error: invalid timezone '{time_zone}'"
+
+            activity_name = activity_name.strip()
+            if not activity_name:
+                activity_name = activity_type.replace("_", " ").title()
+            if len(activity_name) > 140:
+                return "Error: activity_name must be 140 characters or fewer"
+
+            start_time = start_time.strip()
+            if not re.match(r'^\d{2}:\d{2}$', start_time):
+                return "Error: start_time must be in HH:MM format (e.g. '07:30')"
+            try:
+                datetime.time.fromisoformat(start_time)
+            except ValueError:
+                return f"Error: invalid start_time '{start_time}'"
+
+            start_datetime = f"{date}T{start_time}:00.000"
+
+            result = garmin_client.create_manual_activity(
+                start_datetime=start_datetime,
+                time_zone=time_zone,
+                type_key=activity_type,
+                distance_km=distance_km,
+                duration_min=duration_minutes,
+                activity_name=activity_name,
+            )
+
+            activity_id = None
+            if isinstance(result, dict):
+                activity_id = result.get("activityId")
+
+            response = {
+                "success": True,
+                "activity_name": activity_name,
+                "activity_type": activity_type,
+                "date": date,
+                "start_time": start_time,
+                "duration_minutes": duration_minutes,
+                "distance_km": distance_km,
+                "time_zone": time_zone,
+            }
+            if activity_id:
+                response["activity_id"] = activity_id
+
+            return json.dumps(response, indent=2)
+        except Exception as e:
+            return f"Error creating manual activity: {str(e)}"
 
     return app

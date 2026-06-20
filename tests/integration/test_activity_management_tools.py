@@ -697,3 +697,227 @@ async def test_get_activities_by_date_default_page_size_is_100(
     call_params = mock_garmin_client.connectapi.call_args[1]["params"]
     assert call_params["limit"] == "100"
     assert call_params["start"] == "0"
+
+
+# ── create_manual_activity tests ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_success(app_with_activity_management, mock_garmin_client):
+    """Test successful manual activity creation with minimal args"""
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 99887766}
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 45}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["activity_type"] == "yoga"
+    assert data["activity_name"] == "Yoga"
+    assert data["date"] == "2024-06-15"
+    assert data["duration_minutes"] == 45
+    assert data["activity_id"] == 99887766
+    assert data["time_zone"] == "UTC"
+
+    mock_garmin_client.create_manual_activity.assert_called_once_with(
+        start_datetime="2024-06-15T09:00:00.000",
+        time_zone="UTC",
+        type_key="yoga",
+        distance_km=0.0,
+        duration_min=45,
+        activity_name="Yoga",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_all_optional_args(app_with_activity_management, mock_garmin_client):
+    """Test manual activity creation with all optional args specified"""
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 12345}
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {
+            "activity_type": "strength_training",
+            "date": "2024-06-15",
+            "duration_minutes": 60,
+            "activity_name": "Morning Weights",
+            "distance_km": 0.0,
+            "start_time": "07:30",
+            "time_zone": "America/New_York",
+        }
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["activity_name"] == "Morning Weights"
+    assert data["start_time"] == "07:30"
+    assert data["time_zone"] == "America/New_York"
+
+    mock_garmin_client.create_manual_activity.assert_called_once_with(
+        start_datetime="2024-06-15T07:30:00.000",
+        time_zone="America/New_York",
+        type_key="strength_training",
+        distance_km=0.0,
+        duration_min=60,
+        activity_name="Morning Weights",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_auto_names_from_type(app_with_activity_management, mock_garmin_client):
+    """Test that activity_name defaults to a title-cased version of activity_type"""
+    mock_garmin_client.create_manual_activity.return_value = {}
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "indoor_cycling", "date": "2024-06-15", "duration_minutes": 30}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activity_name"] == "Indoor Cycling"
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_no_activity_id_in_response(app_with_activity_management, mock_garmin_client):
+    """Test response when Garmin API returns no activityId"""
+    mock_garmin_client.create_manual_activity.return_value = {}
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 30}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert "activity_id" not in data
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_api_exception(app_with_activity_management, mock_garmin_client):
+    """Test graceful handling of Garmin API exceptions"""
+    mock_garmin_client.create_manual_activity.side_effect = Exception("Connection timeout")
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 30}
+    )
+
+    assert "Error creating manual activity: Connection timeout" in result[0][0].text
+
+
+# ── create_manual_activity validation tests ──────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_empty_type(app_with_activity_management, mock_garmin_client):
+    """Test rejection of empty activity_type"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "   ", "date": "2024-06-15", "duration_minutes": 30}
+    )
+
+    assert "activity_type is required" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_invalid_type_key(app_with_activity_management, mock_garmin_client):
+    """Test rejection of activity_type that doesn't match type_key format"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "Yoga Class!", "date": "2024-06-15", "duration_minutes": 30}
+    )
+
+    assert "must be a lowercase alphanumeric" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_bad_date_format(app_with_activity_management, mock_garmin_client):
+    """Test rejection of incorrectly formatted date"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "06-15-2024", "duration_minutes": 30}
+    )
+
+    assert "YYYY-MM-DD" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_invalid_date(app_with_activity_management, mock_garmin_client):
+    """Test rejection of syntactically valid but impossible date"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-02-30", "duration_minutes": 30}
+    )
+
+    assert "invalid date" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_duration_out_of_range(app_with_activity_management, mock_garmin_client):
+    """Test rejection of duration outside valid range"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 0}
+    )
+
+    assert "between 1 and 600" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 601}
+    )
+
+    assert "between 1 and 600" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_negative_distance(app_with_activity_management, mock_garmin_client):
+    """Test rejection of negative distance"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "running", "date": "2024-06-15", "duration_minutes": 30, "distance_km": -1.0}
+    )
+
+    assert "between 0 and 1000" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_invalid_timezone(app_with_activity_management, mock_garmin_client):
+    """Test rejection of invalid timezone string"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 30, "time_zone": "Mars/Olympus"}
+    )
+
+    assert "invalid timezone" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_bad_start_time(app_with_activity_management, mock_garmin_client):
+    """Test rejection of invalid start_time format"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 30, "start_time": "9am"}
+    )
+
+    assert "HH:MM" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_long_name(app_with_activity_management, mock_garmin_client):
+    """Test rejection of activity_name exceeding 140 chars"""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"activity_type": "yoga", "date": "2024-06-15", "duration_minutes": 30, "activity_name": "A" * 141}
+    )
+
+    assert "140 characters" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
