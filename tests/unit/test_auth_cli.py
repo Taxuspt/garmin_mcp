@@ -15,6 +15,7 @@ from garmin_mcp.auth_cli import (
     authenticate,
     verify_tokens,
     main,
+    _secure_token_dir,
 )
 
 
@@ -130,7 +131,8 @@ class TestAuthenticate:
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
     @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
-    def test_existing_valid_tokens_with_force(self, mock_verify, mock_garmin, mock_get_creds, mock_validate, mock_exists):
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_existing_valid_tokens_with_force(self, mock_chmod, mock_verify, mock_garmin, mock_get_creds, mock_validate, mock_exists):
         """Test that force flag re-authenticates even with valid tokens."""
         mock_exists.return_value = True
         mock_validate.return_value = (True, "")
@@ -152,7 +154,8 @@ class TestAuthenticate:
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
     @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
-    def test_successful_authentication(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_successful_authentication(self, mock_chmod, mock_verify, mock_garmin, mock_get_creds, mock_exists):
         """Test successful authentication flow."""
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "secret")
@@ -178,12 +181,15 @@ class TestAuthenticate:
         mock_verify.assert_called_once()
         # Verify base64-encoded token data was written to the base64 file
         m().write.assert_called_once_with(expected_b64)
+        # Verify restrictive permissions were applied to the base64 file
+        mock_chmod.assert_any_call(os.path.expanduser(base64_path), 0o600)
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
     @patch("garmin_mcp.auth_cli._verify_saved_tokens")
-    def test_unverifiable_tokens_fail(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_unverifiable_tokens_fail(self, mock_chmod, mock_verify, mock_garmin, mock_get_creds, mock_exists):
         """Login that produces unauthenticated tokens must fail, not report success."""
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "secret")
@@ -391,7 +397,8 @@ class TestAuthenticateIsCn:
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
     @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
-    def test_authenticate_passes_is_cn_true(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_authenticate_passes_is_cn_true(self, mock_chmod, mock_verify, mock_garmin, mock_get_creds, mock_exists):
         """Test that is_cn=True is passed to Garmin constructor."""
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "secret")
@@ -419,7 +426,8 @@ class TestAuthenticateIsCn:
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
     @patch("garmin_mcp.auth_cli._verify_saved_tokens", return_value=(True, "Test User"))
-    def test_authenticate_passes_is_cn_false(self, mock_verify, mock_garmin, mock_get_creds, mock_exists):
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_authenticate_passes_is_cn_false(self, mock_chmod, mock_verify, mock_garmin, mock_get_creds, mock_exists):
         """Test that is_cn=False is passed to Garmin constructor by default."""
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "secret")
@@ -442,3 +450,35 @@ class TestAuthenticateIsCn:
             prompt_mfa=get_mfa,
             return_on_mfa=True,
         )
+
+
+class TestSecureTokenDir:
+    """Tests for _secure_token_dir: verifies owner-only permissions are applied."""
+
+    def test_directory_gets_700_permissions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _secure_token_dir(tmpdir)
+            assert oct(os.stat(tmpdir).st_mode)[-3:] == "700"
+
+    def test_files_inside_get_600_permissions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            token_file = os.path.join(tmpdir, "garmin_tokens.json")
+            with open(token_file, "w") as f:
+                f.write("{}")
+            _secure_token_dir(tmpdir)
+            assert oct(os.stat(token_file).st_mode)[-3:] == "600"
+
+    def test_multiple_files_all_get_600_permissions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for name in ("garmin_tokens.json", "oauth1_tokens.json"):
+                with open(os.path.join(tmpdir, name), "w") as f:
+                    f.write("{}")
+            _secure_token_dir(tmpdir)
+            for name in ("garmin_tokens.json", "oauth1_tokens.json"):
+                path = os.path.join(tmpdir, name)
+                assert oct(os.stat(path).st_mode)[-3:] == "600", f"{name} should be 600"
+
+    def test_empty_directory_only_sets_dir_permissions(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _secure_token_dir(tmpdir)
+            assert oct(os.stat(tmpdir).st_mode)[-3:] == "700"

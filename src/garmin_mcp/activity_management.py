@@ -608,6 +608,56 @@ def register_tools(app):
             return f"Error retrieving activities: {str(e)}"
 
     @app.tool()
+    async def create_manual_activity(
+        type_key: str,
+        date: str,
+        duration_minutes: int,
+        start_time: str = "09:00",
+        activity_name: str = "",
+        distance_km: float = 0.0,
+        time_zone: str = "UTC",
+    ) -> str:
+        """Log a manual activity in Garmin Connect — useful for activities done without a watch.
+
+        The type_key must match a Garmin activity type. Use get_activity_types to see
+        the full list. Common values: yoga, strength_training, meditation, indoor_cycling,
+        pilates, bouldering, fitness_equipment.
+
+        Args:
+            type_key: Activity type key (e.g. "yoga", "strength_training")
+            date: Date of the activity in YYYY-MM-DD format
+            duration_minutes: Duration of the activity in minutes
+            start_time: Start time as HH:MM (24-hour, default 09:00)
+            activity_name: Optional title; defaults to the type_key if not provided
+            distance_km: Distance in kilometres (default 0.0 for non-distance activities)
+            time_zone: IANA time zone for the activity (default UTC)
+        """
+        try:
+            if not type_key.strip():
+                return "Error: type_key is required"
+            if duration_minutes <= 0:
+                return "Error: duration_minutes must be greater than 0"
+
+            name = activity_name.strip() or type_key.replace("_", " ").title()
+            start_datetime = f"{date}T{start_time}:00.000"
+
+            result = garmin_client.create_manual_activity(
+                start_datetime=start_datetime,
+                time_zone=time_zone,
+                type_key=type_key,
+                distance_km=distance_km,
+                duration_min=duration_minutes,
+                activity_name=name,
+            )
+
+            return json.dumps({
+                "success": True,
+                "activity": result,
+            }, indent=2)
+        except Exception as e:
+            return f"Error creating manual activity: {str(e)}"
+
+    @app.tool()
     async def get_activity_types() -> str:
         """Get all available activity types
 

@@ -697,3 +697,117 @@ async def test_get_activities_by_date_default_page_size_is_100(
     call_params = mock_garmin_client.connectapi.call_args[1]["params"]
     assert call_params["limit"] == "100"
     assert call_params["start"] == "0"
+
+
+# --- create_manual_activity --------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_success(app_with_activity_management, mock_garmin_client):
+    """Test create_manual_activity returns success with the API response."""
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 999}
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {
+            "type_key": "yoga",
+            "date": "2024-03-01",
+            "duration_minutes": 60,
+        },
+    )
+
+    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["activity"] == {"activityId": 999}
+
+    mock_garmin_client.create_manual_activity.assert_called_once_with(
+        start_datetime="2024-03-01T09:00:00.000",
+        time_zone="UTC",
+        type_key="yoga",
+        distance_km=0.0,
+        duration_min=60,
+        activity_name="Yoga",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_custom_fields(app_with_activity_management, mock_garmin_client):
+    """Test create_manual_activity forwards all optional fields."""
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 123}
+
+    await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {
+            "type_key": "strength_training",
+            "date": "2024-03-15",
+            "duration_minutes": 45,
+            "start_time": "07:30",
+            "activity_name": "Morning Weights",
+            "distance_km": 0.0,
+            "time_zone": "Europe/Lisbon",
+        },
+    )
+
+    mock_garmin_client.create_manual_activity.assert_called_once_with(
+        start_datetime="2024-03-15T07:30:00.000",
+        time_zone="Europe/Lisbon",
+        type_key="strength_training",
+        distance_km=0.0,
+        duration_min=45,
+        activity_name="Morning Weights",
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_default_name_from_type_key(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test that activity_name defaults to a prettified type_key when omitted."""
+    mock_garmin_client.create_manual_activity.return_value = {}
+
+    await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "indoor_cycling", "date": "2024-04-01", "duration_minutes": 30},
+    )
+
+    call_kwargs = mock_garmin_client.create_manual_activity.call_args[1]
+    assert call_kwargs["activity_name"] == "Indoor Cycling"
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_zero_duration(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test that duration_minutes <= 0 is rejected before calling the API."""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 0},
+    )
+    assert "Error" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_rejects_empty_type_key(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test that an empty type_key is rejected before calling the API."""
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "  ", "date": "2024-03-01", "duration_minutes": 30},
+    )
+    assert "Error" in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_exception(app_with_activity_management, mock_garmin_client):
+    """Test that API exceptions are returned as error strings."""
+    mock_garmin_client.create_manual_activity.side_effect = Exception("Garmin API error")
+
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 60},
+    )
+    assert "Error" in result[0][0].text
+    assert "Garmin API error" in result[0][0].text
