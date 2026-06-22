@@ -45,6 +45,58 @@ def _zone_number(zone: str) -> int:
     raise ValueError(f"Invalid hr_zone '{zone}'. Use Z1-Z5 or 1-5.")
 
 
+def build_run_json(
+    name: str,
+    run_seconds: int,
+    warmup_min: int,
+    cooldown_min: int,
+    hr_zone: str = "Z3",
+) -> dict:
+    """Build the Garmin Connect JSON for a continuous run workout."""
+    zone = _zone_number(hr_zone)
+    return {
+        "workoutName": name,
+        "description": (
+            f"{warmup_min}m warmup + {run_seconds}s run Z{zone} + {cooldown_min}m cooldown"
+        ),
+        "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
+            "workoutSteps": [
+                {
+                    "type": "ExecutableStepDTO",
+                    "stepOrder": 1,
+                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                    "description": f"Warmup {warmup_min} min",
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": float(warmup_min * 60),
+                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+                },
+                {
+                    "type": "ExecutableStepDTO",
+                    "stepOrder": 2,
+                    "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                    "description": f"Run {run_seconds}s Z{zone}",
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": float(run_seconds),
+                    "targetType": {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"},
+                    "zoneNumber": zone,
+                },
+                {
+                    "type": "ExecutableStepDTO",
+                    "stepOrder": 3,
+                    "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
+                    "description": f"Cooldown {cooldown_min} min",
+                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                    "endConditionValue": float(cooldown_min * 60),
+                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+                },
+            ],
+        }],
+    }
+
+
 def build_walk_run_json(
     name: str,
     run_seconds: int,
@@ -283,6 +335,48 @@ def register_tools(app):
             return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error creating walk/run workout: {str(e)}"
+
+    @app.tool()
+    async def create_run_workout(
+        name: str,
+        run_seconds: int,
+        warmup_min: int,
+        cooldown_min: int,
+        hr_zone: str = "Z3",
+    ) -> str:
+        """Create a continuous run workout and upload it to Garmin Connect.
+
+        Builds a single uninterrupted run interval with warmup and cooldown walks.
+
+        Args:
+            name: Workout name (e.g. "Step 8 - 30min continuous")
+            run_seconds: Duration of the run in seconds
+            warmup_min: Warmup walk duration in minutes
+            cooldown_min: Cooldown walk duration in minutes
+            hr_zone: Target heart-rate zone (Z1-Z5, default Z3)
+        """
+        try:
+            workout_json = build_run_json(
+                name=name,
+                run_seconds=run_seconds,
+                warmup_min=warmup_min,
+                cooldown_min=cooldown_min,
+                hr_zone=hr_zone,
+            )
+            result = garmin_client.upload_workout(workout_json)
+
+            if isinstance(result, dict):
+                curated = {
+                    "status": "success",
+                    "workout_id": result.get("workoutId"),
+                    "name": result.get("workoutName"),
+                    "message": "Workout uploaded successfully",
+                }
+                curated = {k: v for k, v in curated.items() if v is not None}
+                return json.dumps(curated, indent=2)
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return f"Error creating run workout: {str(e)}"
 
     @app.tool()
     async def create_z2_walk_workout(

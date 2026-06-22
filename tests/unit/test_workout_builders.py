@@ -5,6 +5,7 @@ from garmin_mcp.workout_builders import (
     build_walk_run_json,
     build_z2_walk_json,
     build_strength_json,
+    build_run_json,
 )
 
 SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "captured")
@@ -44,6 +45,28 @@ def test_build_z2_walk_json_structure():
     assert len(steps) == 3
     assert steps[1]["zoneNumber"] == 2
     assert steps[1]["endConditionValue"] == 1800.0
+
+
+def test_build_run_json_structure():
+    result = build_run_json(
+        name="Step 8 - 30min continuous",
+        run_seconds=1800,
+        warmup_min=5,
+        cooldown_min=5,
+        hr_zone="Z3",
+    )
+    assert result["workoutName"] == "Step 8 - 30min continuous"
+    assert result["sportType"]["sportTypeKey"] == "running"
+    assert result["sportType"]["sportTypeId"] == 1
+    steps = result["workoutSegments"][0]["workoutSteps"]
+    assert len(steps) == 3
+    assert steps[0]["stepType"]["stepTypeKey"] == "warmup"
+    assert steps[0]["endConditionValue"] == 300.0
+    assert steps[1]["stepType"]["stepTypeKey"] == "interval"
+    assert steps[1]["endConditionValue"] == 1800.0
+    assert steps[1]["zoneNumber"] == 3
+    assert steps[2]["stepType"]["stepTypeKey"] == "cooldown"
+    assert steps[2]["endConditionValue"] == 300.0
 
 
 def test_build_strength_json_structure():
