@@ -76,6 +76,36 @@ def get_credentials() -> tuple[str, str]:
     return email, password
 
 
+def _verify_saved_tokens(token_path: str, is_cn: bool = False) -> tuple[bool, str]:
+    """Independently confirm the freshly saved tokens actually authenticate.
+
+    Performs a clean token-based login (which loads the social profile and
+    raises on an unauthenticated session — unlike the ``return_on_mfa`` login
+    used to obtain the tokens, which skips that check). This is what turns a
+    silent "logged in as None" into a real failure.
+
+    Returns:
+        (True, full_name) on success, or (False, error_summary) on failure.
+    """
+    import io
+
+    print("\nVerifying tokens...")
+
+    old_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    try:
+        garmin = Garmin(is_cn=is_cn)
+        garmin.login(token_path)
+        name = garmin.get_full_name()
+        if not name:
+            return False, "session is not authenticated (no profile returned)"
+        return True, name
+    except Exception as e:
+        return False, str(e).split(":")[0].strip() or e.__class__.__name__
+    finally:
+        sys.stderr = old_stderr
+
+
 def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = False, is_cn: bool = False) -> bool:
     """Authenticate with Garmin Connect and save tokens.
 
@@ -146,17 +176,20 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
             token_file.write(token_base64)
         print(f"✓ OAuth tokens (base64) saved to: {expanded_base64_path}")
 
-        # Verify tokens work
-        print("\nVerifying tokens...")
-        try:
-            # Try to get user's full name as a simple verification
-            full_name = garmin.get_full_name()
-            print(f"✓ Authentication successful!")
-            print(f"  Logged in as: {full_name}")
-        except Exception:
-            # Fallback: just confirm tokens were saved
-            print(f"✓ Authentication successful!")
-            print(f"  OAuth tokens saved and ready to use.")
+        # Verify tokens work with an independent token-based login. The login
+        # above runs with return_on_mfa=True, which skips profile loading, so a
+        # rate-limited run can "succeed" with an unauthenticated session. Check
+        # rather than trust the dump, so a bad login fails loudly instead of
+        # printing "Logged in as: None" and exiting 0.
+        is_valid, name_or_err = _verify_saved_tokens(token_path, is_cn)
+        if not is_valid:
+            print(f"\n✗ Authentication failed: saved tokens do not authenticate", file=sys.stderr)
+            print(f"  {name_or_err}", file=sys.stderr)
+            print("  Garmin may be rate-limiting your IP — wait a few minutes and retry.", file=sys.stderr)
+            return False
+
+        print(f"✓ Authentication successful!")
+        print(f"  Logged in as: {name_or_err}")
 
         print("\n" + "=" * 60)
         print("SUCCESS: You can now use the Garmin MCP server!")
