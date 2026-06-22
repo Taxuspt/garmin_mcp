@@ -392,6 +392,25 @@ Your Garmin Connect credentials are read from environment variables:
 
 File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
 
+### Transport
+
+By default the server communicates over **stdio**, which is what Claude Desktop, the MCP Inspector, and most local clients expect. To serve over **HTTP** instead (e.g. when running in a container or Kubernetes), set the transport via environment variables:
+
+- `GARMIN_MCP_TRANSPORT`: `stdio` (default), `streamable-http`, or `sse`
+- `GARMIN_MCP_HOST`: bind address for HTTP transports (default `0.0.0.0`)
+- `GARMIN_MCP_PORT`: bind port for HTTP transports (default `8000`)
+
+```bash
+GARMIN_MCP_TRANSPORT=streamable-http garmin-mcp
+```
+
+When an HTTP transport is selected:
+
+- MCP clients connect to the **`/mcp`** path (e.g. `http://localhost:8000/mcp`).
+- A plain **`GET /healthz`** endpoint is exposed for liveness/readiness probes.
+
+The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
+
 ### Garmin Connect China (garmin.cn)
 
 If you use Garmin Connect China (garmin.cn) instead of the international version, set the `GARMIN_IS_CN` environment variable to `true`:

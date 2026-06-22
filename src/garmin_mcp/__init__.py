@@ -103,6 +103,24 @@ enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
 disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
 
 
+# --- Transport configuration ------------------------------------------------
+# By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
+# Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP, e.g.
+# when running in Kubernetes behind a reverse proxy that handles auth.
+#   GARMIN_MCP_TRANSPORT - stdio (default) | streamable-http | sse
+#   GARMIN_MCP_HOST      - bind address for HTTP transports (default 0.0.0.0)
+#   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
+_VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
+transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
+if transport not in _VALID_TRANSPORTS:
+    raise ValueError(
+        f"Invalid GARMIN_MCP_TRANSPORT {transport!r}; "
+        f"expected one of {', '.join(_VALID_TRANSPORTS)}"
+    )
+http_host = os.getenv("GARMIN_MCP_HOST", "0.0.0.0")
+http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
+
+
 class _ToolFilter:
     """Wraps a FastMCP app to conditionally register tools by function name.
 
@@ -303,8 +321,10 @@ def main():
     courses.configure(garmin_client)
     activity_analysis.configure(garmin_client)
 
-    # Create the MCP app, wrapped so the env-var filter can drop tools
-    app = _ToolFilter(FastMCP("Garmin Connect v1.0"), enabled_tools, disabled_tools)
+    # Create the MCP app, wrapped so the env-var filter can drop tools.
+    # host/port only matter for the HTTP transports; stdio ignores them.
+    fastmcp = FastMCP("Garmin Connect v1.0", host=http_host, port=http_port)
+    app = _ToolFilter(fastmcp, enabled_tools, disabled_tools)
     if enabled_tools:
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
     elif disabled_tools:
@@ -338,8 +358,23 @@ def main():
             file=sys.stderr,
         )
 
+    # When serving over HTTP, expose a plain health endpoint for k8s probes.
+    # The MCP endpoint itself requires a handshake and isn't probe-friendly.
+    if transport != "stdio":
+        from starlette.requests import Request
+        from starlette.responses import PlainTextResponse
+
+        @fastmcp.custom_route("/healthz", methods=["GET"])
+        async def healthz(_request: "Request") -> "PlainTextResponse":
+            return PlainTextResponse("ok")
+
+        print(
+            f"Serving MCP over {transport} on {http_host}:{http_port}",
+            file=sys.stderr,
+        )
+
     # Run the MCP server
-    app.run()
+    app.run(transport=transport)
 
 
 if __name__ == "__main__":
