@@ -270,15 +270,35 @@ MOCK_FLOORS = {
 }
 
 MOCK_TRAINING_STATUS = {
-    "trainingStatusKey": "PRODUCTIVE",
-    "load7Day": 250,
-    "load4Week": 1000,
-    "trainingEffectLabel": "MAINTAINING",
-    "vo2MaxValue": 52.5,
-    "vo2MaxPrecisionIndex": 1.0,
-    "fitnessAge": 25,
-    "lactateThresholdHeartRate": 165,
-    "lactateThresholdSpeed": 3.5
+    "mostRecentTrainingStatus": {
+        "latestTrainingStatusData": {
+            "device-123456": {
+                "calendarDate": "2024-01-15",
+                "trainingStatus": "PRODUCTIVE",
+                "trainingStatusFeedbackPhrase": "MAINTAINING",
+                "sport": "RUNNING",
+                "fitnessTrend": "INCREASING",
+                "acuteTrainingLoadDTO": {
+                    "dailyTrainingLoadAcute": 250,
+                    "dailyTrainingLoadChronic": 220,
+                    "dailyAcuteChronicWorkloadRatio": 1.14,
+                    "acwrStatus": "OPTIMAL",
+                    "acwrPercent": 75,
+                },
+            }
+        }
+    },
+    "mostRecentVO2Max": {
+        "generic": {
+            "vo2MaxValue": 52.5,
+            "vo2MaxPreciseValue": 52.47,
+        },
+        "cycling": {
+            "vo2MaxValue": 55.0,
+            "vo2MaxPreciseValue": 55.12,
+        },
+    },
+    "mostRecentTrainingLoadBalance": {},
 }
 
 MOCK_RHR_DAY = {
