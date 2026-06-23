@@ -38,12 +38,21 @@ END_CONDITION_TYPE_KEYS = {
 # target type IDs are allowed so we do not block valid Garmin targets that are
 # not in this partial mapping yet.
 KNOWN_TARGET_TYPE_IDS = {
-    1: "no.target",
-    4: "heart.rate.zone",
-    6: "pace.zone",
+    1: frozenset(["no.target"]),
+    2: frozenset(["power.zone"]),
+    4: frozenset(["heart.rate.zone"]),
+    # ID 6 is sport-context-dependent:
+    #   - running / swimming: "pace.zone"
+    #   - cycling: "power.between" (absolute watt range, uses targetValueOne/targetValueTwo)
+    6: frozenset(["pace.zone", "power.between"]),
 }
 
-KNOWN_TARGET_TYPE_KEYS = {key: target_id for target_id, key in KNOWN_TARGET_TYPE_IDS.items()}
+# Reverse map: workoutTargetTypeKey -> workoutTargetTypeId (each key maps to exactly one ID).
+KNOWN_TARGET_TYPE_KEYS = {
+    key: target_id
+    for target_id, keys in KNOWN_TARGET_TYPE_IDS.items()
+    for key in keys
+}
 
 def configure(client):
     """Configure the module with the Garmin client instance"""
@@ -173,12 +182,20 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
             except (TypeError, ValueError):
                 raise ValueError(f"{path}.{target_field}.workoutTargetTypeId must be numeric")
 
-        expected_key = KNOWN_TARGET_TYPE_IDS.get(target_id)
-        if expected_key is not None and target_key is not None and target_key != expected_key:
-            raise ValueError(
-                f"{path}.{target_field} mismatch: workoutTargetTypeId {target_id} is "
-                f"{expected_key!r}, not {target_key!r}"
-            )
+        valid_keys = KNOWN_TARGET_TYPE_IDS.get(target_id)
+        if valid_keys is not None and target_key is not None and target_key not in valid_keys:
+            if len(valid_keys) == 1:
+                (only_key,) = valid_keys
+                raise ValueError(
+                    f"{path}.{target_field} mismatch: workoutTargetTypeId {target_id} is "
+                    f"{only_key!r}, not {target_key!r}"
+                )
+            else:
+                valid_list = ", ".join(sorted(repr(k) for k in valid_keys))
+                raise ValueError(
+                    f"{path}.{target_field} mismatch: workoutTargetTypeId {target_id} is "
+                    f"one of ({valid_list}), not {target_key!r}"
+                )
 
         expected_id = KNOWN_TARGET_TYPE_KEYS.get(target_key)
         if expected_id is not None and target_id is not None and target_id != expected_id:
@@ -594,10 +611,22 @@ def register_tools(app):
         (e.g. 105, 143) are not affected.
 
         IMPORTANT: Target type IDs and keys must match Garmin's canonical mapping.
-        Garmin treats workoutTargetTypeId as authoritative, so mismatches such as
-        {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "heart.rate"} are rejected
-        before upload because Garmin would interpret them as "pace.zone". Use
-        {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"} with
+        Garmin treats workoutTargetTypeId as authoritative, so mismatches are rejected
+        before upload.  Known mappings:
+        - workoutTargetTypeId 1  -> "no.target"
+        - workoutTargetTypeId 2  -> "power.zone"  (cycling power zone 1-7, use zoneNumber)
+        - workoutTargetTypeId 4  -> "heart.rate.zone"
+        - workoutTargetTypeId 6  -> "pace.zone" (running/swim) OR "power.between" (cycling)
+
+        IMPORTANT: For cycling power targets use the correct target type:
+        - Power zone (zone 1-7 based on FTP %): use workoutTargetTypeId 2, key "power.zone",
+          and "zoneNumber" (1-7).
+        - Absolute watt range (e.g. 200-250 W): use workoutTargetTypeId 6, key "power.between",
+          and "targetValueOne" (low watts) / "targetValueTwo" (high watts).
+        Using workoutTargetTypeId 2 with key "power.between" is a silent Garmin bug: the
+        workout uploads but Garmin stores it as "power.zone" and the intent is lost.
+
+        Use {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"} with
         targetValueOne/targetValueTwo for custom heart-rate ranges.
 
         IMPORTANT: Sport type IDs for workouts (different from activity API!):
@@ -709,6 +738,9 @@ def register_tools(app):
         IMPORTANT: For named heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
         For custom heart-rate ranges, use targetType {"workoutTargetTypeId": 4,
         "workoutTargetTypeKey": "heart.rate.zone"} with targetValueOne/targetValueTwo.
+        For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
+        For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
+        with targetValueOne (low watts) and targetValueTwo (high watts).
         Target type IDs and keys must match Garmin's canonical mapping.
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
