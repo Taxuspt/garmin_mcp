@@ -14,11 +14,14 @@ dependencies = [
     "requests==2.33.0",
     "mcp>=1.23.0",
     "fitparse>=1.2.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.scripts]
 garmin-mcp = "garmin_mcp:main"
 garmin-mcp-auth = "garmin_mcp.auth_cli:main"
+garmin-mcp-http = "garmin_mcp.http_server:main"
 
 [tool.uv]
 dev-dependencies = [
