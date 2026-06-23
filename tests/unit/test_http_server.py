@@ -1,9 +1,15 @@
+import json
 import time
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 
-from garmin_mcp.http_server import AccessTokenRecord, _pkce_challenge, create_app
+from garmin_mcp.http_server import (
+    AccessTokenRecord,
+    _pkce_challenge,
+    _pop_newline_delimited_messages,
+    create_app,
+)
 
 
 class FakeSession:
@@ -68,6 +74,10 @@ def test_oauth_metadata_endpoints():
             "resource": "https://garmin-mcp.example.com",
             "authorization_servers": ["https://garmin-mcp.example.com"],
         }
+
+        protected_sse = client.get("/.well-known/oauth-protected-resource/sse")
+        assert protected_sse.status_code == 200
+        assert protected_sse.json() == protected.json()
 
         metadata = client.get("/.well-known/oauth-authorization-server")
         assert metadata.status_code == 200
@@ -174,3 +184,18 @@ def test_initialize_creates_stdio_session():
         assert created_sessions[session_id].sent_messages == [
             {"jsonrpc": "2.0", "method": "notifications/initialized"}
         ]
+
+
+def test_pop_newline_delimited_messages_handles_large_frames():
+    payload = {"jsonrpc": "2.0", "id": 1, "result": {"tools": ["x" * 70000]}}
+    encoded = (
+        b'{"jsonrpc":"2.0","method":"ping"}\n'
+        + json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
+    buffer = bytearray(encoded)
+
+    messages = _pop_newline_delimited_messages(buffer)
+
+    assert buffer == bytearray()
+    assert messages == [{"jsonrpc": "2.0", "method": "ping"}, payload]

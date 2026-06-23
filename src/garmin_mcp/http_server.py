@@ -142,6 +142,27 @@ def _format_sse(data: dict[str, Any] | str | None, *, event_id: int | None = Non
     return "\n".join(lines) + "\n\n"
 
 
+def _pop_newline_delimited_messages(buffer: bytearray) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+
+    while True:
+        newline_index = buffer.find(b"\n")
+        if newline_index < 0:
+            break
+
+        raw_line = bytes(buffer[:newline_index]).rstrip(b"\r")
+        del buffer[: newline_index + 1]
+
+        if not raw_line:
+            continue
+
+        message = json.loads(raw_line.decode("utf-8"))
+        if isinstance(message, dict):
+            messages.append(message)
+
+    return messages
+
+
 def _parse_basic_auth(header_value: str | None) -> tuple[str, str] | None:
     if not header_value:
         return None
@@ -286,27 +307,28 @@ class StdioMcpSession:
         assert self.process.stdout is not None
 
         error: Exception | None = None
+        buffer = bytearray()
         try:
             while True:
-                line = await self.process.stdout.readline()
-                if not line:
+                chunk = await self.process.stdout.read(65536)
+                if not chunk:
                     break
 
-                raw = line.decode("utf-8").strip()
-                if not raw:
-                    continue
+                buffer.extend(chunk)
+                for message in _pop_newline_delimited_messages(buffer):
+                    delivered = False
+                    if "id" in message:
+                        request_id = _json_rpc_id_key(message["id"])
+                        future = self._pending.get(request_id)
+                        if future and not future.done():
+                            future.set_result(message)
+                            delivered = True
 
-                message = json.loads(raw)
-                delivered = False
-                if isinstance(message, dict) and "id" in message:
-                    request_id = _json_rpc_id_key(message["id"])
-                    future = self._pending.get(request_id)
-                    if future and not future.done():
-                        future.set_result(message)
-                        delivered = True
+                    if not delivered:
+                        await self._broadcast(message)
 
-                if not delivered and isinstance(message, dict):
-                    await self._broadcast(message)
+            if buffer.strip():
+                raise RuntimeError("MCP subprocess emitted an unterminated stdout frame")
         except Exception as exc:  # pragma: no cover - defensive path
             error = exc
         finally:
@@ -489,6 +511,13 @@ def create_app(
 
     @app.get("/.well-known/oauth-protected-resource")
     async def oauth_protected_resource() -> dict[str, Any]:
+        return {
+            "resource": bridge.base_url,
+            "authorization_servers": [bridge.base_url],
+        }
+
+    @app.get("/.well-known/oauth-protected-resource/sse")
+    async def oauth_protected_resource_sse() -> dict[str, Any]:
         return {
             "resource": bridge.base_url,
             "authorization_servers": [bridge.base_url],
