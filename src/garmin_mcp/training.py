@@ -506,6 +506,7 @@ def register_tools(app):
 
             # VO2 Max data
             vo2_data = status.get("mostRecentVO2Max", {}).get("generic", {})
+            cycling_vo2_data = status.get("mostRecentVO2Max", {}).get("cycling", {})
 
             # Training load balance
             load_balance = status.get("mostRecentTrainingLoadBalance", {})
@@ -536,6 +537,8 @@ def register_tools(app):
                 # VO2 Max
                 "vo2_max": vo2_data.get("vo2MaxValue"),
                 "vo2_max_precise": vo2_data.get("vo2MaxPreciseValue"),
+                "cycling_vo2_max": cycling_vo2_data.get("vo2MaxValue"),
+                "cycling_vo2_max_precise": cycling_vo2_data.get("vo2MaxPreciseValue"),
                 # Monthly training load
                 "monthly_load_aerobic_low": load_data.get("monthlyLoadAerobicLow"),
                 "monthly_load_aerobic_high": load_data.get("monthlyLoadAerobicHigh"),

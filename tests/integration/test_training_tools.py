@@ -350,3 +350,51 @@ async def test_get_training_effect_exception(app_with_training, mock_garmin_clie
 
     # Verify error is handled gracefully
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_includes_cycling_vo2_max(app_with_training, mock_garmin_client):
+    """Test that cycling VO2 max fields are surfaced when present in API response."""
+    mock_garmin_client.get_training_status.return_value = MOCK_TRAINING_STATUS
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2024-01-15"},
+    )
+
+    assert result is not None
+    import json
+    text = result[0][0].text if result and result[0] else str(result)
+    try:
+        data = json.loads(text)
+        assert data.get("cycling_vo2_max") == 55.0
+        assert data.get("cycling_vo2_max_precise") == 55.12
+    except (json.JSONDecodeError, AttributeError):
+        # Tool may return raw text; just check the values appear in output
+        assert "55.0" in text or "55.12" in text
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_no_cycling_vo2_when_absent(app_with_training, mock_garmin_client):
+    """Test that cycling VO2 fields are omitted when the cycling subkey is missing."""
+    status_without_cycling = {
+        "mostRecentVO2Max": {
+            "generic": {"vo2MaxValue": 52.5, "vo2MaxPreciseValue": 52.47},
+        },
+    }
+    mock_garmin_client.get_training_status.return_value = status_without_cycling
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2024-01-15"},
+    )
+
+    assert result is not None
+    import json
+    text = result[0][0].text if result and result[0] else str(result)
+    try:
+        data = json.loads(text)
+        assert "cycling_vo2_max" not in data
+        assert "cycling_vo2_max_precise" not in data
+    except (json.JSONDecodeError, AttributeError):
+        assert "cycling_vo2_max" not in text

@@ -336,6 +336,13 @@ def init_api(email, password):
 def main():
     """Initialize the MCP server and register all tools"""
 
+    # On Windows, stdout runs in text mode and translates \n to \r\n, which
+    # breaks the MCP stdio framing that Claude Desktop and other clients expect.
+    # Force binary-transparent newlines so JSON messages arrive intact.
+    if sys.platform == "win32":
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
+
     # --- Transport configuration --------------------------------------------
     # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
     # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.
