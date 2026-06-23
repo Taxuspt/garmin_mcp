@@ -396,7 +396,7 @@ def register_tools(app):
         """
         try:
             url = f"/nutrition-service/customFood/{food_id}"
-            resp = garmin_client.client.delete("connectapi", url, api=True)
+            garmin_client.client.delete("connectapi", url, api=True)
             return json.dumps(
                 {"status": "success", "food_id": food_id,
                  "message": f"Custom food {food_id} deleted successfully."},
