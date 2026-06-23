@@ -1,5 +1,7 @@
+import base64
 import json
 import time
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
@@ -7,6 +9,7 @@ from fastapi.testclient import TestClient
 from garmin_mcp.http_server import (
     AccessTokenRecord,
     _pkce_challenge,
+    _ensure_bootstrap_tokens,
     _pop_newline_delimited_messages,
     create_app,
 )
@@ -199,3 +202,18 @@ def test_pop_newline_delimited_messages_handles_large_frames():
 
     assert buffer == bytearray()
     assert messages == [{"jsonrpc": "2.0", "method": "ping"}, payload]
+
+
+def test_ensure_bootstrap_tokens_writes_token_store(tmp_path):
+    token_json = json.dumps({"oauth1": {"token": "a"}, "oauth2": {"access_token": "b"}})
+    env = {
+        "GARMINTOKENS": str(tmp_path / "tokens"),
+        "GARMIN_TOKENS_JSON_BASE64": base64.b64encode(
+            token_json.encode("utf-8")
+        ).decode("ascii"),
+    }
+
+    written = _ensure_bootstrap_tokens(env)
+
+    assert written == Path(env["GARMINTOKENS"]) / "garmin_tokens.json"
+    assert written.read_text(encoding="utf-8") == token_json

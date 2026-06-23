@@ -28,6 +28,7 @@ ACCESS_TOKEN_TTL_SECONDS = 3600
 SUPPORTED_TOKEN_AUTH_METHODS = {"none", "client_secret_post", "client_secret_basic"}
 SUPPORTED_CODE_CHALLENGE_METHODS = {"S256"}
 SESSION_HEADER = "MCP-Session-Id"
+TOKEN_JSON_SECRET_ENV = "GARMIN_TOKENS_JSON_BASE64"
 
 
 @dataclass
@@ -101,6 +102,42 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
             parts.fragment,
         )
     )
+
+
+def _ensure_bootstrap_tokens(env: dict[str, str] | None = None) -> Path | None:
+    resolved_env = env or os.environ
+    encoded = resolved_env.get(TOKEN_JSON_SECRET_ENV)
+    if not encoded:
+        return None
+
+    token_dir = Path(os.path.expanduser(resolved_env.get("GARMINTOKENS") or "~/.garminconnect"))
+    token_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        token_json = base64.b64decode(encoded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            f"{TOKEN_JSON_SECRET_ENV} must contain base64-encoded garmin_tokens.json content"
+        ) from exc
+
+    try:
+        json.loads(token_json)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"{TOKEN_JSON_SECRET_ENV} does not decode to valid JSON"
+        ) from exc
+
+    token_json_path = token_dir / "garmin_tokens.json"
+    current = token_json_path.read_text(encoding="utf-8") if token_json_path.exists() else None
+    if current != token_json:
+        token_json_path.write_text(token_json, encoding="utf-8")
+
+    with contextlib.suppress(PermissionError, OSError):
+        os.chmod(token_dir, 0o700)
+    with contextlib.suppress(PermissionError, OSError):
+        os.chmod(token_json_path, 0o600)
+
+    return token_json_path
 
 
 def _oauth_error_response(
@@ -223,6 +260,7 @@ class StdioMcpSession:
         env["GARMIN_MCP_TRANSPORT"] = "stdio"
         env.pop("GARMIN_MCP_HOST", None)
         env.pop("GARMIN_MCP_PORT", None)
+        _ensure_bootstrap_tokens(env)
 
         repo_root = Path(__file__).resolve().parents[2]
         src_root = repo_root / "src"
@@ -842,6 +880,12 @@ def create_app(
 def main() -> None:
     port = int(os.getenv("PORT", "3000"))
     base_url = os.getenv("BASE_URL", f"http://127.0.0.1:{port}")
+    bootstrapped_token_path = _ensure_bootstrap_tokens()
+    if bootstrapped_token_path is not None:
+        print(
+            f"Bootstrapped Garmin token store from {TOKEN_JSON_SECRET_ENV} into {bootstrapped_token_path}",
+            file=sys.stderr,
+        )
     app = create_app(base_url=base_url)
     uvicorn.run(app, host="0.0.0.0", port=port)
 
