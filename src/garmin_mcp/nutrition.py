@@ -207,9 +207,9 @@ def register_tools(app):
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
-            if resp.status_code == 204:
+            if not resp:
                 return "Custom food created (no response data returned)."
-            return json.dumps(resp.json(), indent=2)
+            return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
             body = ""
             if hasattr(e, "error") and hasattr(e.error, "response"):
@@ -295,9 +295,9 @@ def register_tools(app):
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
-            if resp.status_code == 204:
+            if not resp:
                 return "Custom food updated (no response data returned)."
-            return json.dumps(resp.json(), indent=2)
+            return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
             body = ""
             if hasattr(e, "error") and hasattr(e.error, "response"):
@@ -378,9 +378,9 @@ def register_tools(app):
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
-            if resp.status_code == 204:
+            if not resp:
                 return "Food logged successfully."
-            return json.dumps(resp.json(), indent=2)
+            return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
             body = ""
             if hasattr(e, "error") and hasattr(e.error, "response"):
@@ -461,9 +461,9 @@ def register_tools(app):
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
-            if resp.status_code == 204:
+            if not resp:
                 return "Food logged successfully."
-            return json.dumps(resp.json(), indent=2)
+            return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
             body = ""
             if hasattr(e, "error") and hasattr(e.error, "response"):
@@ -473,22 +473,22 @@ def register_tools(app):
             return f"Error logging food: {str(e)}"
 
     @app.tool()
-    async def delete_food_log(log_id: int) -> str:
+    async def delete_food_log(log_id: str, meal_date: str) -> str:
         """Delete a food log entry
 
         Permanently removes a logged food item from the nutrition log.
-        Use get_nutrition_daily_food_log to find the logId of the entry
-        to delete.
+        Works for both QUICK_ADD and REGULAR_LOG entry types.
+        Use get_nutrition_daily_food_log to find the logId and date.
 
         Args:
-            log_id: Log entry ID to delete (from get_nutrition_daily_food_log)
+            log_id: Log entry ID to delete — a 32-char hex UUID
+                (from get_nutrition_daily_food_log)
+            meal_date: Date of the log entry in YYYY-MM-DD format
         """
         try:
-            url = f"/nutrition-service/food/logs/{log_id}"
-            resp = garmin_client.client.delete("connectapi", url, api=True)
-            if resp.status_code in (200, 204):
-                return json.dumps({"status": "success", "log_id": log_id, "message": f"Food log entry {log_id} deleted successfully."}, indent=2)
-            return json.dumps({"status": "failed", "log_id": log_id, "http_status": resp.status_code, "message": f"Failed to delete food log: HTTP {resp.status_code}"}, indent=2)
+            url = f"/nutrition-service/food/logs/{meal_date}"
+            garmin_client.client.delete("connectapi", url, json={"logIds": [log_id]}, api=True)
+            return json.dumps({"status": "success", "log_id": log_id, "message": f"Food log entry {log_id} deleted successfully."}, indent=2)
         except GarminConnectConnectionError as e:
             body = ""
             if hasattr(e, "error") and hasattr(e.error, "response"):
@@ -578,13 +578,11 @@ def register_tools(app):
                 create_resp = garmin_client.client.put(
                     "connectapi", "/nutrition-service/customFood", json=create_payload, api=True
                 )
-                if create_resp.status_code not in (200, 201, 204):
-                    return f"Error creating custom food: HTTP {create_resp.status_code}"
-                if create_resp.status_code in (200, 201):
-                    created = create_resp.json()
-                    meta = created.get("foodMetaData", created)
+                # api=True means create_resp is already a parsed dict; errors raise GarminConnectConnectionError.
+                if create_resp:  # non-empty: response body contains foodId/servingId
+                    meta = create_resp.get("foodMetaData", create_resp)
                     food_id = str(meta.get("foodId", ""))
-                    contents = created.get("nutritionContents", [])
+                    contents = create_resp.get("nutritionContents", [])
                     if contents:
                         serving_id = str(contents[0].get("servingId", ""))
                 # 204: no body — look up by name
@@ -647,9 +645,9 @@ def register_tools(app):
             log_resp = garmin_client.client.put(
                 "connectapi", "/nutrition-service/food/logs", json=log_payload, api=True
             )
-            if log_resp.status_code == 204:
+            if not log_resp:
                 return "Food logged successfully."
-            return json.dumps(log_resp.json(), indent=2)
+            return json.dumps(log_resp, indent=2)
         except GarminConnectConnectionError as e:
             body = ""
             if hasattr(e, "error") and hasattr(e.error, "response"):
