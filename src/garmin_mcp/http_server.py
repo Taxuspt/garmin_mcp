@@ -29,6 +29,8 @@ SUPPORTED_TOKEN_AUTH_METHODS = {"none", "client_secret_post", "client_secret_bas
 SUPPORTED_CODE_CHALLENGE_METHODS = {"S256"}
 SESSION_HEADER = "MCP-Session-Id"
 TOKEN_JSON_SECRET_ENV = "GARMIN_TOKENS_JSON_BASE64"
+TOKEN_JSON_RAW_ENV = "GARMIN_TOKENS_JSON"
+LEGACY_TOKENSTORE_BASE64_ENV = "GARMINTOKENS_BASE64"
 
 
 @dataclass
@@ -104,21 +106,52 @@ def _append_query_params(url: str, params: dict[str, str]) -> str:
     )
 
 
-def _ensure_bootstrap_tokens(env: dict[str, str] | None = None) -> Path | None:
-    resolved_env = env or os.environ
+def _extract_token_json_from_env(resolved_env: dict[str, str]) -> tuple[str | None, str | None]:
+    raw_json = resolved_env.get(TOKEN_JSON_RAW_ENV)
+    if raw_json:
+        return raw_json, TOKEN_JSON_RAW_ENV
+
     encoded = resolved_env.get(TOKEN_JSON_SECRET_ENV)
-    if not encoded:
-        return None
+    if encoded:
+        try:
+            return base64.b64decode(encoded).decode("utf-8"), TOKEN_JSON_SECRET_ENV
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError(
+                f"{TOKEN_JSON_SECRET_ENV} must contain base64-encoded garmin_tokens.json content"
+            ) from exc
+
+    legacy_value = resolved_env.get(LEGACY_TOKENSTORE_BASE64_ENV)
+    if not legacy_value:
+        return None, None
+
+    legacy_path = Path(os.path.expanduser(legacy_value))
+    if legacy_path.exists():
+        try:
+            return (
+                base64.b64decode(legacy_path.read_text(encoding="utf-8")).decode("utf-8"),
+                f"{LEGACY_TOKENSTORE_BASE64_ENV} file",
+            )
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise RuntimeError(
+                f"{LEGACY_TOKENSTORE_BASE64_ENV} file must contain base64-encoded garmin_tokens.json content"
+            ) from exc
+
+    try:
+        return base64.b64decode(legacy_value).decode("utf-8"), LEGACY_TOKENSTORE_BASE64_ENV
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            f"{LEGACY_TOKENSTORE_BASE64_ENV} must be either an existing file path or base64-encoded garmin_tokens.json content"
+        ) from exc
+
+
+def _ensure_bootstrap_tokens(env: dict[str, str] | None = None) -> tuple[Path | None, str | None]:
+    resolved_env = env or os.environ
+    token_json, source = _extract_token_json_from_env(resolved_env)
+    if not token_json:
+        return None, None
 
     token_dir = Path(os.path.expanduser(resolved_env.get("GARMINTOKENS") or "~/.garminconnect"))
     token_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        token_json = base64.b64decode(encoded).decode("utf-8")
-    except (ValueError, UnicodeDecodeError) as exc:
-        raise RuntimeError(
-            f"{TOKEN_JSON_SECRET_ENV} must contain base64-encoded garmin_tokens.json content"
-        ) from exc
 
     try:
         json.loads(token_json)
@@ -137,7 +170,7 @@ def _ensure_bootstrap_tokens(env: dict[str, str] | None = None) -> Path | None:
     with contextlib.suppress(PermissionError, OSError):
         os.chmod(token_json_path, 0o600)
 
-    return token_json_path
+    return token_json_path, source
 
 
 def _oauth_error_response(
@@ -880,10 +913,15 @@ def create_app(
 def main() -> None:
     port = int(os.getenv("PORT", "3000"))
     base_url = os.getenv("BASE_URL", f"http://127.0.0.1:{port}")
-    bootstrapped_token_path = _ensure_bootstrap_tokens()
+    bootstrapped_token_path, token_source = _ensure_bootstrap_tokens()
     if bootstrapped_token_path is not None:
         print(
-            f"Bootstrapped Garmin token store from {TOKEN_JSON_SECRET_ENV} into {bootstrapped_token_path}",
+            f"Bootstrapped Garmin token store from {token_source} into {bootstrapped_token_path}",
+            file=sys.stderr,
+        )
+    elif os.getenv("GARMIN_EMAIL") or os.getenv("GARMIN_PASSWORD"):
+        print(
+            "No pre-generated Garmin token secret detected; runtime credential login remains enabled and may hit Garmin 429 limits.",
             file=sys.stderr,
         )
     app = create_app(base_url=base_url)

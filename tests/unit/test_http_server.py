@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from garmin_mcp.http_server import (
     AccessTokenRecord,
     _pkce_challenge,
+    _extract_token_json_from_env,
     _ensure_bootstrap_tokens,
     _pop_newline_delimited_messages,
     create_app,
@@ -213,7 +214,20 @@ def test_ensure_bootstrap_tokens_writes_token_store(tmp_path):
         ).decode("ascii"),
     }
 
-    written = _ensure_bootstrap_tokens(env)
+    written, source = _ensure_bootstrap_tokens(env)
 
     assert written == Path(env["GARMINTOKENS"]) / "garmin_tokens.json"
     assert written.read_text(encoding="utf-8") == token_json
+    assert source == "GARMIN_TOKENS_JSON_BASE64"
+
+
+def test_extract_token_json_from_legacy_env_value():
+    token_json = json.dumps({"oauth1": {"token": "a"}, "oauth2": {"access_token": "b"}})
+    env = {
+        "GARMINTOKENS_BASE64": base64.b64encode(token_json.encode("utf-8")).decode("ascii")
+    }
+
+    decoded, source = _extract_token_json_from_env(env)
+
+    assert decoded == token_json
+    assert source == "GARMINTOKENS_BASE64"
