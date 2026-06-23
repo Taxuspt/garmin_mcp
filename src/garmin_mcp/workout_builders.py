@@ -54,10 +54,13 @@ def build_run_json(
 ) -> dict:
     """Build the Garmin Connect JSON for a continuous run workout."""
     zone = _zone_number(hr_zone)
+    run_display = (
+        f"{run_seconds // 60}m" if run_seconds % 60 == 0 else f"{run_seconds}s"
+    )
     return {
         "workoutName": name,
         "description": (
-            f"{warmup_min}m warmup + {run_seconds}s run Z{zone} + {cooldown_min}m cooldown"
+            f"{warmup_min}m warmup + {run_display} run Z{zone} + {cooldown_min}m cooldown"
         ),
         "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
         "workoutSegments": [{
