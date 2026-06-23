@@ -87,6 +87,82 @@ def register_tools(app):
             return f"Error retrieving nutrition settings: {str(e)}"
 
     @app.tool()
+    async def search_foods(
+        query: str,
+        start: int = 0,
+        limit: int = 20,
+    ) -> str:
+        """Search Garmin's general food catalog (FatSecret + Garmin custom foods)
+
+        Searches across the entire food catalog including FatSecret-sourced
+        branded and generic foods, not just the user's Garmin custom foods.
+        Use this to find branded packaged foods by name before logging them.
+
+        Returns food_id, source, name, brand, and all available servings with
+        macros. The source field ("FATSECRET" or "GARMIN") and food_id together
+        identify the right routing for log_custom_food — pass both to
+        log_custom_food's food_id and source parameters respectively.
+
+        For the user's own custom foods only, use get_custom_foods instead.
+
+        Args:
+            query: Food name or brand to search for (e.g. "Cheerios", "Greek yogurt")
+            start: Starting index for pagination (default 0)
+            limit: Maximum number of results per page (default 20)
+        """
+        try:
+            url = (
+                f"/nutrition-service/food/search"
+                f"?searchExpression={quote(query)}"
+                f"&start={start}&limit={limit}"
+            )
+            data = garmin_client.connectapi(url)
+            if not data:
+                return "No foods found."
+
+            raw_results = data.get("results", []) if isinstance(data, dict) else []
+            has_more = bool(data.get("moreDataAvailable", False)) if isinstance(data, dict) else False
+
+            results = []
+            for item in raw_results:
+                meta = item.get("foodMetaData", {})
+                servings = []
+                for s in item.get("nutritionContents", []):
+                    serving: dict = {
+                        "serving_id": s.get("servingId"),
+                        "serving_unit": s.get("servingUnit"),
+                        "number_of_units": s.get("numberOfUnits"),
+                        "calories": s.get("calories"),
+                        "carbs_g": s.get("carbs"),
+                        "protein_g": s.get("protein"),
+                        "fat_g": s.get("fat"),
+                        "fiber_g": s.get("fiber"),
+                        "sodium_mg": s.get("sodium"),
+                    }
+                    servings.append({k: v for k, v in serving.items() if v is not None})
+
+                entry: dict = {
+                    "food_id": meta.get("foodId"),
+                    "name": meta.get("foodName"),
+                    "food_type": meta.get("foodType"),
+                    "source": meta.get("source"),
+                    "region": meta.get("regionCode"),
+                    "language": meta.get("languageCode"),
+                    "servings": servings,
+                }
+                if meta.get("brandName"):
+                    entry["brand"] = meta["brandName"]
+                results.append({k: v for k, v in entry.items() if v is not None})
+
+            return json.dumps({
+                "count": len(results),
+                "has_more": has_more,
+                "results": results,
+            }, indent=2)
+        except Exception as e:
+            return f"Error searching foods: {str(e)}"
+
+    @app.tool()
     async def get_custom_foods(
         search: str = "",
         start: int = 0,
@@ -97,6 +173,8 @@ def register_tools(app):
         Returns custom foods the user has created. Use the search parameter
         to find existing foods by name before creating duplicates — the
         response includes foodId and servingId needed for log_custom_food.
+
+        For branded catalog foods (FatSecret), use search_foods instead.
 
         Args:
             search: Search term to filter foods by name (default: list all)
@@ -417,24 +495,32 @@ def register_tools(app):
         food_id: str,
         serving_id: str,
         serving_qty: float = 1,
+        source: str = "GARMIN",
     ) -> str:
-        """Log a custom food item to a meal on a date
+        """Log a food item to a meal on a date
 
-        Adds a food entry from the user's custom food library to the nutrition
-        log. The meal is determined automatically by matching meal_time against
-        each meal's startTime/endTime window; falls back to SNACKS if no window
-        matches.
+        Adds a food entry to the nutrition log. The meal is determined
+        automatically by matching meal_time against each meal's
+        startTime/endTime window; falls back to SNACKS if no window matches.
 
-        Use get_custom_foods (with the search parameter) to find existing foods
-        and retrieve their foodId and servingId. Alternatively, create a new
-        food with create_custom_food first.
+        Food sources:
+          - "GARMIN" (default): user's custom food library. Use
+            get_custom_foods to find food_id and serving_id.
+          - "FATSECRET": branded/catalog food from FatSecret. Use
+            search_foods to find food_id and serving_id. Pass the source
+            value from the search_foods result (e.g. "FATSECRET").
+
+        Garmin custom food IDs are 32-char hex UUIDs; FatSecret IDs are
+        numeric strings (e.g. "4132350"). Passing the wrong source for a
+        given food_id returns a 400 from Garmin.
 
         Args:
             meal_date: Date in YYYY-MM-DD format
             meal_time: Time in HH:MM:SS format (e.g. "12:30:00", account timezone)
-            food_id: Food ID from get_custom_foods or create_custom_food
-            serving_id: Serving ID from get_custom_foods or create_custom_food
+            food_id: Food ID from get_custom_foods (GARMIN) or search_foods (FATSECRET)
+            serving_id: Serving ID from get_custom_foods or search_foods
             serving_qty: Number of servings (default 1)
+            source: Food namespace — "GARMIN" (default) or "FATSECRET"
         """
         try:
             from datetime import datetime, timezone
@@ -471,7 +557,7 @@ def register_tools(app):
                         "mealId": meal_id,
                         "foodId": food_id,
                         "servingId": serving_id,
-                        "source": "GARMIN",
+                        "source": source,
                         "regionCode": "US",
                         "languageCode": "en",
                         "servingQty": serving_qty,
