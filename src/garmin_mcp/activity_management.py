@@ -76,7 +76,9 @@ def register_tools(app):
                               filter for races with event_type == "race" rather
                               than excluding "training", since many non-race
                               activities appear as "uncategorized" not "training"
-          - field omitted   — activity pre-dates event type support in the API
+          - field absent    — API returned no eventType for this activity; not
+                              observed in practice in any activity back to 2012
+                              (oldest activities sampled on this account)
 
         Args:
             start_date: Start date in YYYY-MM-DD format
