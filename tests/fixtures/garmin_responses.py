@@ -38,8 +38,10 @@ MOCK_ACTIVITIES = [
 MOCK_ACTIVITY_DETAILS = {
     "activityId": 12345678901,
     "activityName": "Morning Run",
+    "description": "Felt strong throughout. New shoes.",
     "activityType": {"typeKey": "running", "typeId": 1},
-    "eventType": {"typeKey": "race", "typeId": 1},
+    "activityTypeDTO": {"typeKey": "running", "typeId": 1, "parentTypeId": 17},
+    "eventTypeDTO": {"typeKey": "race", "typeId": 1, "sortOrder": 5},
     "startTimeLocal": "2024-01-15 07:00:00",
     "distance": 5000.0,
     "duration": 1800.0,
