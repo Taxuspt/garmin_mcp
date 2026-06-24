@@ -1301,13 +1301,42 @@ def register_tools(app):
             file_path = os.path.join(download_dir, f"{activity_id}.{fmt}")
             with open(file_path, "wb") as f:
                 f.write(payload)
+            abs_path = os.path.abspath(file_path)
 
+            transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
+            if transport == "stdio":
+                return json.dumps({
+                    "activity_id": activity_id,
+                    "format": fmt,
+                    "file_path": abs_path,
+                    "size_bytes": len(payload),
+                    "message": "Activity file saved.",
+                }, indent=2)
+
+            base_url = os.getenv("GARMIN_MCP_PUBLIC_BASE_URL")
+            if not base_url:
+                return json.dumps({
+                    "activity_id": activity_id,
+                    "format": fmt,
+                    "file_path": abs_path,
+                    "size_bytes": len(payload),
+                    "message": (
+                        "File saved on the server, but GARMIN_MCP_PUBLIC_BASE_URL is "
+                        "not set, so no public download URL can be returned. Set it "
+                        "to this server's public HTTPS base URL (the address behind "
+                        "your reverse proxy) and call this tool again."
+                    ),
+                }, indent=2)
+
+            from garmin_mcp import file_serving
+            token = file_serving.issue_token(abs_path)
             return json.dumps({
                 "activity_id": activity_id,
                 "format": fmt,
-                "file_path": os.path.abspath(file_path),
+                "url": f"{base_url.rstrip('/')}/files/{token}",
+                "expires_in_seconds": file_serving.ttl_seconds(),
                 "size_bytes": len(payload),
-                "message": "Activity file saved.",
+                "message": "Activity file ready for download via the returned URL.",
             }, indent=2)
 
         except Exception as e:
