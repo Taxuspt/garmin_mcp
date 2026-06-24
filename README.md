@@ -648,6 +648,21 @@ docker run -it \
   garmin-mcp
 ```
 
+#### Using a Prebuilt Image (GHCR)
+
+Versioned, multi-arch images are published to the GitHub Container Registry on
+each release, so you can skip the local build:
+
+```bash
+docker run -it \
+  -e GARMIN_EMAIL="your_email@example.com" \
+  -e GARMIN_PASSWORD="your_password" \
+  -v garmin-tokens:/root/.garminconnect \
+  ghcr.io/taxuspt/garmin_mcp:latest
+```
+
+Pin a specific version (e.g. `ghcr.io/taxuspt/garmin_mcp:0.1.0`) for reproducible deployments.
+
 #### Using File-Based Secrets (More Secure)
 
 For enhanced security, especially in production environments, use file-based secrets instead of environment variables:
