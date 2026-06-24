@@ -430,6 +430,9 @@ def main():
         async def healthz(_request: "Request") -> "PlainTextResponse":
             return PlainTextResponse("ok")
 
+        from garmin_mcp import file_serving
+        file_serving.register_routes(fastmcp)
+
         print(
             f"Serving MCP over {transport} on {http_host}:{http_port}",
             file=sys.stderr,
