@@ -1488,6 +1488,69 @@ async def test_schedule_workouts_missing_fields(app_with_workouts, mock_garmin_c
 
 
 @pytest.mark.asyncio
+async def test_schedule_workouts_rejects_invalid_date(app_with_workouts, mock_garmin_client):
+    """A malformed calendar_date is rejected up front, without calling the API."""
+    import json as json_module
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {"schedules": [{"workout_id": 123456, "calendar_date": "not-a-date"}]}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["total"] == 1
+    assert result_data["succeeded"] == 0
+    assert result_data["failed"] == 1
+    assert result_data["results"][0]["status"] == "failed"
+    assert "YYYY-MM-DD" in result_data["results"][0]["message"]
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_schedule_workouts_invalid_date_skips_inline_upload(
+    app_with_workouts, mock_garmin_client
+):
+    """A bad date on an inline item is rejected before any upload is attempted."""
+    import json as json_module
+
+    inline_data = _running_workout_with_steps([_timed_interval_step(
+        {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"}
+    )])
+    result = await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {"schedules": [{"workout_data": inline_data, "calendar_date": "2024/02/01"}]}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["failed"] == 1
+    assert result_data["results"][0]["status"] == "failed"
+    assert "YYYY-MM-DD" in result_data["results"][0]["message"]
+    mock_garmin_client.upload_workout.assert_not_called()
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_schedule_workout_rejects_invalid_date(app_with_workouts, mock_garmin_client):
+    """The single-workout scheduler rejects a malformed date without an API call."""
+    import json as json_module
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workout",
+        {"workout_id": 123456, "calendar_date": "01-15-2024"}
+    )
+
+    assert result is not None
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert result_data["workout_id"] == 123456
+    assert "YYYY-MM-DD" in result_data["message"]
+    mock_garmin_client.client.post.assert_not_called()
+    mock_garmin_client.query_garmin_graphql.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_schedule_workouts_exception(app_with_workouts, mock_garmin_client):
     """Test schedule_workouts when an exception is raised"""
     import json as json_module
