@@ -389,6 +389,8 @@ Your Garmin Connect credentials are read from environment variables:
 - `GARMIN_IS_CN`: Set to `true` to use Garmin Connect China (garmin.cn) instead of the international version (default: `false`)
 - `GARMIN_FIT_DOWNLOAD_DIR`: Default directory for downloaded activity files. When set, skips the first-run setup prompt in `download_activity_file`.
 - `GARMIN_FIT_CONFIG`: Path to the persisted download-directory config file (default: `~/.garminconnect_fit_config.json`).
+- `GARMIN_MCP_PUBLIC_BASE_URL`: Public HTTPS base URL of this server (e.g. `https://garmin-mcp.example.com`), used only on HTTP transports. When set, `download_activity_file` returns a `/files/{token}` download URL instead of a container-local path. See [Transport](#transport) below.
+- `GARMIN_MCP_FILE_TOKEN_TTL_SECONDS`: How long a `/files/{token}` URL stays valid, in seconds (default: `900`, i.e. 15 minutes).
 
 File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
 
@@ -408,8 +410,9 @@ When an HTTP transport is selected:
 
 - MCP clients connect to the **`/mcp`** path (e.g. `http://localhost:8000/mcp`).
 - A plain **`GET /healthz`** endpoint is exposed for liveness/readiness probes.
+- A **`GET /files/{token}`** endpoint serves files downloaded by `download_activity_file`. Over stdio that tool just returns a local path, since the client is on the same machine; over HTTP the file is stuck inside the container, so the tool instead saves it and returns a `/files/{token}` URL (an LLM client can fetch this directly). This requires `GARMIN_MCP_PUBLIC_BASE_URL` to be set — without it the tool saves the file but tells you to configure the variable instead of returning a broken URL.
 
-The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
+The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost. `/files/{token}` is protected separately by the token itself: the token is a random, unguessable `secrets.token_urlsafe` value generated per download, valid for `GARMIN_MCP_FILE_TOKEN_TTL_SECONDS` (default 15 minutes). **When a token expires, the file it points to is deleted from disk**, not just the URL — this keeps the container from accumulating FIT files, but it also means files served this way are ephemeral even if `GARMIN_FIT_DOWNLOAD_DIR` points at a persistent volume.
 
 ### Garmin Connect China (garmin.cn)
 
