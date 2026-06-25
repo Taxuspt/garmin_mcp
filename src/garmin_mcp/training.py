@@ -492,9 +492,14 @@ def register_tools(app):
             if not status:
                 return f"No training status data found for {date}."
 
-            # Extract from nested structure
-            recent_status = status.get("mostRecentTrainingStatus", {})
-            latest_data = recent_status.get("latestTrainingStatusData", {})
+            # Extract from nested structure.
+            # NOTE: Garmin returns explicit `null` for sections the user has no data in
+            # (e.g. `mostRecentVO2Max.cycling` is null for users who never cycle).
+            # dict.get(key, default) only returns the default when key is MISSING — when
+            # the value is explicitly None, it returns None, breaking the next .get() in
+            # the chain. Use `or {}` to coalesce both cases.
+            recent_status = status.get("mostRecentTrainingStatus") or {}
+            latest_data = recent_status.get("latestTrainingStatusData") or {}
 
             # Get first device data (usually the primary device)
             device_data = {}
@@ -502,15 +507,16 @@ def register_tools(app):
                 device_data = data
                 break
 
-            acwr_data = device_data.get("acuteTrainingLoadDTO", {})
+            acwr_data = device_data.get("acuteTrainingLoadDTO") or {}
 
             # VO2 Max data
-            vo2_data = status.get("mostRecentVO2Max", {}).get("generic", {})
-            cycling_vo2_data = status.get("mostRecentVO2Max", {}).get("cycling", {})
+            most_recent_vo2 = status.get("mostRecentVO2Max") or {}
+            vo2_data = most_recent_vo2.get("generic") or {}
+            cycling_vo2_data = most_recent_vo2.get("cycling") or {}
 
             # Training load balance
-            load_balance = status.get("mostRecentTrainingLoadBalance", {})
-            load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap", {})
+            load_balance = status.get("mostRecentTrainingLoadBalance") or {}
+            load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap") or {}
             load_data = {}
             for device_id, data in load_map.items():
                 load_data = data
