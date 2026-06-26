@@ -734,12 +734,25 @@ def register_tools(app):
             try:
                 data = garmin_client.get_training_status(date_str)
                 if data:
-                    status_data = (
-                        data.get("mostRecentTrainingStatus", {})
-                        .get("latestTrainingStatusData", {})
-                    )
-                    atl_dto = status_data.get("acuteTrainingLoadDTO", {})
-                    vo2_data = data.get("mostRecentVO2Max", {}).get("generic", {})
+                    # latestTrainingStatusData is a dict keyed by device ID, not
+                    # the DTO directly. Pick the primary training device when
+                    # available, fall back to the first device. Use `or {}` to
+                    # coalesce explicit nulls (Garmin returns None for sections
+                    # the user has no data in, which breaks chained `.get`).
+                    recent_status = data.get("mostRecentTrainingStatus") or {}
+                    latest_data = recent_status.get("latestTrainingStatusData") or {}
+                    status_data: Dict[str, Any] = {}
+                    for dev_data in latest_data.values():
+                        if not isinstance(dev_data, dict):
+                            continue
+                        if dev_data.get("primaryTrainingDevice"):
+                            status_data = dev_data
+                            break
+                        if not status_data:
+                            status_data = dev_data
+                    atl_dto = status_data.get("acuteTrainingLoadDTO") or {}
+                    most_recent_vo2 = data.get("mostRecentVO2Max") or {}
+                    vo2_data = most_recent_vo2.get("generic") or {}
                     entry: Dict[str, Any] = {"date": date_str}
                     atl = atl_dto.get("dailyTrainingLoadAcute")
                     ctl = atl_dto.get("dailyTrainingLoadChronic")
@@ -755,10 +768,26 @@ def register_tools(app):
                     acwr_status = atl_dto.get("acwrStatus")
                     if acwr_status:
                         entry["acwr_status"] = acwr_status
-                    ts = status_data.get("trainingStatusDTO", {})
-                    ts_label = ts.get("trainingStatusCyclingFeedbackPhrase") or ts.get("trainingStatusFeedbackPhrase")
-                    if ts_label:
-                        entry["training_status"] = ts_label
+                    acwr_pct = atl_dto.get("acwrPercent")
+                    if acwr_pct is not None:
+                        entry["acwr_percent"] = acwr_pct
+                    chronic_min = atl_dto.get("minTrainingLoadChronic")
+                    if chronic_min is not None:
+                        entry["optimal_chronic_load_min"] = round(chronic_min, 1)
+                    chronic_max = atl_dto.get("maxTrainingLoadChronic")
+                    if chronic_max is not None:
+                        entry["optimal_chronic_load_max"] = round(chronic_max, 1)
+                    # Device data now has training status fields flattened — no
+                    # longer wrapped in a trainingStatusDTO sub-object.
+                    ts_phrase = status_data.get("trainingStatusFeedbackPhrase")
+                    if ts_phrase:
+                        entry["training_status"] = ts_phrase
+                    ts_code = status_data.get("trainingStatus")
+                    if ts_code is not None:
+                        entry["training_status_code"] = ts_code
+                    fitness_trend = status_data.get("fitnessTrend")
+                    if fitness_trend is not None:
+                        entry["fitness_trend"] = fitness_trend
                     vo2 = vo2_data.get("vo2MaxValue")
                     if vo2 is not None:
                         entry["vo2_max"] = round(vo2, 1)
