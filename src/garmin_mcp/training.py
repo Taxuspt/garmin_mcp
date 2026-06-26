@@ -779,6 +779,105 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
+    async def get_training_load_balance(date: str) -> str:
+        """Get Garmin's Load Focus — the distribution of the trailing-month
+        training load across Aerobic Low, Aerobic High, and Anaerobic intensity
+        bands, plus the system's feedback phrase (e.g. AEROBIC_HIGH_SHORTAGE,
+        BALANCED, ANAEROBIC_SHORTAGE).
+
+        Use this to assess whether the athlete's training mix is balanced or
+        deficient in a particular intensity band. Each band reports its load
+        alongside Garmin's target range; a `status` of "below", "within", or
+        "above" is computed from the load relative to that range.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            data = garmin_client.get_training_status(date)
+        except Exception as e:
+            return f"Error retrieving training load balance: {str(e)}"
+
+        if not data:
+            return f"No training load balance data found for {date}."
+
+        # Same `or {}` pattern as the rest of this module: Garmin returns
+        # explicit None for sections the user has no data in, which breaks
+        # chained .get with a default arg.
+        load_balance = data.get("mostRecentTrainingLoadBalance") or {}
+        load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap") or {}
+
+        # device-keyed dict; prefer the primary training device, fall back to
+        # the first device with data.
+        load_data: Dict[str, Any] = {}
+        for dev_data in load_map.values():
+            if not isinstance(dev_data, dict):
+                continue
+            if dev_data.get("primaryTrainingDevice"):
+                load_data = dev_data
+                break
+            if not load_data:
+                load_data = dev_data
+
+        if not load_data:
+            return f"No training load balance data found for {date}."
+
+        def _band(load_key: str, min_key: str, max_key: str) -> Optional[Dict[str, Any]]:
+            load = load_data.get(load_key)
+            tmin = load_data.get(min_key)
+            tmax = load_data.get(max_key)
+            if load is None and tmin is None and tmax is None:
+                return None
+            band: Dict[str, Any] = {}
+            if load is not None:
+                band["load"] = round(load, 1)
+            if tmin is not None:
+                band["target_min"] = tmin
+            if tmax is not None:
+                band["target_max"] = tmax
+            if load is not None and tmin is not None and tmax is not None:
+                if load < tmin:
+                    band["status"] = "below"
+                elif load > tmax:
+                    band["status"] = "above"
+                else:
+                    band["status"] = "within"
+            return band
+
+        result: Dict[str, Any] = {
+            "date": load_data.get("calendarDate", date),
+        }
+        feedback = load_data.get("trainingBalanceFeedbackPhrase")
+        if feedback:
+            result["feedback"] = feedback
+
+        aerobic_low = _band(
+            "monthlyLoadAerobicLow",
+            "monthlyLoadAerobicLowTargetMin",
+            "monthlyLoadAerobicLowTargetMax",
+        )
+        if aerobic_low:
+            result["aerobic_low"] = aerobic_low
+
+        aerobic_high = _band(
+            "monthlyLoadAerobicHigh",
+            "monthlyLoadAerobicHighTargetMin",
+            "monthlyLoadAerobicHighTargetMax",
+        )
+        if aerobic_high:
+            result["aerobic_high"] = aerobic_high
+
+        anaerobic = _band(
+            "monthlyLoadAnaerobic",
+            "monthlyLoadAnaerobicTargetMin",
+            "monthlyLoadAnaerobicTargetMax",
+        )
+        if anaerobic:
+            result["anaerobic"] = anaerobic
+
+        return json.dumps(result, indent=2)
+
+    @app.tool()
     async def get_hrv_trend(start_date: str, end_date: str) -> str:
         """Get HRV (Heart Rate Variability) trend over a date range.
 
