@@ -14,6 +14,7 @@ dependencies = [
     "requests==2.33.0",
     "mcp>=1.23.0",
     "fitparse>=1.2.0",
+    "fastmcp>=2",
 ]
 
 [project.scripts]
