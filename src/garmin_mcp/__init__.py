@@ -11,6 +11,10 @@ from mcp.server.fastmcp import FastMCP
 
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
+from garmin_mcp.garmin_cn_auth_patch import apply_garmin_cn_auth_patch
+
+apply_garmin_cn_auth_patch()
+
 # Import all modules
 from garmin_mcp import activity_management
 from garmin_mcp import health_wellness
