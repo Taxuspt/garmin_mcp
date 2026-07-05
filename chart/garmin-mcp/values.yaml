@@ -51,8 +51,15 @@ transport:
   port: 8000
 
 # --- Token persistence ------------------------------------------------------
-# Garmin OAuth tokens are written to ~/.garminconnect; persist them so the pod
-# does not re-authenticate (and re-trigger MFA) on every restart.
+# Garmin's DI refresh token ROTATES on every refresh, so the live token must be
+# stored somewhere that survives a pod restart — otherwise a cold start replays a
+# stale, already-invalidated token and login fails. When enabled, a PVC is mounted
+# at mountPath and $GARMINTOKENS points at it (directory mode), so the app writes
+# each rotated token back. On first boot an init container seeds the volume from
+# the Secret (tokens.json/base64 or existingSecret's GARMINTOKENS); later boots
+# keep the rotated token already on the PVC. In credentials mode the app logs in
+# and writes the volume itself. Keep this on for any long-running / scale-to-zero
+# deployment; only stdio/local runs can safely leave it off.
 persistence:
   enabled: true
   size: 64Mi
