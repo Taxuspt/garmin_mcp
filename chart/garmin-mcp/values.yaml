@@ -92,10 +92,17 @@ ingress:
   #   hosts:
   #     - garmin-mcp.example.com
 
-# Liveness/readiness probes hit /healthz. Only meaningful for HTTP transports;
-# they are skipped automatically when transport.mode is "stdio".
+# Startup/readiness/liveness probes hit /healthz. Only meaningful for HTTP
+# transports; skipped automatically when transport.mode is "stdio". The startup
+# probe polls every startupPeriodSeconds and flips the pod Ready the moment the
+# app is serving (listening + logged into Garmin).
 probes:
   enabled: true
+  # Poll interval while the app is starting; the pod goes Ready on the first 200.
+  startupPeriodSeconds: 10
+  # Max startup attempts before the pod is declared failed (~startupPeriodSeconds
+  # * this seconds). Covers Python import + the blocking Garmin login on boot.
+  startupFailureThreshold: 3
 
 resources:
   requests:

@@ -112,18 +112,26 @@ spec:
             - name: http
               containerPort: {{ .Values.transport.port }}
           {{- if .Values.probes.enabled }}
-          livenessProbe:
+          # startupProbe polls every startupPeriodSeconds and gates
+          # readiness/liveness until it passes, so the pod goes Ready the instant
+          # the app is listening + logged in — no fixed readiness delay to sit
+          # through. Lower the interval where fast cold starts matter.
+          startupProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 15
-            periodSeconds: 20
+            periodSeconds: {{ .Values.probes.startupPeriodSeconds }}
+            failureThreshold: {{ .Values.probes.startupFailureThreshold }}
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
           {{- end }}
           {{- end }}
           resources:
