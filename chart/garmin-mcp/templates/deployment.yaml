@@ -1,6 +1,9 @@
 {{- $http := ne .Values.transport.mode "stdio" -}}
-{{- $tokenMode := include "garmin-mcp.tokenMode" . -}}
-{{- $usePvc := and .Values.persistence.enabled (not $tokenMode) -}}
+{{- /* PVC-backed token store (directory mode) whenever persistence is on. It is
+       seeded once from the Secret by the init container below, then the app
+       persists each rotated token back to it, so the rotating refresh-token
+       chain survives restarts and scale-to-zero. */}}
+{{- $usePvc := .Values.persistence.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,6 +36,45 @@ spec:
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $usePvc }}
+      initContainers:
+        # Seed the token volume from the Secret on FIRST boot only. If the PVC
+        # already holds garmin_tokens.json (a token the running app rotated), we
+        # keep it — that is what lets the rotating refresh token survive cold
+        # starts. In credentials mode there is no seed key, so this is a no-op and
+        # the app logs in and writes the volume itself.
+        - name: seed-tokens
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import os
+              d = os.environ["MOUNT"]
+              p = os.path.join(d, "garmin_tokens.json")
+              seed = os.environ.get("GARMINTOKENS_SEED")
+              if os.path.exists(p):
+                  print("token store present; keeping rotated token", flush=True)
+              elif seed:
+                  os.makedirs(d, exist_ok=True)
+                  with open(p, "w") as f:
+                      f.write(seed)
+                  print("seeded token store from Secret", flush=True)
+              else:
+                  print("no seed and no token on volume; interactive auth required", flush=True)
+          env:
+            - name: MOUNT
+              value: {{ .Values.persistence.mountPath | quote }}
+            - name: GARMINTOKENS_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garmin-mcp.secretName" . }}
+                  key: GARMINTOKENS
+                  optional: true
+          volumeMounts:
+            - name: tokens
+              mountPath: {{ .Values.persistence.mountPath }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
