@@ -12,6 +12,7 @@ from mcp.server.fastmcp import FastMCP
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
 # Import all modules
+from garmin_mcp import token_utils
 from garmin_mcp import activity_management
 from garmin_mcp import health_wellness
 from garmin_mcp import user_profile
@@ -156,7 +157,10 @@ def _parse_transport_config() -> tuple[str, str, int]:
             f"Invalid GARMIN_MCP_TRANSPORT {transport!r}; "
             f"expected one of {', '.join(_VALID_TRANSPORTS)}"
         )
-    http_host = os.getenv("GARMIN_MCP_HOST", "0.0.0.0")
+    # Bind to loopback by default: the HTTP transport performs no authentication,
+    # so a 0.0.0.0 default would expose full read/write access to the user's
+    # Garmin account to the whole network. Opt in explicitly with GARMIN_MCP_HOST.
+    http_host = os.getenv("GARMIN_MCP_HOST", "127.0.0.1")
     http_port = int(os.getenv("GARMIN_MCP_PORT", "8000"))
     return transport, http_host, http_port
 
@@ -268,6 +272,10 @@ def init_api(email, password):
                 garmin.resume_login(result2, mfa_code)
             # Save Oauth1 and Oauth2 token files to directory for next login
             garmin.client.dump(tokenstore)
+            # Restrict the freshly written tokens to owner-only. These are
+            # ~6-month bearer credentials; the default umask would otherwise
+            # leave them world-readable on multi-user hosts.
+            token_utils.secure_token_dir(tokenstore)
             print(
                 f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n",
                 file=sys.stderr,
@@ -281,6 +289,7 @@ def init_api(email, password):
             dir_path = os.path.expanduser(tokenstore_base64)
             with open(dir_path, "w") as token_file:
                 token_file.write(token_base64)
+            os.chmod(dir_path, 0o600)
             print(
                 f"Oauth tokens encoded as base64 string and saved to '{dir_path}' file for future use. (second method)\n",
                 file=sys.stderr,
@@ -347,7 +356,7 @@ def main():
     # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
     # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.
     #   GARMIN_MCP_TRANSPORT - stdio (default) | streamable-http | sse
-    #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 0.0.0.0)
+    #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     try:
         transport, http_host, http_port = _parse_transport_config()

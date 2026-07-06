@@ -7,6 +7,25 @@ from typing import Tuple
 from garminconnect import Garmin, GarminConnectConnectionError
 
 
+def secure_token_dir(path: str) -> None:
+    """Set owner-only permissions on a token directory and the files inside it.
+
+    OAuth tokens are ~6-month bearer credentials to the full Garmin account, so
+    they must not be left world-readable on multi-user hosts. Safe to call on a
+    path that is a single file rather than a directory.
+    """
+    expanded = os.path.expanduser(path)
+    if not os.path.exists(expanded):
+        return
+    if os.path.isdir(expanded):
+        os.chmod(expanded, 0o700)
+        for entry in os.scandir(expanded):
+            if entry.is_file():
+                os.chmod(entry.path, 0o600)
+    else:
+        os.chmod(expanded, 0o600)
+
+
 def get_token_path() -> str:
     """Get token path from environment or default.
 
