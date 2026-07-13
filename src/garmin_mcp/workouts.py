@@ -41,10 +41,8 @@ KNOWN_TARGET_TYPE_IDS = {
     1: frozenset(["no.target"]),
     2: frozenset(["power.zone"]),
     4: frozenset(["heart.rate.zone"]),
-    # ID 6 is sport-context-dependent:
-    #   - running / swimming: "pace.zone"
-    #   - cycling: "power.between" (absolute watt range, uses targetValueOne/targetValueTwo)
-    6: frozenset(["pace.zone", "power.between"]),
+    6: frozenset(["pace.zone"]),
+    9: frozenset(["power.lap"]),
 }
 
 # Reverse map: workoutTargetTypeKey -> workoutTargetTypeId (each key maps to exactly one ID).
@@ -205,10 +203,87 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
             )
 
 
+def _validate_target_values(
+    step: dict,
+    path: str,
+    target_field: str,
+    value_one_field: str,
+    value_two_field: str,
+    zone_field: str,
+) -> None:
+    """Validate target-specific values before Garmin silently reinterprets them."""
+    target_type = step.get(target_field)
+    if not isinstance(target_type, dict):
+        return
+
+    target_key = target_type.get('workoutTargetTypeKey')
+    value_one = step.get(value_one_field)
+    value_two = step.get(value_two_field)
+    zone = step.get(zone_field)
+
+    if target_key == 'power.zone':
+        if zone is None:
+            raise ValueError(f"{path}.{target_field} power.zone requires {zone_field}")
+        if isinstance(zone, bool):
+            raise ValueError(f"{path}.{zone_field} must be an integer")
+        try:
+            zone_number = int(zone)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{path}.{zone_field} must be an integer") from exc
+        if str(zone_number) != str(zone).strip():
+            raise ValueError(f"{path}.{zone_field} must be an integer")
+        if not 1 <= zone_number <= 7:
+            raise ValueError(f"{path}.{zone_field} must be between 1 and 7")
+        if value_one is not None or value_two is not None:
+            raise ValueError(
+                f"{path}.{target_field} power.zone uses {zone_field}, not "
+                f"{value_one_field}/{value_two_field}"
+            )
+
+    elif target_key == 'power.lap':
+        if value_one is None or value_two is None:
+            raise ValueError(
+                f"{path}.{target_field} power.lap requires "
+                f"{value_one_field} and {value_two_field}"
+            )
+        try:
+            low = float(value_one)
+            high = float(value_two)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{path}.power targets must be numeric") from exc
+        if low <= 0 or high <= 0:
+            raise ValueError(f"{path}.power targets must be positive")
+        if low > high:
+            raise ValueError(
+                f"{path}.{value_one_field} must not exceed {value_two_field}"
+            )
+        if zone is not None:
+            raise ValueError(
+                f"{path}.{target_field} power.lap uses "
+                f"{value_one_field}/{value_two_field}, not {zone_field}"
+            )
+
+
 def _validate_target_type_step(step: dict, path: str) -> None:
     """Reject targetType id/key pairs Garmin would silently reinterpret."""
     _validate_target_type_block(step, path, 'targetType')
     _validate_target_type_block(step, path, 'secondaryTargetType')
+    _validate_target_values(
+        step,
+        path,
+        target_field='targetType',
+        value_one_field='targetValueOne',
+        value_two_field='targetValueTwo',
+        zone_field='zoneNumber',
+    )
+    _validate_target_values(
+        step,
+        path,
+        target_field='secondaryTargetType',
+        value_one_field='secondaryTargetValueOne',
+        value_two_field='secondaryTargetValueTwo',
+        zone_field='secondaryZoneNumber',
+    )
 
     for index, nested in enumerate(step.get('workoutSteps', [])):
         _validate_target_type_step(nested, f"{path}.workoutSteps[{index}]")
@@ -616,15 +691,16 @@ def register_tools(app):
         - workoutTargetTypeId 1  -> "no.target"
         - workoutTargetTypeId 2  -> "power.zone"  (cycling power zone 1-7, use zoneNumber)
         - workoutTargetTypeId 4  -> "heart.rate.zone"
-        - workoutTargetTypeId 6  -> "pace.zone" (running/swim) OR "power.between" (cycling)
+        - workoutTargetTypeId 6  -> "pace.zone"
+        - workoutTargetTypeId 9  -> "power.lap"   (cycling explicit watts, use targetValueOne/targetValueTwo)
 
         IMPORTANT: For cycling power targets use the correct target type:
         - Power zone (zone 1-7 based on FTP %): use workoutTargetTypeId 2, key "power.zone",
           and "zoneNumber" (1-7).
-        - Absolute watt range (e.g. 200-250 W): use workoutTargetTypeId 6, key "power.between",
+        - Absolute watt range (e.g. 200-250 W): use workoutTargetTypeId 9, key "power.lap",
           and "targetValueOne" (low watts) / "targetValueTwo" (high watts).
-        Using workoutTargetTypeId 2 with key "power.between" is a silent Garmin bug: the
-        workout uploads but Garmin stores it as "power.zone" and the intent is lost.
+        Do NOT use workoutTargetTypeId 6 for cycling watts: Garmin reserves ID 6 for
+        "pace.zone", so explicit cycling watt targets should use ID 9 / "power.lap".
 
         Use {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"} with
         targetValueOne/targetValueTwo for custom heart-rate ranges.
@@ -739,7 +815,7 @@ def register_tools(app):
         For custom heart-rate ranges, use targetType {"workoutTargetTypeId": 4,
         "workoutTargetTypeKey": "heart.rate.zone"} with targetValueOne/targetValueTwo.
         For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
-        For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
+        For cycling absolute watt range targets, use workoutTargetTypeId 9, key "power.lap",
         with targetValueOne (low watts) and targetValueTwo (high watts).
         Target type IDs and keys must match Garmin's canonical mapping.
 

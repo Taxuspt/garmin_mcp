@@ -263,6 +263,37 @@ For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
   "zoneNumber": 3
 }
 ```
+
+For a cycling power zone, use target type ID `2` with `power.zone` and
+`zoneNumber`:
+
+```json
+{
+  "targetType": {
+    "workoutTargetTypeId": 2,
+    "workoutTargetTypeKey": "power.zone"
+  },
+  "zoneNumber": 4
+}
+```
+
+For an explicit cycling watt target or range, use target type ID `9` with
+`power.lap` and `targetValueOne` / `targetValueTwo`:
+
+```json
+{
+  "targetType": {
+    "workoutTargetTypeId": 9,
+    "workoutTargetTypeKey": "power.lap"
+  },
+  "targetValueOne": 235,
+  "targetValueTwo": 250
+}
+```
+
+Do **not** use ID `6` for cycling watts. Garmin reserves target type ID `6` for
+`pace.zone`, so `6` + cycling power keys gets reinterpreted incorrectly.
+
 ## One-click Install (Claude Desktop)
 
 The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop Extension file — no JSON editing required.
