@@ -12,7 +12,7 @@ dependencies = [
     "python-dotenv==1.2.2",
     "garminconnect==0.3.2",
     "requests==2.33.0",
-    "mcp>=1.23.0",
+    "mcp>=1.28.1",
     "fitparse>=1.2.0",
 ]
 
