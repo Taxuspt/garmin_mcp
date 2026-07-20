@@ -634,6 +634,29 @@ docker compose up -d
 docker compose logs -f garmin-mcp
 ```
 
+By default, Compose builds from the current local checkout, so local changes are
+included. To deploy directly from the public GitHub repository instead, add the
+remote build context to `.env`:
+
+```dotenv
+GARMIN_MCP_BUILD_CONTEXT=https://github.com/Taxuspt/garmin_mcp.git#main
+```
+
+Then build and start the container:
+
+```bash
+docker compose up -d --build
+```
+
+Running the same command later fetches the current `main` branch and rebuilds
+the image locally. The public repository does not require GitHub credentials.
+To pin a specific version, replace `#main` with a release tag or commit SHA,
+for example `#v1.2.3` or `#0123456789abcdef`.
+
+Only the source used for the image is fetched remotely. If a future release
+changes `docker-compose.yml`, update your local copy of that file separately.
+Leave `GARMIN_MCP_BUILD_CONTEXT` unset to keep using the local checkout.
+
 #### Using Docker Directly
 
 ```bash

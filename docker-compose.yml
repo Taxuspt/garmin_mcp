@@ -1,7 +1,7 @@
 services:
   garmin-mcp:
     build:
-      context: .
+      context: ${GARMIN_MCP_BUILD_CONTEXT:-.}
       dockerfile: Dockerfile
     container_name: garmin-mcp-server
 
