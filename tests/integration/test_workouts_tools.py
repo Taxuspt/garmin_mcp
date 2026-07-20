@@ -55,6 +55,18 @@ def _timed_interval_step(target_type):
     }
 
 
+@pytest.mark.asyncio
+async def test_inline_workout_tool_descriptions_document_cycling_power_lap(
+    app_with_workouts,
+):
+    tools = {tool.name: tool for tool in await app_with_workouts.list_tools()}
+
+    for tool_name in ("upload_workout", "upload_workouts", "schedule_workouts"):
+        description = tools[tool_name].description
+        assert "workoutTargetTypeId 9" in description
+        assert '"power.lap"' in description
+        assert "workoutTargetTypeId 6" in description
+
 
 @pytest.mark.asyncio
 async def test_get_workouts_tool(app_with_workouts, mock_garmin_client):

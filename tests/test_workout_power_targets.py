@@ -55,6 +55,19 @@ def test_accepts_single_cycling_power_target() -> None:
     _validate_target_type_steps(workout)
 
 
+def test_accepts_zero_watt_lower_bound_for_recovery() -> None:
+    workout = _workout_with_target(
+        {
+            "workoutTargetTypeId": 9,
+            "workoutTargetTypeKey": "power.lap",
+        },
+        targetValueOne=0,
+        targetValueTwo=150,
+    )
+
+    _validate_target_type_steps(workout)
+
+
 def test_accepts_cycling_power_zone() -> None:
     workout = _workout_with_target(
         {
@@ -95,13 +108,21 @@ def test_rejects_power_lap_with_pace_id() -> None:
         _validate_target_type_steps(workout)
 
 
-def test_power_lap_requires_both_bounds() -> None:
+@pytest.mark.parametrize(
+    "target_values",
+    [
+        {"targetValueOne": 235},
+        {"targetValueTwo": 250},
+        {},
+    ],
+)
+def test_power_lap_requires_both_bounds(target_values) -> None:
     workout = _workout_with_target(
         {
             "workoutTargetTypeId": 9,
             "workoutTargetTypeKey": "power.lap",
         },
-        targetValueOne=235,
+        **target_values,
     )
 
     with pytest.raises(ValueError, match="requires"):
@@ -119,6 +140,32 @@ def test_power_lap_rejects_reversed_range() -> None:
     )
 
     with pytest.raises(ValueError, match="must not exceed"):
+        _validate_target_type_steps(workout)
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "message"),
+    [
+        (-1, 150, "non-negative"),
+        (0, -1, "non-negative"),
+        (True, 150, "numeric"),
+        (0, False, "numeric"),
+        (float("nan"), 150, "finite"),
+        (0, float("inf"), "finite"),
+        (float("-inf"), 150, "finite"),
+    ],
+)
+def test_power_lap_rejects_invalid_watt_values(low, high, message) -> None:
+    workout = _workout_with_target(
+        {
+            "workoutTargetTypeId": 9,
+            "workoutTargetTypeKey": "power.lap",
+        },
+        targetValueOne=low,
+        targetValueTwo=high,
+    )
+
+    with pytest.raises(ValueError, match=message):
         _validate_target_type_steps(workout)
 
 
@@ -162,6 +209,33 @@ def test_power_zone_rejects_non_integer_zone_number() -> None:
         _validate_target_type_steps(workout)
 
 
+@pytest.mark.parametrize("zone_number", [0, 8])
+def test_power_zone_rejects_out_of_range_zone_number(zone_number) -> None:
+    workout = _workout_with_target(
+        {
+            "workoutTargetTypeId": 2,
+            "workoutTargetTypeKey": "power.zone",
+        },
+        zoneNumber=zone_number,
+    )
+
+    with pytest.raises(ValueError, match="between 1 and 7"):
+        _validate_target_type_steps(workout)
+
+
+def test_power_zone_rejects_boolean_zone_number() -> None:
+    workout = _workout_with_target(
+        {
+            "workoutTargetTypeId": 2,
+            "workoutTargetTypeKey": "power.zone",
+        },
+        zoneNumber=True,
+    )
+
+    with pytest.raises(ValueError, match="must be an integer"):
+        _validate_target_type_steps(workout)
+
+
 def test_power_zone_rejects_watt_bounds() -> None:
     workout = _workout_with_target(
         {
@@ -174,4 +248,55 @@ def test_power_zone_rejects_watt_bounds() -> None:
     )
 
     with pytest.raises(ValueError, match="uses zoneNumber"):
+        _validate_target_type_steps(workout)
+
+
+def test_validates_power_lap_inside_nested_repeat_group() -> None:
+    workout = _workout_with_target(
+        {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+    )
+    nested_step = workout["workoutSegments"][0]["workoutSteps"][0]
+    nested_step["targetType"] = {
+        "workoutTargetTypeId": 9,
+        "workoutTargetTypeKey": "power.lap",
+    }
+    nested_step["targetValueOne"] = -1
+    nested_step["targetValueTwo"] = 150
+    workout["workoutSegments"][0]["workoutSteps"] = [{
+        "type": "RepeatGroupDTO",
+        "stepOrder": 1,
+        "numberOfIterations": 4,
+        "workoutSteps": [nested_step],
+    }]
+
+    with pytest.raises(ValueError, match=r"workoutSteps\[0\].*non-negative"):
+        _validate_target_type_steps(workout)
+
+
+def test_accepts_secondary_power_lap_target() -> None:
+    workout = _workout_with_target(
+        {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+        secondaryTargetType={
+            "workoutTargetTypeId": 9,
+            "workoutTargetTypeKey": "power.lap",
+        },
+        secondaryTargetValueOne=0,
+        secondaryTargetValueTwo=150,
+    )
+
+    _validate_target_type_steps(workout)
+
+
+def test_rejects_invalid_secondary_power_lap_target() -> None:
+    workout = _workout_with_target(
+        {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+        secondaryTargetType={
+            "workoutTargetTypeId": 9,
+            "workoutTargetTypeKey": "power.lap",
+        },
+        secondaryTargetValueOne=200,
+        secondaryTargetValueTwo=150,
+    )
+
+    with pytest.raises(ValueError, match="secondaryTargetValueOne must not exceed"):
         _validate_target_type_steps(workout)

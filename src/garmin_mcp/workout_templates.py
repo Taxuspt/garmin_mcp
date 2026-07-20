@@ -144,6 +144,67 @@ TEMPO_RUN_TEMPLATE = {
     }]
 }
 
+CYCLING_POWER_INTERVALS_TEMPLATE = {
+    "workoutName": "Cycling Power Intervals",
+    "description": "Cycling workout: warmup, 5x(4min power + 2min recovery), cooldown",
+    "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling"},
+    "workoutSegments": [{
+        "segmentOrder": 1,
+        "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling"},
+        "workoutSteps": [
+            {
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
+                "description": "Warmup 10 min",
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                "endConditionValue": 600.0,
+                "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+            },
+            {
+                "type": "RepeatGroupDTO",
+                "stepOrder": 2,
+                "numberOfIterations": 5,
+                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                "endConditionValue": 5.0,
+                "workoutSteps": [
+                    {
+                        "type": "ExecutableStepDTO",
+                        "stepOrder": 1,
+                        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                        "description": "Work 4 min at 235-250 W",
+                        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                        "endConditionValue": 240.0,
+                        "targetType": {"workoutTargetTypeId": 9, "workoutTargetTypeKey": "power.lap"},
+                        "targetValueOne": 235,
+                        "targetValueTwo": 250
+                    },
+                    {
+                        "type": "ExecutableStepDTO",
+                        "stepOrder": 2,
+                        "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
+                        "description": "Recovery 2 min at 0-150 W",
+                        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                        "endConditionValue": 120.0,
+                        "targetType": {"workoutTargetTypeId": 9, "workoutTargetTypeKey": "power.lap"},
+                        "targetValueOne": 0,
+                        "targetValueTwo": 150
+                    }
+                ]
+            },
+            {
+                "type": "ExecutableStepDTO",
+                "stepOrder": 3,
+                "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
+                "description": "Cooldown 10 min",
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                "endConditionValue": 600.0,
+                "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"}
+            }
+        ]
+    }]
+}
+
 STRENGTH_CIRCUIT_TEMPLATE = {
     "workoutName": "Strength Circuit",
     "description": "Strength training circuit: warmup, 3x circuit (work + rest), cooldown",
@@ -318,6 +379,15 @@ def register_resources(app):
         20min tempo block at HR zone 4.
         """
         return json.dumps(TEMPO_RUN_TEMPLATE, indent=2)
+
+    @app.resource("workout://templates/cycling-power-intervals")
+    async def get_cycling_power_intervals_template() -> str:
+        """Cycling interval workout template with explicit watt targets
+
+        Demonstrates timed work and recovery steps using Garmin's canonical
+        workoutTargetTypeId 9 / power.lap mapping inside a repeat group.
+        """
+        return json.dumps(CYCLING_POWER_INTERVALS_TEMPLATE, indent=2)
 
     @app.resource("workout://templates/strength-circuit")
     async def get_strength_template() -> str:

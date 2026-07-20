@@ -294,6 +294,11 @@ For an explicit cycling watt target or range, use target type ID `9` with
 Do **not** use ID `6` for cycling watts. Garmin reserves target type ID `6` for
 `pace.zone`, so `6` + cycling power keys gets reinterpreted incorrectly.
 
+For a complete warmup/interval/recovery/cooldown example, read the MCP resource
+`workout://templates/cycling-power-intervals` and adapt its durations, repeats,
+and watt ranges before passing it to `upload_workout`, `upload_workouts`, or
+inline `schedule_workouts`.
+
 ## One-click Install (Claude Desktop)
 
 The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop Extension file — no JSON editing required.

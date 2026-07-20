@@ -2,6 +2,7 @@
 Workout-related functions for Garmin Connect MCP Server
 """
 import json
+import math
 import re
 import datetime
 from typing import Any, Dict, List, Optional, Union
@@ -246,13 +247,17 @@ def _validate_target_values(
                 f"{path}.{target_field} power.lap requires "
                 f"{value_one_field} and {value_two_field}"
             )
+        if isinstance(value_one, bool) or isinstance(value_two, bool):
+            raise ValueError(f"{path}.power targets must be numeric")
         try:
             low = float(value_one)
             high = float(value_two)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{path}.power targets must be numeric") from exc
-        if low <= 0 or high <= 0:
-            raise ValueError(f"{path}.power targets must be positive")
+        if not math.isfinite(low) or not math.isfinite(high):
+            raise ValueError(f"{path}.power targets must be finite")
+        if low < 0 or high < 0:
+            raise ValueError(f"{path}.power targets must be non-negative")
         if low > high:
             raise ValueError(
                 f"{path}.{value_one_field} must not exceed {value_two_field}"
@@ -720,6 +725,7 @@ def register_tools(app):
         - workout://templates/simple-run - Basic warmup/run/cooldown structure
         - workout://templates/interval-running - Interval training with repeat groups
         - workout://templates/tempo-run - Tempo run with heart rate zone targets
+        - workout://templates/cycling-power-intervals - Timed cycling intervals with explicit watt targets
         - workout://templates/strength-circuit - Strength training with exercises, reps, rest
         - workout://reference/structure - Complete JSON structure reference with all fields
 
@@ -817,6 +823,7 @@ def register_tools(app):
         For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
         For cycling absolute watt range targets, use workoutTargetTypeId 9, key "power.lap",
         with targetValueOne (low watts) and targetValueTwo (high watts).
+        Do NOT use workoutTargetTypeId 6 for cycling watts; ID 6 is "pace.zone".
         Target type IDs and keys must match Garmin's canonical mapping.
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
@@ -1077,6 +1084,13 @@ def register_tools(app):
         This adds workouts to your Garmin Connect calendar in a single call.
         Each item can either reference an existing workout by ID, or provide
         inline workout_data to upload-and-schedule in one step.
+
+        IMPORTANT: Inline workout_data uses Garmin's canonical target mapping.
+        For cycling power zones use workoutTargetTypeId 2, key "power.zone", and
+        zoneNumber (1-7). For explicit cycling watt ranges use workoutTargetTypeId 9,
+        key "power.lap", with targetValueOne (low watts) and targetValueTwo (high
+        watts). Do NOT use workoutTargetTypeId 6 for cycling watts; ID 6 is
+        "pace.zone".
 
         Args:
             schedules: List of workout schedules, each with:

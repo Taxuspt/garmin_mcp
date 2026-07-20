@@ -93,7 +93,7 @@
     },
     {
       "name": "upload_workout",
-      "description": "Upload a structured workout to Garmin Connect"
+      "description": "Upload a structured workout to Garmin Connect. For cycling power zones use ID 2 / power.zone; for explicit cycling watts use ID 9 / power.lap. ID 6 is pace.zone, not cycling power."
     },
     {
       "name": "get_body_composition",
