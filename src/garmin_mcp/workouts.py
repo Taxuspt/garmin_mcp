@@ -318,7 +318,18 @@ def _curate_workout_step(step: dict) -> dict:
         zone_field='secondaryZoneNumber',
         prefix='secondary_',
     )
-
+    # Swim stroke / equipment / drill info (Garmin returns these as nested dicts;
+    # previously dropped entirely -- strokeType/equipmentType/drillType are real
+    # fields Garmin provides for swim steps, unrelated to secondaryTargetValueOne).
+    stroke_type = step.get('strokeType')
+    if isinstance(stroke_type, dict) and stroke_type.get('strokeTypeKey'):
+        curated['stroke_type'] = stroke_type.get('strokeTypeKey')
+    equipment_type = step.get('equipmentType')
+    if isinstance(equipment_type, dict) and equipment_type.get('equipmentTypeKey'):
+        curated['equipment_type'] = equipment_type.get('equipmentTypeKey')
+    drill_type = step.get('drillType')
+    if isinstance(drill_type, dict) and drill_type.get('drillTypeKey'):
+        curated['drill_type'] = drill_type.get('drillTypeKey')
     # Strength training exercise info
     if step.get('category'):
         curated['category'] = step.get('category')
