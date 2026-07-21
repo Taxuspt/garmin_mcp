@@ -883,7 +883,7 @@ def register_tools(app):
                 "date": date,
                 "readiness_score": readiness.get('readinessScore'),
                 "readiness_level": readiness.get('readinessLevel'),
-                "recovery_time_hours": readiness.get('recoveryTime'),
+                "recovery_time_hours": round(readiness.get('recoveryTime', 0) / 60, 1) if readiness.get('recoveryTime') is not None else None,
                 "hrv_status": readiness.get('hrvStatus'),
                 "sleep_quality": readiness.get('sleepQuality'),
                 "sleep_score": readiness.get('sleepScore'),
