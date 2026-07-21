@@ -252,9 +252,10 @@ def build_strength_json(
             "stepOrder": step_order,
             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
             "description": f"{ex_name}: {sets} sets x {reps} reps",
-            "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-            "endConditionValue": float(sets * 45),  # rough estimate: 45s per set
+            "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
+            "endConditionValue": float(reps),
             "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+            "category": "UNASSIGNED",
             "exerciseName": ex_name,
         })
         step_order += 1
