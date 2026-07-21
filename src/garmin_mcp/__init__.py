@@ -142,7 +142,9 @@ class _GarminProxy:
             except tuple(self._MESSAGES) as exc:
                 for exc_type, msg in self._MESSAGES.items():
                     if isinstance(exc, exc_type):
-                        raise type(exc)(msg) from None
+                        error_details = str(exc)
+                        full_msg = f"{msg} (Details: {error_details})" if error_details else msg
+                        raise type(exc)(full_msg) from None
                 raise
 
         return _call
