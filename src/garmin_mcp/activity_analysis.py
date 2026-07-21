@@ -933,6 +933,52 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
 
     # HRV (time-domain) — always include summary if R-R data exists.
     # Raw R-R array only included when include_records=True (can be large).
+    # Per-lap average power for activities whose lap message has no native
+    # avg_power field (e.g. running with a wrist / Connect IQ power source).
+    # Reuse the same time-window bucketing as HRV, averaging record power_w.
+    if records and any("avg_power_w" not in lap for lap in laps):
+        import datetime as _dt2
+
+        def _parse_iso_pw(s):
+            if not s:
+                return None
+            try:
+                return _dt2.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                return None
+
+        rec_pw = []
+        for r in records:
+            pw = r.get("power_w")
+            if pw is None:
+                continue
+            ts_dt = _parse_iso_pw(r.get("timestamp"))
+            if ts_dt is not None:
+                rec_pw.append((ts_dt, float(pw)))
+
+        if rec_pw:
+            for lap in laps:
+                if "avg_power_w" in lap:
+                    continue
+                lap_start = _parse_iso_pw(lap.get("start_time"))
+                elapsed = lap.get("total_elapsed_time_s")
+                if lap_start is None or not elapsed:
+                    continue
+                lap_end = lap_start + _dt2.timedelta(seconds=float(elapsed))
+                vals = []
+                for ts_dt, pw in rec_pw:
+                    a, b, t = lap_start, lap_end, ts_dt
+                    if a.tzinfo and not t.tzinfo:
+                        t = t.replace(tzinfo=a.tzinfo)
+                    elif t.tzinfo and not a.tzinfo:
+                        a = a.replace(tzinfo=t.tzinfo)
+                        b = b.replace(tzinfo=t.tzinfo)
+                    if a <= t < b:
+                        vals.append(pw)
+                if vals:
+                    lap["avg_power_w"] = round(sum(vals) / len(vals))
+                    lap["max_power_w"] = round(max(vals))
+
     # Also compute per-lap HRV by bucketing R-R intervals by timestamp.
     if rr_pairs:
         all_rr = [rr for (_, rr) in rr_pairs]
