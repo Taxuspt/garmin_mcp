@@ -961,6 +961,16 @@ def register_tools(app):
             calendar_date: Date to schedule the workout in YYYY-MM-DD format
         """
         try:
+            _validate_date(calendar_date, "calendar_date")
+        except ValueError as e:
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "scheduled_date": calendar_date,
+                "message": str(e),
+            }, indent=2)
+
+        try:
             if _is_already_scheduled(workout_id, calendar_date):
                 return json.dumps({
                     "status": "success",
@@ -1030,6 +1040,17 @@ def register_tools(app):
                     "workout_id": workout_id,
                     "scheduled_date": calendar_date,
                     "message": "Missing required field: calendar_date"
+                })
+                continue
+
+            try:
+                _validate_date(calendar_date, "calendar_date")
+            except ValueError as e:
+                results.append({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "scheduled_date": calendar_date,
+                    "message": str(e),
                 })
                 continue
 
