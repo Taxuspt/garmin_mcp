@@ -167,6 +167,38 @@ async def test_create_run_workout_success(app_with_builders, mock_garmin_client)
 
 
 @pytest.mark.asyncio
+async def test_create_run_workout_custom_hr_range(app_with_builders, mock_garmin_client):
+    """hr_min/hr_max on the tool call produce a custom bpm-range target, not a zoneNumber."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 1111111111,
+        "workoutName": "Base run - 7/20",
+    }
+
+    result = await app_with_builders.call_tool(
+        "create_run_workout",
+        {
+            "name": "Base run - 7/20",
+            "run_seconds": 1440,
+            "warmup_min": 5,
+            "cooldown_min": 5,
+            "hr_min": 136,
+            "hr_max": 148,
+        },
+    )
+
+    assert result is not None
+    payload = json.loads(result[0][0].text)
+    assert payload["status"] == "success"
+
+    uploaded_json = mock_garmin_client.upload_workout.call_args[0][0]
+    interval_step = uploaded_json["workoutSegments"][0]["workoutSteps"][1]
+    assert interval_step["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone"
+    assert interval_step["targetValueOne"] == 136.0
+    assert interval_step["targetValueTwo"] == 148.0
+    assert "zoneNumber" not in interval_step
+
+
+@pytest.mark.asyncio
 async def test_create_run_workout_exception(app_with_builders, mock_garmin_client):
     """create_run_workout returns an error string when the API raises an exception."""
     mock_garmin_client.upload_workout.side_effect = Exception("Upload failed")
