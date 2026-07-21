@@ -1,7 +1,0 @@
-{
-  "build": { "builder": "NIXPACKS" },
-  "deploy": {
-    "startCommand": "garmin-mcp-http",
-    "healthcheckPath": "/health"
-  }
-}

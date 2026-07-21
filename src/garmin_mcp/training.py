@@ -492,9 +492,13 @@ def register_tools(app):
             if not status:
                 return f"No training status data found for {date}."
 
-            # Extract from nested structure
-            recent_status = status.get("mostRecentTrainingStatus", {})
-            latest_data = recent_status.get("latestTrainingStatusData", {})
+            # Extract from nested structure. Garmin can return an explicit
+            # `null` (not just an absent key) for any of these nested
+            # objects, and dict.get(key, default) only falls back to
+            # default when the key is *missing* - so `or {}` is required
+            # to also cover the explicit-null case.
+            recent_status = status.get("mostRecentTrainingStatus") or {}
+            latest_data = recent_status.get("latestTrainingStatusData") or {}
 
             # Get first device data (usually the primary device)
             device_data = {}
@@ -502,15 +506,16 @@ def register_tools(app):
                 device_data = data
                 break
 
-            acwr_data = device_data.get("acuteTrainingLoadDTO", {})
+            acwr_data = device_data.get("acuteTrainingLoadDTO") or {}
 
             # VO2 Max data
-            vo2_data = status.get("mostRecentVO2Max", {}).get("generic", {})
-            cycling_vo2_data = status.get("mostRecentVO2Max", {}).get("cycling", {})
+            vo2_max_block = status.get("mostRecentVO2Max") or {}
+            vo2_data = vo2_max_block.get("generic") or {}
+            cycling_vo2_data = vo2_max_block.get("cycling") or {}
 
             # Training load balance
-            load_balance = status.get("mostRecentTrainingLoadBalance", {})
-            load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap", {})
+            load_balance = status.get("mostRecentTrainingLoadBalance") or {}
+            load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap") or {}
             load_data = {}
             for device_id, data in load_map.items():
                 load_data = data
@@ -735,11 +740,10 @@ def register_tools(app):
                 data = garmin_client.get_training_status(date_str)
                 if data:
                     status_data = (
-                        data.get("mostRecentTrainingStatus", {})
-                        .get("latestTrainingStatusData", {})
-                    )
-                    atl_dto = status_data.get("acuteTrainingLoadDTO", {})
-                    vo2_data = data.get("mostRecentVO2Max", {}).get("generic", {})
+                        data.get("mostRecentTrainingStatus") or {}
+                    ).get("latestTrainingStatusData") or {}
+                    atl_dto = status_data.get("acuteTrainingLoadDTO") or {}
+                    vo2_data = (data.get("mostRecentVO2Max") or {}).get("generic") or {}
                     entry: Dict[str, Any] = {"date": date_str}
                     atl = atl_dto.get("dailyTrainingLoadAcute")
                     ctl = atl_dto.get("dailyTrainingLoadChronic")
@@ -890,7 +894,7 @@ def register_tools(app):
             try:
                 data = garmin_client.get_training_status(date_str)
                 if data:
-                    vo2_data = data.get("mostRecentVO2Max", {}).get("generic", {})
+                    vo2_data = (data.get("mostRecentVO2Max") or {}).get("generic") or {}
                     vo2 = vo2_data.get("vo2MaxValue")
                     if vo2 is not None:
                         vo2_rounded = round(vo2, 1)

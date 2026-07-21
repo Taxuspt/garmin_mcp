@@ -33,7 +33,7 @@ COPY pytest.ini ./
 RUN mkdir -p /root/.garminconnect && \
     chmod 700 /root/.garminconnect
 
-# Remote MCP deployment runs over HTTP/SSE on the Railway-provided port.
+# Remote MCP deployment runs over HTTP/SSE on the port given via $PORT.
 EXPOSE ${PORT}
 
 # Set the entrypoint to run the HTTP wrapper
