@@ -25,7 +25,7 @@
     "garmin-connect"
   ],
   "server": {
-    "type": "uv",
+    "type": "python",
     "entry_point": "garmin_mcp",
     "mcp_config": {
       "command": "uvx",
