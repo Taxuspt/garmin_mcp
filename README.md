@@ -397,7 +397,7 @@ File-based secrets are useful in certain environments, such as inside a Docker c
 By default the server communicates over **stdio**, which is what Claude Desktop, the MCP Inspector, and most local clients expect. To serve over **HTTP** instead (e.g. when running in a container or Kubernetes), set the transport via environment variables:
 
 - `GARMIN_MCP_TRANSPORT`: `stdio` (default), `streamable-http`, or `sse`
-- `GARMIN_MCP_HOST`: bind address for HTTP transports (default `0.0.0.0`)
+- `GARMIN_MCP_HOST`: bind address for HTTP transports (default `127.0.0.1`; set to `0.0.0.0` only when the endpoint is fronted by an authenticating reverse proxy)
 - `GARMIN_MCP_PORT`: bind port for HTTP transports (default `8000`)
 
 ```bash

@@ -19,15 +19,8 @@ from garmin_mcp.token_utils import (
     token_exists,
     validate_tokens,
     get_token_info,
+    secure_token_dir as _secure_token_dir,
 )
-
-
-def _secure_token_dir(path: str) -> None:
-    """Set owner-only permissions on a token directory and all files inside it."""
-    os.chmod(path, 0o700)
-    for entry in os.scandir(path):
-        if entry.is_file():
-            os.chmod(entry.path, 0o600)
 
 
 def get_mfa() -> str:

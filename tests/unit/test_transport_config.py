@@ -17,7 +17,7 @@ class TestParseTransportConfig:
             os.environ.pop("GARMIN_MCP_PORT", None)
             transport, host, port = _parse_transport_config()
         assert transport == "stdio"
-        assert host == "0.0.0.0"
+        assert host == "127.0.0.1"
         assert port == 8000
 
     @pytest.mark.parametrize("value", list(_VALID_TRANSPORTS))
