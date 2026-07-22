@@ -853,3 +853,100 @@ async def test_delete_food_log_accepts_hex_uuid(app_with_nutrition, mock_garmin_
         "connectapi", "/nutrition-service/food/logs/2024-01-15",
         json={"logIds": [hex_log_id]}, api=True
     )
+
+
+# set_nutrition_daily_settings tests
+
+_CURRENT_SETTINGS = {
+    "activeDailyCalories": 2000,
+    "activeDailyCarbohydrateGrams": 250,
+    "activeDailyFatGrams": 65,
+    "activeDailyProteinGrams": 120,
+    "planDate": "2024-01-15",
+}
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_updates_all_fields(app_with_nutrition, mock_garmin_client):
+    """All four fields are updated and the merged payload is PUT back."""
+    mock_garmin_client.connectapi.return_value = dict(_CURRENT_SETTINGS)
+    mock_garmin_client.client.put.return_value = {
+        "activeDailyCalories": 1800,
+        "activeDailyCarbohydrateGrams": 200,
+        "activeDailyFatGrams": 60,
+        "activeDailyProteinGrams": 140,
+    }
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-01-15", "calorie_goal": 1800, "carbs_grams": 200, "fat_grams": 60, "protein_grams": 140},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "updated"
+    assert data["calorie_goal"] == 1800
+    assert data["carbs_grams"] == 200
+    assert data["fat_grams"] == 60
+    assert data["protein_grams"] == 140
+    # Verify the PUT was called with the merged payload
+    put_call = mock_garmin_client.client.put.call_args
+    assert put_call.args[1] == "/nutrition-service/settings/2024-01-15"
+    assert put_call.kwargs["json"]["activeDailyCalories"] == 1800
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_partial_update(app_with_nutrition, mock_garmin_client):
+    """Only the supplied fields are changed; others keep their existing values."""
+    mock_garmin_client.connectapi.return_value = dict(_CURRENT_SETTINGS)
+    mock_garmin_client.client.put.return_value = None  # some endpoints return nothing
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-01-15", "calorie_goal": 1900},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "updated"
+    assert data["calorie_goal"] == 1900
+    # Unchanged fields come back from the merged current settings (since resp=None)
+    assert data["carbs_grams"] == _CURRENT_SETTINGS["activeDailyCarbohydrateGrams"]
+    put_call = mock_garmin_client.client.put.call_args
+    assert put_call.kwargs["json"]["activeDailyCarbohydrateGrams"] == 250
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_no_fields_provided(app_with_nutrition, mock_garmin_client):
+    """Returns a clear message when no fields are supplied."""
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-01-15"},
+    )
+    assert "No fields to update" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_no_current_data(app_with_nutrition, mock_garmin_client):
+    """Returns a clear message when GET returns nothing (no baseline to merge into)."""
+    mock_garmin_client.connectapi.return_value = None
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-01-15", "calorie_goal": 1800},
+    )
+    assert "Could not read current" in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_api_error(app_with_nutrition, mock_garmin_client):
+    """API errors are surfaced as a clean message."""
+    mock_garmin_client.connectapi.return_value = dict(_CURRENT_SETTINGS)
+    mock_garmin_client.client.put.side_effect = Exception("403 Forbidden")
+
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-01-15", "calorie_goal": 1800},
+    )
+    assert "Error updating nutrition settings" in result[0][0].text
+    assert "403" in result[0][0].text

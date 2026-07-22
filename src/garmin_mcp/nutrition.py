@@ -87,6 +87,60 @@ def register_tools(app):
             return f"Error retrieving nutrition settings: {str(e)}"
 
     @app.tool()
+    async def set_nutrition_daily_settings(
+        date: str,
+        calorie_goal: Optional[int] = None,
+        carbs_grams: Optional[int] = None,
+        fat_grams: Optional[int] = None,
+        protein_grams: Optional[int] = None,
+    ) -> str:
+        """Update daily nutrition goals (calorie target and macronutrient targets).
+
+        Reads the current settings for the date, applies the supplied overrides,
+        and writes the merged result back.  Only the fields you provide are
+        changed; omitted fields keep their existing values.
+
+        Garmin stores macros as grams.  The calorie goal should match
+        4*carbs + 4*protein + 9*fat to within a small rounding margin — Garmin
+        accepts minor mismatches but will silently correct large discrepancies.
+
+        Args:
+            date: Date in YYYY-MM-DD format (settings are typically set once and
+                  inherited across days, but Garmin accepts per-day overrides)
+            calorie_goal: Daily calorie target in kcal
+            carbs_grams: Daily carbohydrate target in grams
+            fat_grams: Daily fat target in grams
+            protein_grams: Daily protein target in grams
+        """
+        if all(v is None for v in (calorie_goal, carbs_grams, fat_grams, protein_grams)):
+            return "No fields to update — supply at least one of calorie_goal, carbs_grams, fat_grams, protein_grams."
+        try:
+            url = f"/nutrition-service/settings/{date}"
+            current = garmin_client.connectapi(url)
+            if not current:
+                return f"Could not read current nutrition settings for {date} — cannot apply update."
+            if calorie_goal is not None:
+                current["activeDailyCalories"] = calorie_goal
+            if carbs_grams is not None:
+                current["activeDailyCarbohydrateGrams"] = carbs_grams
+            if fat_grams is not None:
+                current["activeDailyFatGrams"] = fat_grams
+            if protein_grams is not None:
+                current["activeDailyProteinGrams"] = protein_grams
+            resp = garmin_client.client.put("connectapi", url, json=current, api=True)
+            result = resp if resp else current
+            return json.dumps({
+                "status": "updated",
+                "date": date,
+                "calorie_goal": result.get("activeDailyCalories"),
+                "carbs_grams": result.get("activeDailyCarbohydrateGrams"),
+                "fat_grams": result.get("activeDailyFatGrams"),
+                "protein_grams": result.get("activeDailyProteinGrams"),
+            }, indent=2)
+        except Exception as e:
+            return f"Error updating nutrition settings: {str(e)}"
+
+    @app.tool()
     async def get_custom_foods(
         search: str = "",
         start: int = 0,
