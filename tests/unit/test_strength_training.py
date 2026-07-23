@@ -364,6 +364,32 @@ def test_activity_start_prefers_gmt_and_treats_naive_value_as_utc():
     assert start.isoformat() == "2026-07-23T08:00:00+00:00"
 
 
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"activityId": 123}, 123),
+        ({"activity": {"activity_id": "456"}}, 456),
+        ({"results": [{"activityId": 789}]}, 789),
+        ({"activityId": 0}, None),
+        ({"activityId": True}, None),
+        ({"unrelatedId": 123}, None),
+    ],
+)
+def test_find_activity_id_handles_known_response_shapes(response, expected):
+    assert strength_training._find_activity_id(response) == expected
+
+
+def test_local_garmin_timestamp_drops_offset_without_changing_wall_clock():
+    value = datetime(
+        2026, 7, 23, 18, 5, 7, tzinfo=ZoneInfo("Europe/Warsaw")
+    )
+
+    assert (
+        strength_training._garmin_local_timestamp(value)
+        == "2026-07-23T18:05:07.000"
+    )
+
+
 def test_sets_must_fit_inside_known_activity_duration():
     activity_start = datetime(2026, 7, 23, 8, 0, tzinfo=ZoneInfo("UTC"))
     exercise_sets, _ = strength_training._prepare_strength_sets(
