@@ -10,7 +10,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 - List recent activities with pagination support
 - Get detailed activity information
-- Edit activities: name, type, description/notes, event type, perceived effort (RPE), and feel
+- Edit activities: name, type, description/notes, event type, perceived effort (RPE), feel, and structured strength sets
 - Access health metrics (steps, heart rate, sleep, stress, respiration)
 - View body composition data
 - Track training status and readiness
@@ -41,6 +41,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (3 tools) - list / upload GPX as course / delete course
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
+- ✅ Structured Strength Activities (1 tool) - safely replace and verify completed activity sets
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
@@ -59,6 +60,45 @@ Two tools let you download a raw activity file to disk:
 3. Persisted config set via `set_fit_download_dir`.
 
 **First-run behavior:** if no directory is configured, `download_activity_file` returns `status: "needs_setup"`. The assistant will ask where you want to save files (suggesting the current directory as default), call `set_fit_download_dir` to persist your choice, and then retry the download automatically.
+
+### Structured Strength Activity Sets
+
+`set_activity_strength_exercise_sets` replaces the complete set list on an
+existing, completed `strength_training` activity. It is separate from
+`create_strength_workout`, which creates a planned workout for a watch.
+
+Use `dry_run=true` first. English exercise names are normalized and matched
+directly against Garmin's public exercise catalog; ambiguous matches are
+rejected rather than guessed. The catalog exposes identifier keys, not
+localized display names, so the server intentionally does not maintain a
+language-specific alias table. Callers should translate localized input to
+English or pass exact Garmin identifiers. A real update requires `confirm=true`
+and is read back from Garmin for verification.
+
+```json
+{
+  "activity_id": "12345678901",
+  "sets": [
+    {
+      "exercise": "barbell bench press",
+      "sets": 3,
+      "repetitions": 10,
+      "weight_kg": 60,
+      "duration_seconds": 35,
+      "rest_seconds": 90
+    },
+    {
+      "set_type": "REST",
+      "duration_seconds": 90
+    }
+  ],
+  "dry_run": true
+}
+```
+
+For deterministic matching, pass exact Garmin identifiers instead:
+`{"category": "PUSH_UP", "name": "PUSH_UP"}`. `weight_kg` is converted to
+Garmin's internal unit only inside the server.
 
 ### Intentionally Skipped Endpoints
 
