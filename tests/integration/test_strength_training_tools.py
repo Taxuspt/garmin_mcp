@@ -34,6 +34,8 @@ def strength_client(monkeypatch):
         }
     )
     client.get_activity_exercise_sets = Mock(return_value={})
+    client.create_manual_activity = Mock(return_value={"activityId": 987654321})
+    client.delete_activity = Mock(return_value={})
     monkeypatch.setattr(
         strength_training, "_load_garmin_exercise_catalog", lambda: CATALOG
     )
@@ -313,3 +315,280 @@ async def test_exact_identifiers_work_when_catalog_fetch_fails(
     data = _data(result)
     assert data["success"] is True
     assert data["matches"][0]["match_type"] == "provided_unverified"
+
+
+@pytest.mark.asyncio
+async def test_create_strength_activity_dry_run_does_not_create_or_write(
+    strength_app, strength_client
+):
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [
+                {
+                    "exercise": "push up",
+                    "sets": 3,
+                    "repetitions": 10,
+                    "duration_seconds": 30,
+                    "rest_seconds": 60,
+                }
+            ],
+            "dry_run": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["dry_run"] is True
+    assert data["set_count"] == 3
+    assert data["preview"]["startTimeLocal"] == "2026-07-23T18:00:00.000"
+    assert data["preview"]["exerciseSets"][0]["startTime"] == (
+        "2026-07-23T16:00:00.0"
+    )
+    strength_client.create_manual_activity.assert_not_called()
+    strength_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_strength_activity_requires_confirmation(
+    strength_app, strength_client
+):
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert "confirm=true is required" in data["error"]
+    strength_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_create_attaches_sets_and_verifies(
+    strength_app, strength_client
+):
+    written_payload = {}
+
+    def capture_put(service, url, *, json, api):
+        written_payload.update(json)
+        assert service == "connectapi"
+        assert url == "/activity-service/activity/987654321/exerciseSets"
+        assert api is True
+        return {"accepted": True}
+
+    strength_client.client.put.side_effect = capture_put
+    strength_client.get_activity_exercise_sets.side_effect = (
+        lambda activity_id: written_payload
+    )
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [
+                {
+                    "exercise": "push up",
+                    "sets": 2,
+                    "repetitions": 12,
+                    "weight_kg": 5,
+                    "duration_seconds": 40,
+                    "rest_seconds": 80,
+                }
+            ],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["activity_created"] is True
+    assert data["verified"] is True
+    assert data["activity_id"] == 987654321
+    strength_client.create_manual_activity.assert_called_once_with(
+        start_datetime="2026-07-23T18:00:00.000",
+        time_zone="Europe/Warsaw",
+        type_key="strength_training",
+        distance_km=0.0,
+        duration_min=30.0,
+        activity_name="Upper Body",
+    )
+    assert written_payload["activityId"] == 987654321
+    assert len(written_payload["exerciseSets"]) == 2
+    strength_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_rolls_back_when_attaching_sets_fails(
+    strength_app, strength_client
+):
+    strength_client.client.put.side_effect = RuntimeError("write failed")
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["activity_created"] is True
+    assert data["rolled_back"] is True
+    assert "write failed" in data["error"]
+    strength_client.delete_activity.assert_called_once_with(987654321)
+
+
+@pytest.mark.asyncio
+async def test_create_reports_rollback_failure(
+    strength_app, strength_client
+):
+    strength_client.client.put.side_effect = RuntimeError("write failed")
+    strength_client.delete_activity.side_effect = RuntimeError("delete failed")
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["rolled_back"] is False
+    assert data["rollback_error"] == "delete failed"
+
+
+@pytest.mark.asyncio
+async def test_create_can_leave_incomplete_activity_when_rollback_disabled(
+    strength_app, strength_client
+):
+    strength_client.client.put.side_effect = RuntimeError("write failed")
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+            "rollback_on_failure": False,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["rolled_back"] is False
+    assert data["activity_id"] == 987654321
+    strength_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_rolls_back_when_readback_does_not_match(
+    strength_app, strength_client
+):
+    strength_client.get_activity_exercise_sets.return_value = {
+        "activityId": 987654321,
+        "exerciseSets": [],
+    }
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["rolled_back"] is True
+    assert "Read-back verification failed" in data["error"]
+    strength_client.delete_activity.assert_called_once_with(987654321)
+
+
+@pytest.mark.asyncio
+async def test_create_stops_when_garmin_response_has_no_activity_id(
+    strength_app, strength_client
+):
+    strength_client.create_manual_activity.return_value = {"accepted": True}
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert "without an activityId" in data["error"]
+    strength_client.client.put.assert_not_called()
+    strength_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"activity_name": "  "}, "non-empty"),
+        ({"duration_minutes": 0}, "at least"),
+        ({"time_zone": "Mars/Olympus"}, "Unknown IANA"),
+    ],
+)
+async def test_create_validates_activity_fields_before_mutation(
+    strength_app, strength_client, overrides, message
+):
+    arguments = {
+        "activity_name": "Upper Body",
+        "start_datetime": "2026-07-23T18:00:00",
+        "time_zone": "Europe/Warsaw",
+        "duration_minutes": 30,
+        "sets": [{"exercise": "push up"}],
+        "confirm": True,
+        **overrides,
+    }
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        arguments,
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert message in data["error"]
+    strength_client.create_manual_activity.assert_not_called()

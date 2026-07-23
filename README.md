@@ -41,7 +41,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (3 tools) - list / upload GPX as course / delete course
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
-- ✅ Structured Strength Activities (1 tool) - safely replace and verify completed activity sets
+- ✅ Structured Strength Activities (2 tools) - create completed strength activities or safely replace and verify their sets
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
@@ -99,6 +99,36 @@ and is read back from Garmin for verification.
 For deterministic matching, pass exact Garmin identifiers instead:
 `{"category": "PUSH_UP", "name": "PUSH_UP"}`. `weight_kg` is converted to
 Garmin's internal unit only inside the server.
+
+`create_strength_training_activity` uses the same validated set format to
+create a completed manual strength activity. It does not create a planned
+workout for a watch. The tool first creates the private activity, attaches its
+sets, and verifies them with a read-back. By default, a newly created activity
+is deleted again if attaching or verifying its sets fails.
+
+```json
+{
+  "activity_name": "Upper Body",
+  "start_datetime": "2026-07-23T18:00:00",
+  "time_zone": "Europe/Warsaw",
+  "duration_minutes": 30,
+  "sets": [
+    {
+      "exercise": "barbell bench press",
+      "sets": 3,
+      "repetitions": 10,
+      "weight_kg": 60,
+      "duration_seconds": 35,
+      "rest_seconds": 90
+    }
+  ],
+  "dry_run": true
+}
+```
+
+Change `dry_run` to `false` and pass `confirm=true` only after reviewing the
+preview. Set `rollback_on_failure=false` only when an incomplete activity
+should deliberately remain in Garmin for manual repair.
 
 ### Intentionally Skipped Endpoints
 

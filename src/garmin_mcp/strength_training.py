@@ -375,6 +375,10 @@ def _garmin_utc_timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0")
 
 
+def _garmin_local_timestamp(value: datetime) -> str:
+    return value.replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S.000")
+
+
 def _activity_type_key(activity: Dict[str, Any]) -> Optional[str]:
     for key in ("activityTypeDTO", "activityType"):
         value = activity.get(key)
@@ -727,6 +731,31 @@ def _response_summary(response: Any) -> Any:
     return {"status_code": status_code} if status_code is not None else str(response)
 
 
+def _find_activity_id(value: Any) -> Optional[int]:
+    """Find a positive activityId in the small response returned by Garmin."""
+    if isinstance(value, dict):
+        for key in ("activityId", "activity_id"):
+            candidate = value.get(key)
+            if isinstance(candidate, bool):
+                continue
+            try:
+                parsed = int(candidate)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+        for candidate in value.values():
+            found = _find_activity_id(candidate)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for candidate in value:
+            found = _find_activity_id(candidate)
+            if found is not None:
+                return found
+    return None
+
+
 def _replace_activity_strength_sets(
     activity_id: int,
     exercise_sets: List[Dict[str, Any]],
@@ -882,6 +911,168 @@ def register_tools(app):
                 {
                     "success": False,
                     "activity_id": str(activity_id),
+                    "error": str(exc),
+                }
+            )
+
+    @app.tool()
+    async def create_strength_training_activity(
+        activity_name: str,
+        start_datetime: str,
+        time_zone: str,
+        duration_minutes: float,
+        sets: List[Dict[str, Any]],
+        confirm: bool = False,
+        dry_run: bool = False,
+        rollback_on_failure: bool = True,
+    ) -> str:
+        """Create a completed manual strength activity with structured sets.
+
+        This creates an activity record, not a planned workout for a watch.
+        Use dry_run=true first to validate the exercise matches and complete
+        timeline without changing Garmin. A real create requires confirm=true.
+
+        The activity is created as private `strength_training`, then its full
+        exercise-set list is written and read back for verification. If the set
+        write or verification fails, rollback_on_failure=true removes the new
+        empty/incomplete activity.
+
+        Set fields are identical to set_activity_strength_exercise_sets:
+        exercise or exact category/name, sets, repetitions, weight_kg,
+        duration_seconds, rest_seconds, set_type, start_time, and offsets.
+
+        Args:
+            activity_name: Name shown in Garmin Connect
+            start_datetime: ISO local or timezone-aware activity start
+            time_zone: IANA time zone, e.g. Europe/Warsaw
+            duration_minutes: Positive activity duration in minutes
+            sets: Complete structured set specification
+            confirm: Must be true for a real create
+            dry_run: Validate and preview without changing Garmin
+            rollback_on_failure: Delete a newly created incomplete activity
+        """
+        created_activity_id: Optional[int] = None
+        activity_response: Any = None
+        matches: List[Dict[str, Any]] = []
+        try:
+            name = activity_name.strip()
+            if not name:
+                raise StrengthTrainingError(
+                    "activity_name must be a non-empty string"
+                )
+            duration = _finite_number(
+                duration_minutes,
+                "duration_minutes",
+                minimum=0.001,
+            )
+            if not dry_run and not confirm:
+                raise StrengthTrainingError(
+                    "confirm=true is required to create a Garmin activity"
+                )
+
+            local_start = _parse_local_datetime(
+                start_datetime,
+                time_zone,
+                "start_datetime",
+            )
+            exercise_sets, matches = _prepare_strength_sets(sets, local_start)
+            _validate_sets_within_activity(
+                {"summaryDTO": {"duration": duration * 60.0}},
+                local_start,
+                exercise_sets,
+            )
+            preview = {
+                "activityName": name,
+                "activityType": "strength_training",
+                "startTimeLocal": _garmin_local_timestamp(local_start),
+                "timeZone": time_zone,
+                "durationMinutes": duration,
+                "exerciseSets": _display_exercise_sets(exercise_sets),
+            }
+
+            if dry_run:
+                return _json_result(
+                    {
+                        "success": True,
+                        "dry_run": True,
+                        "set_count": len(exercise_sets),
+                        "matches": matches,
+                        "preview": preview,
+                        "warning": "No activity was created.",
+                    }
+                )
+
+            activity_response = garmin_client.create_manual_activity(
+                start_datetime=_garmin_local_timestamp(local_start),
+                time_zone=time_zone,
+                type_key="strength_training",
+                distance_km=0.0,
+                duration_min=duration,
+                activity_name=name,
+            )
+            created_activity_id = _find_activity_id(activity_response)
+            if created_activity_id is None:
+                raise StrengthTrainingError(
+                    "Garmin created an activity response without an activityId; "
+                    "structured sets could not be attached"
+                )
+
+            try:
+                write_response = _replace_activity_strength_sets(
+                    created_activity_id,
+                    exercise_sets,
+                )
+                readback = garmin_client.get_activity_exercise_sets(
+                    created_activity_id
+                )
+                verified, differences = _verify_exercise_sets(
+                    exercise_sets,
+                    readback,
+                )
+                if not verified:
+                    details = "; ".join(differences)
+                    raise StrengthTrainingError(
+                        "Read-back verification failed after creating the "
+                        f"activity: {details}"
+                    )
+            except Exception as attach_error:
+                failure = {
+                    "success": False,
+                    "activity_created": True,
+                    "activity_id": created_activity_id,
+                    "error": str(attach_error),
+                    "matches": matches,
+                }
+                if rollback_on_failure:
+                    try:
+                        garmin_client.delete_activity(created_activity_id)
+                        failure["rolled_back"] = True
+                    except Exception as rollback_error:
+                        failure["rolled_back"] = False
+                        failure["rollback_error"] = str(rollback_error)
+                else:
+                    failure["rolled_back"] = False
+                return _json_result(failure)
+
+            return _json_result(
+                {
+                    "success": True,
+                    "activity_created": True,
+                    "verified": True,
+                    "activity_id": created_activity_id,
+                    "set_count": len(exercise_sets),
+                    "matches": matches,
+                    "activity_response": _response_summary(activity_response),
+                    "set_write_response": _response_summary(write_response),
+                    "exercise_sets": readback,
+                }
+            )
+        except Exception as exc:
+            return _json_result(
+                {
+                    "success": False,
+                    "activity_id": created_activity_id,
+                    "activity_response": _response_summary(activity_response),
                     "error": str(exc),
                 }
             )
