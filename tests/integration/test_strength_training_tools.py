@@ -268,6 +268,40 @@ async def test_explicit_start_datetime_overrides_activity_timestamp(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "set_start_time",
+    [
+        "10:30",
+        "2026-07-23T10:30:00",
+    ],
+)
+async def test_local_set_time_uses_requested_zone_with_gmt_activity_start(
+    strength_app, set_start_time
+):
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [
+                {
+                    "exercise": "push up",
+                    "start_time": set_start_time,
+                    "duration_seconds": 30,
+                }
+            ],
+            "time_zone": "Europe/Warsaw",
+            "dry_run": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["preview"]["exerciseSets"][0]["startTime"] == (
+        "2026-07-23T08:30:00.0"
+    )
+
+
+@pytest.mark.asyncio
 async def test_set_timeline_cannot_extend_past_activity_duration(
     strength_app, strength_client
 ):
@@ -432,6 +466,54 @@ async def test_confirmed_create_attaches_sets_and_verifies(
 
 
 @pytest.mark.asyncio
+async def test_create_accepts_zero_readback_for_omitted_repetition_counts(
+    strength_app, strength_client
+):
+    written_payload = {}
+
+    def capture_put(service, url, *, json, api):
+        written_payload.update(json)
+        return {"accepted": True}
+
+    def readback_with_zero_repetitions(activity_id):
+        return {
+            "activityId": activity_id,
+            "exerciseSets": [
+                {
+                    **exercise_set,
+                    "repetitionCount": 0,
+                }
+                for exercise_set in written_payload["exerciseSets"]
+            ],
+        }
+
+    strength_client.client.put.side_effect = capture_put
+    strength_client.get_activity_exercise_sets.side_effect = (
+        readback_with_zero_repetitions
+    )
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [
+                {"exercise": "push up"},
+                {"set_type": "REST"},
+            ],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["verified"] is True
+    strength_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_rolls_back_when_attaching_sets_fails(
     strength_app, strength_client
 ):
@@ -557,8 +639,36 @@ async def test_create_stops_when_garmin_response_has_no_activity_id(
     data = _data(result)
     assert data["success"] is False
     assert "without an activityId" in data["error"]
+    assert data["activity_may_exist"] is True
+    assert data["manual_cleanup_may_be_required"] is True
+    assert "Check Garmin Connect" in data["warning"]
     strength_client.client.put.assert_not_called()
     strength_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_timezone_aware_start_datetime(
+    strength_app, strength_client
+):
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00+02:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "dry_run": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["preview"]["startTimeLocal"] == "2026-07-23T18:00:00.000"
+    assert data["preview"]["exerciseSets"][0]["startTime"] == (
+        "2026-07-23T16:00:00.0"
+    )
+    strength_client.create_manual_activity.assert_not_called()
 
 
 @pytest.mark.asyncio

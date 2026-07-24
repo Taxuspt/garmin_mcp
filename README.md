@@ -73,7 +73,8 @@ rejected rather than guessed. The catalog exposes identifier keys, not
 localized display names, so the server intentionally does not maintain a
 language-specific alias table. Callers should translate localized input to
 English or pass exact Garmin identifiers. A real update requires `confirm=true`
-and is read back from Garmin for verification.
+and is read back from Garmin for verification. Bare names that exist in more
+than one category require an exact `category`/`name` pair.
 
 ```json
 {

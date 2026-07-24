@@ -319,6 +319,37 @@ def test_readback_verification_accepts_garmin_bodyweight_normalisation():
     assert differences == []
 
 
+@pytest.mark.parametrize(
+    "set_spec",
+    [
+        {"exercise": "push up"},
+        {"set_type": "REST"},
+    ],
+)
+def test_readback_verification_accepts_zero_for_an_absent_repetition_count(
+    set_spec,
+):
+    expected, _ = strength_training._prepare_strength_sets(
+        [set_spec],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    readback = {
+        "exerciseSets": [
+            {
+                **expected[0],
+                "repetitionCount": 0,
+            }
+        ]
+    }
+
+    verified, differences = strength_training._verify_exercise_sets(
+        expected, readback
+    )
+
+    assert verified is True
+    assert differences == []
+
+
 def test_readback_verification_reports_material_differences():
     expected, _ = strength_training._prepare_strength_sets(
         [{"exercise": "push up", "repetitions": 12}],
@@ -349,7 +380,7 @@ def test_readback_verification_reports_material_differences():
     assert any("PUSH_UP/PUSH_UP" in difference for difference in differences)
 
 
-def test_activity_start_prefers_gmt_and_treats_naive_value_as_utc():
+def test_activity_start_prefers_gmt_and_represents_it_in_the_requested_zone():
     activity = {
         "summaryDTO": {
             "startTimeGMT": "2026-07-23T08:00:00.0",
@@ -361,7 +392,7 @@ def test_activity_start_prefers_gmt_and_treats_naive_value_as_utc():
         activity, None, "Europe/Warsaw"
     )
 
-    assert start.isoformat() == "2026-07-23T08:00:00+00:00"
+    assert start.isoformat() == "2026-07-23T10:00:00+02:00"
 
 
 @pytest.mark.parametrize(

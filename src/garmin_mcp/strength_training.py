@@ -308,13 +308,17 @@ def _non_negative_integer(
     return number
 
 
+def _zone_info(time_zone: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(time_zone)
+    except ZoneInfoNotFoundError as exc:
+        raise StrengthTrainingError(f"Unknown IANA time zone '{time_zone}'") from exc
+
+
 def _parse_local_datetime(value: Any, time_zone: str, field: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise StrengthTrainingError(f"{field} must be a non-empty ISO date-time")
-    try:
-        zone = ZoneInfo(time_zone)
-    except ZoneInfoNotFoundError as exc:
-        raise StrengthTrainingError(f"Unknown IANA time zone '{time_zone}'") from exc
+    zone = _zone_info(time_zone)
     try:
         parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError as exc:
@@ -403,7 +407,9 @@ def _activity_start(
 
     gmt_value = summary.get("startTimeGMT") or activity.get("startTimeGMT")
     if gmt_value:
-        return _parse_gmt_datetime(gmt_value, "activity startTimeGMT")
+        return _parse_gmt_datetime(
+            gmt_value, "activity startTimeGMT"
+        ).astimezone(_zone_info(time_zone))
 
     local_value = summary.get("startTimeLocal") or activity.get("startTimeLocal")
     if local_value:
@@ -486,6 +492,21 @@ def _prepare_strength_sets(
                 )
             match = None
 
+        if (
+            item.get("offset_seconds") not in (None, "")
+            and item.get("offset_minutes") not in (None, "")
+        ):
+            raise StrengthTrainingError(
+                f"sets[{index}] cannot specify both offset_seconds and offset_minutes"
+            )
+        if item.get("start_time") not in (None, "") and any(
+            item.get(field) not in (None, "")
+            for field in ("offset_seconds", "offset_minutes")
+        ):
+            raise StrengthTrainingError(
+                f"sets[{index}] cannot combine start_time with an offset"
+            )
+
         if item.get("start_time") not in (None, ""):
             first_start = _parse_set_start_time(
                 item["start_time"], activity_start
@@ -506,21 +527,6 @@ def _prepare_strength_sets(
             first_start = activity_start + timedelta(minutes=offset_minutes)
         else:
             first_start = cursor
-
-        if (
-            item.get("offset_seconds") not in (None, "")
-            and item.get("offset_minutes") not in (None, "")
-        ):
-            raise StrengthTrainingError(
-                f"sets[{index}] cannot specify both offset_seconds and offset_minutes"
-            )
-        if item.get("start_time") not in (None, "") and any(
-            item.get(field) not in (None, "")
-            for field in ("offset_seconds", "offset_minutes")
-        ):
-            raise StrengthTrainingError(
-                f"sets[{index}] cannot combine start_time with an offset"
-            )
 
         for repeat_index in range(repeat_count):
             set_start = first_start + timedelta(
@@ -653,6 +659,16 @@ def _weight_key(value: Any) -> Optional[float]:
     return None if number <= 0 else round(number, 3)
 
 
+def _repetition_key(value: Any) -> Any:
+    """Treat Garmin's zero and null encodings as the same absent count."""
+    if value is None:
+        return None
+    try:
+        return None if float(value) == 0 else value
+    except (TypeError, ValueError):
+        return value
+
+
 def _timestamp_key(value: Any) -> Optional[str]:
     if not isinstance(value, str) or not value:
         return None
@@ -690,7 +706,9 @@ def _verify_exercise_sets(
             )
         if not _numbers_equal(received.get("duration"), wanted.get("duration")):
             differences.append(f"{prefix}.duration differs")
-        if received.get("repetitionCount") != wanted.get("repetitionCount"):
+        if _repetition_key(received.get("repetitionCount")) != _repetition_key(
+            wanted.get("repetitionCount")
+        ):
             differences.append(f"{prefix}.repetitionCount differs")
         if _weight_key(received.get("weight")) != _weight_key(wanted.get("weight")):
             differences.append(f"{prefix}.weight differs")
@@ -953,6 +971,7 @@ def register_tools(app):
         """
         created_activity_id: Optional[int] = None
         activity_response: Any = None
+        create_request_completed = False
         matches: List[Dict[str, Any]] = []
         try:
             name = activity_name.strip()
@@ -1010,6 +1029,7 @@ def register_tools(app):
                 duration_min=duration,
                 activity_name=name,
             )
+            create_request_completed = True
             created_activity_id = _find_activity_id(activity_response)
             if created_activity_id is None:
                 raise StrengthTrainingError(
@@ -1068,13 +1088,24 @@ def register_tools(app):
                 }
             )
         except Exception as exc:
-            return _json_result(
-                {
-                    "success": False,
-                    "activity_id": created_activity_id,
-                    "activity_response": _response_summary(activity_response),
-                    "error": str(exc),
-                }
-            )
+            failure = {
+                "success": False,
+                "activity_id": created_activity_id,
+                "activity_response": _response_summary(activity_response),
+                "error": str(exc),
+            }
+            if create_request_completed and created_activity_id is None:
+                failure.update(
+                    {
+                        "activity_may_exist": True,
+                        "manual_cleanup_may_be_required": True,
+                        "warning": (
+                            "Garmin completed the create request without "
+                            "returning an activity ID. Check Garmin Connect for "
+                            "an incomplete activity."
+                        ),
+                    }
+                )
+            return _json_result(failure)
 
     return app
