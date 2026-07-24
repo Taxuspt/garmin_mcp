@@ -81,6 +81,11 @@ write or its read-back verification fails, it restores that list by default.
 Set `rollback_on_failure=false` only when the failed replacement should remain
 available for manual inspection.
 
+The top-level `sets` value is the list of set specifications. A `sets` field
+inside one specification is its repeat count; for example, `"sets": 3`
+expands that item into three identical sets. Returned set data uses
+`weightKg`, not Garmin's internal gram value.
+
 ```json
 {
   "activity_id": "12345678901",
@@ -110,7 +115,9 @@ Garmin's internal unit only inside the server.
 create a completed manual strength activity. It does not create a planned
 workout for a watch. The tool first creates the private activity, attaches its
 sets, and verifies them with a read-back. By default, a newly created activity
-is deleted again if attaching or verifying its sets fails.
+is deleted again if attaching or verifying its sets fails. Unlike the update
+tool, it requires `start_datetime` because no existing activity start is
+available to derive from Garmin.
 
 ```json
 {

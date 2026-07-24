@@ -171,6 +171,8 @@ async def test_confirmed_write_uses_exercise_sets_endpoint_and_verifies_readback
     assert data["success"] is True
     assert data["written"] is True
     assert data["verified"] is True
+    assert data["exercise_sets"][0]["weightKg"] == 5.0
+    assert "weight" not in data["exercise_sets"][0]
     assert written_payload["activityId"] == 12345678901
     assert len(written_payload["exerciseSets"]) == 2
     assert written_payload["exerciseSets"][0]["weight"] == 5000.0
@@ -393,6 +395,8 @@ async def test_readback_error_after_write_still_restores_previous_sets(
     assert data["written"] is True
     assert data["rolled_back"] is True
     assert data["error"] == "read-back unavailable"
+    assert data["rollback_exercise_sets"][0]["weightKg"] is None
+    assert "weight" not in data["rollback_exercise_sets"][0]
     assert strength_client.client.put.call_count == 2
 
 
@@ -602,6 +606,8 @@ async def test_confirmed_create_attaches_sets_and_verifies(
     assert data["activity_created"] is True
     assert data["verified"] is True
     assert data["activity_id"] == 987654321
+    assert data["exercise_sets"][0]["weightKg"] == 5.0
+    assert "weight" not in data["exercise_sets"][0]
     strength_client.create_manual_activity.assert_called_once_with(
         start_datetime="2026-07-23T18:00:00.000",
         time_zone="Europe/Warsaw",

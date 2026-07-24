@@ -14,7 +14,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from functools import lru_cache
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -76,12 +76,20 @@ def _catalog_pairs_from_payload(payload: Any) -> Tuple[Tuple[str, str], ...]:
     for category, category_payload in categories.items():
         if not isinstance(category_payload, dict):
             continue
+        try:
+            category_key = _normalise_identifier(category, "catalog category")
+        except StrengthTrainingError:
+            continue
         exercises = category_payload.get("exercises")
         if not isinstance(exercises, dict):
             continue
-        category_key = _normalise_identifier(category, "catalog category")
         for exercise_name in exercises:
-            name_key = _normalise_identifier(exercise_name, "catalog exercise name")
+            try:
+                name_key = _normalise_identifier(
+                    exercise_name, "catalog exercise name"
+                )
+            except StrengthTrainingError:
+                continue
             pairs.add((category_key, name_key))
 
     if not pairs:
@@ -148,12 +156,17 @@ def _exercise_suggestions(
     ]
 
 
-def _resolve_exercise_query(value: Any) -> Dict[str, Any]:
+def _resolve_exercise_query(
+    value: Any,
+    catalog_loader: Optional[
+        Callable[[], Tuple[Tuple[str, str], ...]]
+    ] = None,
+) -> Dict[str, Any]:
     if not isinstance(value, str) or not value.strip():
         raise StrengthTrainingError("exercise must be a non-empty string")
 
     query = _normalise_label(value)
-    catalog = _catalog_or_error()
+    catalog = (catalog_loader or _catalog_or_error)()
     exact = []
     for category, name in catalog:
         if query in {
@@ -204,10 +217,16 @@ def _resolve_exercise_query(value: Any) -> Dict[str, Any]:
     }
 
 
-def _resolve_exercise_spec(item: Dict[str, Any], index: int) -> Dict[str, Any]:
+def _resolve_exercise_spec(
+    item: Dict[str, Any],
+    index: int,
+    catalog_loader: Optional[
+        Callable[[], Tuple[Tuple[str, str], ...]]
+    ] = None,
+) -> Dict[str, Any]:
     exercise = item.get("exercise")
     if exercise not in (None, ""):
-        return _resolve_exercise_query(exercise)
+        return _resolve_exercise_query(exercise, catalog_loader)
 
     if item.get("category") in (None, "") or item.get("name") in (None, ""):
         raise StrengthTrainingError(
@@ -218,7 +237,7 @@ def _resolve_exercise_spec(item: Dict[str, Any], index: int) -> Dict[str, Any]:
     name = _normalise_identifier(item["name"], f"sets[{index}].name")
 
     try:
-        catalog = _load_garmin_exercise_catalog()
+        catalog = (catalog_loader or _catalog_or_error)()
     except Exception:
         # Exact identifiers remain usable when Garmin's public catalog endpoint
         # is temporarily unavailable. The activity endpoint remains authoritative.
@@ -440,6 +459,23 @@ def _prepare_strength_sets(
     matches: List[Dict[str, Any]] = []
     cursor = activity_start
     previous_end: Optional[datetime] = None
+    catalog_attempted = False
+    catalog_value: Optional[Tuple[Tuple[str, str], ...]] = None
+    catalog_failure: Optional[Exception] = None
+
+    def load_catalog_once() -> Tuple[Tuple[str, str], ...]:
+        nonlocal catalog_attempted, catalog_value, catalog_failure
+        if not catalog_attempted:
+            catalog_attempted = True
+            try:
+                catalog_value = _catalog_or_error()
+            except Exception as exc:
+                catalog_failure = exc
+        if catalog_failure is not None:
+            raise catalog_failure
+        if catalog_value is None:
+            raise StrengthTrainingError("Garmin exercise catalog is unavailable")
+        return catalog_value
 
     for index, raw_item in enumerate(set_specs):
         if not isinstance(raw_item, dict):
@@ -479,7 +515,7 @@ def _prepare_strength_sets(
         )
 
         if set_type == "ACTIVE":
-            match = _resolve_exercise_spec(item, index)
+            match = _resolve_exercise_spec(item, index, load_catalog_once)
             matches.append({**match, "input_index": index})
         else:
             if any(
@@ -643,6 +679,13 @@ def _extract_readback_sets(value: Any) -> Optional[List[Dict[str, Any]]]:
     return None
 
 
+def _display_readback_sets(value: Any) -> Optional[List[Dict[str, Any]]]:
+    exercise_sets = _extract_readback_sets(value)
+    if exercise_sets is None:
+        return None
+    return _display_exercise_sets(exercise_sets)
+
+
 def _numbers_equal(left: Any, right: Any, tolerance: float = 0.01) -> bool:
     if left is None or right is None:
         return left is None and right is None
@@ -660,6 +703,14 @@ def _weight_key(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return math.inf
     return None if number <= 0 else round(number, 3)
+
+
+def _weights_equal(left: Any, right: Any, tolerance_grams: float = 1.0) -> bool:
+    left_key = _weight_key(left)
+    right_key = _weight_key(right)
+    if left_key is None or right_key is None:
+        return left_key is None and right_key is None
+    return _numbers_equal(left_key, right_key, tolerance=tolerance_grams)
 
 
 def _repetition_key(value: Any) -> Any:
@@ -713,7 +764,7 @@ def _verify_exercise_sets(
             wanted.get("repetitionCount")
         ):
             differences.append(f"{prefix}.repetitionCount differs")
-        if _weight_key(received.get("weight")) != _weight_key(wanted.get("weight")):
+        if not _weights_equal(received.get("weight"), wanted.get("weight")):
             differences.append(f"{prefix}.weight differs")
         if _timestamp_key(received.get("startTime")) != _timestamp_key(
             wanted.get("startTime")
@@ -828,11 +879,14 @@ def register_tools(app):
         without writing. A real update requires confirm=true and is verified by
         reading the saved sets back from Garmin. Before writing, the existing
         sets are saved and restored by default if the write cannot be verified.
+        The activity start is normally read from Garmin;
+        activity_start_datetime is only an explicit override.
 
         Each item in sets may contain:
           - exercise: an English name matched against Garmin's catalog; or
           - category and name: exact Garmin catalog identifiers
-          - sets: number of identical sets to expand (default 1)
+          - sets: repeat count within this item (default 1); distinct from the
+            top-level sets list
           - repetitions: non-negative repetition count
           - weight_kg: external load in kilograms; omit for bodyweight
           - duration_seconds: set duration (default 30; REST default 90)
@@ -939,7 +993,7 @@ def register_tools(app):
                             "replacement_set_count": len(exercise_sets),
                             "matches": matches,
                             "api_response": _response_summary(response),
-                            "exercise_sets": readback,
+                            "exercise_sets": _display_readback_sets(readback),
                         }
                     )
                 failure = {
@@ -950,7 +1004,7 @@ def register_tools(app):
                     "replacement_set_count": len(exercise_sets),
                     "matches": matches,
                     "api_response": _response_summary(response),
-                    "exercise_sets": readback,
+                    "exercise_sets": _display_readback_sets(readback),
                     "verification_errors": differences,
                     "error": (
                         "Garmin accepted the update, but read-back "
@@ -966,7 +1020,7 @@ def register_tools(app):
                     "replacement_set_count": len(exercise_sets),
                     "matches": matches,
                     "api_response": _response_summary(response),
-                    "exercise_sets": readback,
+                    "exercise_sets": _display_readback_sets(readback),
                     "error": str(update_error),
                 }
                 if not write_completed:
@@ -994,7 +1048,9 @@ def register_tools(app):
                     failure["rollback_api_response"] = _response_summary(
                         rollback_response
                     )
-                    failure["rollback_exercise_sets"] = rollback_readback
+                    failure["rollback_exercise_sets"] = (
+                        _display_readback_sets(rollback_readback)
+                    )
                     if rollback_differences:
                         failure["rollback_verification_errors"] = (
                             rollback_differences
@@ -1030,6 +1086,8 @@ def register_tools(app):
         This creates an activity record, not a planned workout for a watch.
         Use dry_run=true first to validate the exercise matches and complete
         timeline without changing Garmin. A real create requires confirm=true.
+        start_datetime is required because a new activity has no stored start
+        time to derive from Garmin.
 
         The activity is created as private `strength_training`, then its full
         exercise-set list is written and read back for verification. If the set
@@ -1165,7 +1223,7 @@ def register_tools(app):
                     "matches": matches,
                     "activity_response": _response_summary(activity_response),
                     "set_write_response": _response_summary(write_response),
-                    "exercise_sets": readback,
+                    "exercise_sets": _display_readback_sets(readback),
                 }
             )
         except Exception as exc:

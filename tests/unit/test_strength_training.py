@@ -54,6 +54,28 @@ def test_catalog_parser_extracts_category_name_pairs():
     )
 
 
+def test_catalog_parser_skips_malformed_keys_and_keeps_valid_pairs():
+    payload = {
+        "categories": {
+            "PUSH_UP": {
+                "exercises": {
+                    "PUSH_UP": {},
+                    "BAD/EXERCISE": {},
+                },
+            },
+            "BAD/CATEGORY": {
+                "exercises": {
+                    "IGNORED_EXERCISE": {},
+                },
+            },
+        }
+    }
+
+    assert strength_training._catalog_pairs_from_payload(payload) == (
+        ("PUSH_UP", "PUSH_UP"),
+    )
+
+
 @pytest.mark.parametrize(
     ("query", "expected"),
     [
@@ -149,6 +171,32 @@ def test_exact_category_name_remains_available_when_catalog_is_down(monkeypatch)
     )
 
     assert match["match_type"] == "provided_unverified"
+
+
+def test_prepare_sets_attempts_failed_catalog_load_only_once(monkeypatch):
+    attempts = 0
+
+    def unavailable():
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(
+        strength_training, "_load_garmin_exercise_catalog", unavailable
+    )
+
+    payload, matches = strength_training._prepare_strength_sets(
+        [
+            {"category": "PUSH_UP", "name": "PUSH_UP"},
+            {"category": "PULL_UP", "name": "PULL_UP"},
+            {"category": "SQUAT", "name": "BARBELL_BACK_SQUAT"},
+        ],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert attempts == 1
+    assert len(payload) == 3
+    assert all(match["match_type"] == "provided_unverified" for match in matches)
 
 
 def test_unknown_exact_identifier_is_rejected_with_category_suggestions(
@@ -330,6 +378,28 @@ def test_readback_verification_accepts_garmin_bodyweight_normalisation():
                 ],
             }
         ],
+    }
+
+    verified, differences = strength_training._verify_exercise_sets(
+        expected, readback
+    )
+
+    assert verified is True
+    assert differences == []
+
+
+def test_readback_verification_accepts_subgram_weight_normalisation():
+    expected, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "push up", "weight_kg": 12.5}],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    readback = {
+        "exerciseSets": [
+            {
+                **expected[0],
+                "weight": 12500.75,
+            }
+        ]
     }
 
     verified, differences = strength_training._verify_exercise_sets(
