@@ -15,6 +15,23 @@ CATALOG = (
     ("SQUAT", "BARBELL_BACK_SQUAT"),
 )
 
+PREVIOUS_SET = {
+    "exercises": [
+        {
+            "category": "PULL_UP",
+            "name": "PULL_UP",
+            "probability": 100.0,
+        }
+    ],
+    "duration": 30.0,
+    "repetitionCount": 8,
+    "weight": -1.0,
+    "setType": "ACTIVE",
+    "startTime": "2026-07-23T08:00:00.0",
+    "wktStepIndex": None,
+    "messageIndex": None,
+}
+
 
 @pytest.fixture
 def strength_client(monkeypatch):
@@ -33,7 +50,12 @@ def strength_client(monkeypatch):
             },
         }
     )
-    client.get_activity_exercise_sets = Mock(return_value={})
+    client.get_activity_exercise_sets = Mock(
+        return_value={
+            "activityId": 12345678901,
+            "exerciseSets": [],
+        }
+    )
     client.create_manual_activity = Mock(return_value={"activityId": 987654321})
     client.delete_activity = Mock(return_value={})
     monkeypatch.setattr(
@@ -118,9 +140,13 @@ async def test_confirmed_write_uses_exercise_sets_endpoint_and_verifies_readback
         return {"accepted": True}
 
     strength_client.client.put.side_effect = capture_put
-    strength_client.get_activity_exercise_sets.side_effect = (
-        lambda activity_id: written_payload
-    )
+
+    def read_sets(activity_id):
+        if not written_payload:
+            return {"activityId": activity_id, "exerciseSets": []}
+        return written_payload
+
+    strength_client.get_activity_exercise_sets.side_effect = read_sets
 
     result = await strength_app.call_tool(
         "set_activity_strength_exercise_sets",
@@ -154,9 +180,8 @@ async def test_confirmed_write_uses_exercise_sets_endpoint_and_verifies_readback
     assert written_payload["exerciseSets"][1]["startTime"] == (
         "2026-07-23T08:02:00.0"
     )
-    strength_client.get_activity_exercise_sets.assert_called_once_with(
-        12345678901
-    )
+    assert strength_client.get_activity_exercise_sets.call_count == 2
+    strength_client.get_activity_exercise_sets.assert_called_with(12345678901)
 
 
 @pytest.mark.asyncio
@@ -221,7 +246,7 @@ async def test_invalid_exercise_prevents_write(
 
 
 @pytest.mark.asyncio
-async def test_readback_mismatch_is_reported_as_written_but_unverified(
+async def test_readback_mismatch_restores_previous_sets(
     strength_app, strength_client
 ):
     strength_client.get_activity_exercise_sets.return_value = {
@@ -242,8 +267,133 @@ async def test_readback_mismatch_is_reported_as_written_but_unverified(
     assert data["success"] is False
     assert data["written"] is True
     assert data["verified"] is False
+    assert data["rolled_back"] is True
+    assert data["previous_sets"] == []
     assert "read-back verification failed" in data["error"]
     assert "set count differs" in data["verification_errors"][0]
+    assert strength_client.client.put.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_update_aborts_when_previous_sets_cannot_be_saved(
+    strength_app, strength_client
+):
+    strength_client.get_activity_exercise_sets.return_value = {}
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [{"exercise": "push up", "repetitions": 10}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert "replacement was not attempted" in data["error"]
+    strength_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_update_returns_backup_when_rollback_is_disabled(
+    strength_app, strength_client
+):
+    strength_client.get_activity_exercise_sets.side_effect = [
+        {
+            "activityId": 12345678901,
+            "exerciseSets": [PREVIOUS_SET],
+        },
+        {
+            "activityId": 12345678901,
+            "exerciseSets": [],
+        },
+    ]
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [{"exercise": "push up", "repetitions": 10}],
+            "confirm": True,
+            "rollback_on_failure": False,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["rolled_back"] is False
+    assert data["previous_sets"][0]["exercises"][0]["name"] == "PULL_UP"
+    assert data["previous_sets"][0]["weightKg"] is None
+    strength_client.client.put.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_update_reports_rollback_failure(
+    strength_app, strength_client
+):
+    strength_client.get_activity_exercise_sets.side_effect = [
+        {
+            "activityId": 12345678901,
+            "exerciseSets": [PREVIOUS_SET],
+        },
+        {
+            "activityId": 12345678901,
+            "exerciseSets": [],
+        },
+    ]
+    strength_client.client.put.side_effect = [
+        {"accepted": True},
+        RuntimeError("restore failed"),
+    ]
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [{"exercise": "push up", "repetitions": 10}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["rolled_back"] is False
+    assert data["rollback_error"] == "restore failed"
+    assert data["previous_sets"][0]["repetitionCount"] == 8
+
+
+@pytest.mark.asyncio
+async def test_readback_error_after_write_still_restores_previous_sets(
+    strength_app, strength_client
+):
+    strength_client.get_activity_exercise_sets.side_effect = [
+        {
+            "activityId": 12345678901,
+            "exerciseSets": [PREVIOUS_SET],
+        },
+        RuntimeError("read-back unavailable"),
+        {
+            "activityId": 12345678901,
+            "exerciseSets": [PREVIOUS_SET],
+        },
+    ]
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [{"exercise": "push up", "repetitions": 10}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["written"] is True
+    assert data["rolled_back"] is True
+    assert data["error"] == "read-back unavailable"
+    assert strength_client.client.put.call_count == 2
 
 
 @pytest.mark.asyncio

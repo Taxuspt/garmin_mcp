@@ -273,16 +273,26 @@ def _finite_number(
     return number
 
 
+def _integer_value(value: Any, field: str, requirement: str) -> int:
+    error = f"{field} must be a {requirement}"
+    if isinstance(value, bool):
+        raise StrengthTrainingError(error)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
+        raise StrengthTrainingError(error)
+    if isinstance(value, str) and re.fullmatch(r"-?\d+", value.strip()):
+        return int(value)
+    raise StrengthTrainingError(error)
+
+
 def _positive_integer(value: Any, field: str, default: int = 1) -> int:
     if value in (None, ""):
         return default
-    if isinstance(value, bool):
-        raise StrengthTrainingError(f"{field} must be a positive integer")
-    try:
-        number = int(value)
-    except (TypeError, ValueError) as exc:
-        raise StrengthTrainingError(f"{field} must be a positive integer") from exc
-    if number <= 0 or str(number) != str(value).strip():
+    number = _integer_value(value, field, "positive integer")
+    if number <= 0:
         raise StrengthTrainingError(f"{field} must be a positive integer")
     return number
 
@@ -295,15 +305,8 @@ def _non_negative_integer(
 ) -> Optional[int]:
     if value in (None, "") and allow_none:
         return None
-    if isinstance(value, bool):
-        raise StrengthTrainingError(f"{field} must be a non-negative integer")
-    try:
-        number = int(value)
-    except (TypeError, ValueError) as exc:
-        raise StrengthTrainingError(
-            f"{field} must be a non-negative integer"
-        ) from exc
-    if number < 0 or str(number) != str(value).strip():
+    number = _integer_value(value, field, "non-negative integer")
+    if number < 0:
         raise StrengthTrainingError(f"{field} must be a non-negative integer")
     return number
 
@@ -816,13 +819,15 @@ def register_tools(app):
         time_zone: str = "UTC",
         confirm: bool = False,
         dry_run: bool = False,
+        rollback_on_failure: bool = True,
     ) -> str:
         """Replace all structured sets on a completed Garmin strength activity.
 
         This is a full replacement, not a partial patch. Use dry_run=true first
         to validate exercise matching, weights, repetitions, and timestamps
         without writing. A real update requires confirm=true and is verified by
-        reading the saved sets back from Garmin.
+        reading the saved sets back from Garmin. Before writing, the existing
+        sets are saved and restored by default if the write cannot be verified.
 
         Each item in sets may contain:
           - exercise: an English name matched against Garmin's catalog; or
@@ -848,6 +853,7 @@ def register_tools(app):
             time_zone: IANA zone for naive/local times (default UTC)
             confirm: Must be true for a write
             dry_run: Validate and preview without changing Garmin
+            rollback_on_failure: Restore the previous sets after a failed write
         """
         try:
             parsed_activity_id = _validate_activity_id(activity_id)
@@ -897,33 +903,108 @@ def register_tools(app):
                     }
                 )
 
-            response = _replace_activity_strength_sets(
-                parsed_activity_id,
-                exercise_sets,
-            )
-            readback = garmin_client.get_activity_exercise_sets(
+            previous_readback = garmin_client.get_activity_exercise_sets(
                 parsed_activity_id
             )
-            verified, differences = _verify_exercise_sets(
-                exercise_sets,
-                readback,
-            )
-            result = {
-                "success": verified,
-                "written": True,
-                "verified": verified,
-                "activity_id": parsed_activity_id,
-                "replacement_set_count": len(exercise_sets),
-                "matches": matches,
-                "api_response": _response_summary(response),
-                "exercise_sets": readback,
-            }
-            if differences:
-                result["verification_errors"] = differences
-                result["error"] = (
-                    "Garmin accepted the update, but read-back verification failed"
+            previous_sets = _extract_readback_sets(previous_readback)
+            if previous_sets is None:
+                raise StrengthTrainingError(
+                    "Could not save the activity's current exercise sets; "
+                    "the replacement was not attempted"
                 )
-            return _json_result(result)
+
+            write_completed = False
+            response: Any = None
+            readback: Any = None
+            try:
+                response = _replace_activity_strength_sets(
+                    parsed_activity_id,
+                    exercise_sets,
+                )
+                write_completed = True
+                readback = garmin_client.get_activity_exercise_sets(
+                    parsed_activity_id
+                )
+                verified, differences = _verify_exercise_sets(
+                    exercise_sets,
+                    readback,
+                )
+                if verified:
+                    return _json_result(
+                        {
+                            "success": True,
+                            "written": True,
+                            "verified": True,
+                            "activity_id": parsed_activity_id,
+                            "replacement_set_count": len(exercise_sets),
+                            "matches": matches,
+                            "api_response": _response_summary(response),
+                            "exercise_sets": readback,
+                        }
+                    )
+                failure = {
+                    "success": False,
+                    "written": True,
+                    "verified": False,
+                    "activity_id": parsed_activity_id,
+                    "replacement_set_count": len(exercise_sets),
+                    "matches": matches,
+                    "api_response": _response_summary(response),
+                    "exercise_sets": readback,
+                    "verification_errors": differences,
+                    "error": (
+                        "Garmin accepted the update, but read-back "
+                        "verification failed"
+                    ),
+                }
+            except Exception as update_error:
+                failure = {
+                    "success": False,
+                    "written": write_completed,
+                    "verified": False,
+                    "activity_id": parsed_activity_id,
+                    "replacement_set_count": len(exercise_sets),
+                    "matches": matches,
+                    "api_response": _response_summary(response),
+                    "exercise_sets": readback,
+                    "error": str(update_error),
+                }
+                if not write_completed:
+                    failure["write_status"] = (
+                        "unknown because the replacement request raised an error"
+                    )
+
+            failure["previous_sets"] = _display_exercise_sets(previous_sets)
+            if rollback_on_failure:
+                try:
+                    rollback_response = _replace_activity_strength_sets(
+                        parsed_activity_id,
+                        previous_sets,
+                    )
+                    rollback_readback = (
+                        garmin_client.get_activity_exercise_sets(
+                            parsed_activity_id
+                        )
+                    )
+                    restored, rollback_differences = _verify_exercise_sets(
+                        previous_sets,
+                        rollback_readback,
+                    )
+                    failure["rolled_back"] = restored
+                    failure["rollback_api_response"] = _response_summary(
+                        rollback_response
+                    )
+                    failure["rollback_exercise_sets"] = rollback_readback
+                    if rollback_differences:
+                        failure["rollback_verification_errors"] = (
+                            rollback_differences
+                        )
+                except Exception as rollback_error:
+                    failure["rolled_back"] = False
+                    failure["rollback_error"] = str(rollback_error)
+            else:
+                failure["rolled_back"] = False
+            return _json_result(failure)
         except Exception as exc:
             return _json_result(
                 {

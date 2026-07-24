@@ -76,6 +76,11 @@ English or pass exact Garmin identifiers. A real update requires `confirm=true`
 and is read back from Garmin for verification. Bare names that exist in more
 than one category require an exact `category`/`name` pair.
 
+Before a confirmed replacement, the tool saves the current set list. If the
+write or its read-back verification fails, it restores that list by default.
+Set `rollback_on_failure=false` only when the failed replacement should remain
+available for manual inspection.
+
 ```json
 {
   "activity_id": "12345678901",

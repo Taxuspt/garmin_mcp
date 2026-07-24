@@ -91,17 +91,20 @@ def test_catalog_exact_match(monkeypatch):
     assert match["match_type"] == "catalog_exact"
 
 
-def test_ambiguous_catalog_name_is_rejected(monkeypatch):
+def test_common_name_in_multiple_catalog_categories_is_rejected(monkeypatch):
     monkeypatch.setattr(
         strength_training,
         "_load_garmin_exercise_catalog",
-        lambda: (("ROW", "GENERIC_MOVEMENT"), ("CORE", "GENERIC_MOVEMENT")),
+        lambda: (("PUSH_UP", "PUSH_UP"), ("SUSPENSION", "PUSH_UP")),
     )
 
     with pytest.raises(
         strength_training.StrengthTrainingError, match="ambiguous"
-    ):
-        strength_training._resolve_exercise_query("generic movement")
+    ) as exc:
+        strength_training._resolve_exercise_query("push up")
+
+    assert "PUSH_UP/PUSH_UP" in str(exc.value)
+    assert "SUSPENSION/PUSH_UP" in str(exc.value)
 
 
 def test_low_confidence_match_returns_candidates_instead_of_guessing(monkeypatch):
@@ -209,6 +212,22 @@ def test_prepare_sets_expands_repeats_and_converts_kg_and_time_zone():
     assert payload[2]["weight"] is None
 
 
+def test_integral_float_set_and_repetition_counts_are_accepted():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "sets": 2.0,
+                "repetitions": 10.0,
+            }
+        ],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert len(payload) == 2
+    assert all(item["repetitionCount"] == 10 for item in payload)
+
+
 def test_bodyweight_is_encoded_as_unset_weight():
     payload, _ = strength_training._prepare_strength_sets(
         [{"exercise": "push up", "repetitions": 12}],
@@ -257,7 +276,9 @@ def test_out_of_order_or_overlapping_sets_are_rejected():
     ("spec", "message"),
     [
         ({"exercise": "push up", "sets": 0}, "positive integer"),
+        ({"exercise": "push up", "sets": 1.5}, "positive integer"),
         ({"exercise": "push up", "repetitions": -1}, "non-negative"),
+        ({"exercise": "push up", "repetitions": 2.5}, "non-negative"),
         ({"exercise": "push up", "weight_kg": -1}, "at least 0"),
         ({"exercise": "push up", "duration_seconds": 0}, "at least"),
         ({"exercise": "push up", "set_type": "WARMUP"}, "ACTIVE or REST"),
