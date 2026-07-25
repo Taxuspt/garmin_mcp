@@ -223,19 +223,23 @@ def build_z2_walk_json(
     }
 
 
-# Simplified internal exercise catalog (English → Garmin exerciseName key or fallback)
-# Garmin strength workouts use exerciseName as a free-text label when the exercise
-# is not in their catalog. For structured strength, we use "Other" (generic) and
-# put the user name in description / exerciseName.
-
 def build_strength_json(
     name: str,
     exercises: List[Dict[str, Any]],
 ) -> dict:
     """Build the Garmin Connect JSON for a strength workout.
 
-    Each exercise maps to a generic step; if the name is not recognised in the
-    Garmin catalog we use 'Other' and put the original name in exerciseName.
+    Each exercise becomes a reps-based work step. The name is preserved in the step
+    "description", which is what survives the round trip. It is also sent as
+    "exerciseName", but Garmin only retains that when it matches one of its own
+    exercise keys (e.g. "FARMERS_CARRY"); any other value is accepted and then
+    stored as an empty string.
+
+    "category" is optional and only emitted when the caller supplies one, uppercased
+    and otherwise passed through untouched. Garmin validates it against its own enum
+    and rejects anything outside it, including "UNASSIGNED" and "OTHER"; omitting the
+    key is accepted. Valid values come from Garmin's published catalog:
+    https://connect.garmin.com/web-data/exercises/Exercises.json
     """
     steps: List[dict] = []
     step_order = 1
@@ -247,7 +251,7 @@ def build_strength_json(
         rest_seconds = int(ex.get("rest_seconds", 60))
 
         # Work step
-        steps.append({
+        step = {
             "type": "ExecutableStepDTO",
             "stepOrder": step_order,
             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
@@ -255,9 +259,21 @@ def build_strength_json(
             "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
             "endConditionValue": float(reps),
             "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
-            "category": "UNASSIGNED",
             "exerciseName": ex_name,
-        })
+        }
+
+        # Only set when the caller asked for it: Garmin rejects values outside its own
+        # enum, and an absent category is accepted, so an unknown one stays absent
+        # rather than being guessed into a wrong record.
+        category = ex.get("category")
+        if category is not None:
+            if not isinstance(category, str) or not category.strip():
+                raise ValueError(
+                    f"category for exercise {ex_name!r} must be a non-empty string"
+                )
+            step["category"] = category.strip().upper()
+
+        steps.append(step)
         step_order += 1
 
         # Rest step (skip after last exercise)
@@ -426,12 +442,19 @@ def register_tools(app):
     ) -> str:
         """Create a strength workout and upload it to Garmin Connect.
 
-        Each exercise is mapped to a generic step; unsupported names fallback to
-        "Other" with the original name stored in exerciseName.
+        Each exercise becomes a reps-based step. The name is kept in the step
+        description; it is also sent as exerciseName, which Garmin only retains when
+        it matches one of its own exercise keys (e.g. "FARMERS_CARRY").
 
         Args:
             name: Workout name
-            exercises: List of dicts with keys: name, sets, reps, rest_seconds
+            exercises: List of dicts with keys: name, sets, reps, rest_seconds and an
+                optional category. Category is omitted from the payload when not
+                given; Garmin accepts that. When given it must be one of Garmin's
+                exercise categories (e.g. SQUAT, DEADLIFT, PUSH_UP, CARRY, SLED) —
+                anything else, including "UNASSIGNED" and "OTHER", is rejected with
+                400 Invalid category. Full list:
+                https://connect.garmin.com/web-data/exercises/Exercises.json
         """
         try:
             workout_json = build_strength_json(name=name, exercises=exercises)

@@ -138,7 +138,16 @@ Returns: `{"status": "success", "workout_id": 1234567890, ...}`
 
 ### `create_strength_workout`
 
-Creates a strength workout from a list of exercises. Unknown names fall back to a generic step with the original name preserved.
+Creates a strength workout from a list of exercises. Each becomes a reps-based step, with the
+name kept in the step description. The name is also sent as `exerciseName`, but Garmin only
+retains that when it matches one of its own exercise keys (e.g. `FARMERS_CARRY`) — any other
+value is accepted and then stored empty.
+
+`category` is optional and passed straight through. Omit it and the key is left out of the
+payload entirely, which Garmin accepts. Supply it and it must be one of Garmin's exercise
+categories — anything else, including `OTHER` and `UNASSIGNED`, is rejected with
+`400 - Invalid category`. The full list is published at
+[`Exercises.json`](https://connect.garmin.com/web-data/exercises/Exercises.json).
 
 ```json
 {
@@ -146,7 +155,8 @@ Creates a strength workout from a list of exercises. Unknown names fall back to 
   "exercises": [
     {"name": "Sentadillas", "sets": 3, "reps": 12, "rest_seconds": 90},
     {"name": "Flexiones",   "sets": 3, "reps": 15, "rest_seconds": 60},
-    {"name": "Peso muerto", "sets": 3, "reps": 10, "rest_seconds": 90}
+    {"name": "Peso muerto", "sets": 3, "reps": 10, "rest_seconds": 90},
+    {"name": "Farmers Carry 40m", "sets": 3, "reps": 1, "rest_seconds": 90, "category": "CARRY"}
   ]
 }
 ```
