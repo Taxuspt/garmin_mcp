@@ -263,6 +263,24 @@ For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
   "zoneNumber": 3
 }
 ```
+
+Running pace ranges use target type ID `6` with `pace.zone`. The values are
+speeds in metres per second, in Garmin's pace order: the faster (higher) speed
+goes in `targetValueOne`, and the slower (lower) speed in `targetValueTwo`.
+`upload_workout` and `upload_workouts` normalize reversed running bounds before
+upload.
+
+```json
+{
+  "targetType": {
+    "workoutTargetTypeId": 6,
+    "workoutTargetTypeKey": "pace.zone"
+  },
+  "targetValueOne": 4.878,
+  "targetValueTwo": 4.651
+}
+```
+
 ## One-click Install (Claude Desktop)
 
 The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop Extension file — no JSON editing required.

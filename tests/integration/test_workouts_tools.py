@@ -516,6 +516,214 @@ async def test_upload_workout_accepts_custom_hr_range(app_with_workouts, mock_ga
 
 
 @pytest.mark.asyncio
+async def test_upload_workout_normalizes_running_pace_bounds(
+    app_with_workouts, mock_garmin_client
+):
+    """Running pace ranges use Garmin's fast-to-slow speed ordering."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 123462,
+        "workoutName": "Running Pace Range",
+    }
+    pace_target = {
+        "workoutTargetTypeId": 6,
+        "workoutTargetTypeKey": "pace.zone",
+    }
+    distance_step = _timed_interval_step(pace_target)
+    distance_step["endCondition"] = {
+        "conditionTypeId": 3,
+        "conditionTypeKey": "distance",
+    }
+    distance_step["endConditionValue"] = 400
+    distance_step["targetValueOne"] = 4.651
+    distance_step["targetValueTwo"] = 4.878
+
+    time_step = _timed_interval_step(pace_target)
+    time_step["stepOrder"] = 2
+    time_step["endConditionValue"] = 1500
+    time_step["targetValueOne"] = 4.878
+    time_step["targetValueTwo"] = 4.651
+    workout_data = _running_workout_with_steps(
+        [distance_step, time_step],
+        name="Running Pace Range",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    assert result is not None
+    called_steps = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"]
+    assert called_steps[0]["targetValueOne"] == 4.878
+    assert called_steps[0]["targetValueTwo"] == 4.651
+    assert called_steps[1]["targetValueOne"] == 4.878
+    assert called_steps[1]["targetValueTwo"] == 4.651
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_normalizes_nested_running_pace_bounds(
+    app_with_workouts, mock_garmin_client
+):
+    """Pace normalization reaches intervals nested in repeat groups."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 123463,
+        "workoutName": "Nested Running Pace Range",
+    }
+    interval = _timed_interval_step(
+        {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+    )
+    interval["targetValueOne"] = 4.651
+    interval["targetValueTwo"] = 4.878
+    workout_data = _running_workout_with_steps(
+        [{
+            "type": "RepeatGroupDTO",
+            "stepOrder": 1,
+            "numberOfIterations": 2,
+            "endCondition": {
+                "conditionTypeId": 7,
+                "conditionTypeKey": "iterations",
+            },
+            "workoutSteps": [interval],
+        }],
+        name="Nested Running Pace Range",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    assert result is not None
+    called_interval = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]["workoutSteps"][0]
+    assert called_interval["targetValueOne"] == 4.878
+    assert called_interval["targetValueTwo"] == 4.651
+
+
+@pytest.mark.parametrize(
+    "target_fields",
+    [
+        {"zoneNumber": 4},
+        {"targetValueOne": 4.651},
+        {"targetValueOne": 4.651, "targetValueTwo": None},
+        {"targetValueOne": "4.651", "targetValueTwo": "4.878"},
+        {"targetValueOne": 4.651, "targetValueTwo": 4.651},
+    ],
+)
+@pytest.mark.asyncio
+async def test_upload_workout_leaves_non_range_pace_targets_unchanged(
+    app_with_workouts, mock_garmin_client, target_fields
+):
+    """Incomplete, zone, non-numeric, and equal pace targets are not rewritten."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 123464,
+        "workoutName": "Non-range Running Pace Target",
+    }
+    step = _timed_interval_step(
+        {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+    )
+    step.pop("targetValueOne")
+    step.pop("targetValueTwo")
+    step.update(target_fields)
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Non-range Running Pace Target",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    assert result is not None
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    for field, value in target_fields.items():
+        assert called_step[field] == value
+
+
+@pytest.mark.parametrize(
+    ("workout_sport", "segment_sport", "expected_values"),
+    [
+        ("running", None, (4.651, 4.878)),
+        (
+            {"sportTypeId": 1, "sportTypeKey": "running"},
+            "running",
+            (4.878, 4.651),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_upload_workout_tolerates_non_object_sport_type(
+    app_with_workouts,
+    mock_garmin_client,
+    workout_sport,
+    segment_sport,
+    expected_values,
+):
+    """Malformed sportType values retain the pre-normalizer upload behavior."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 123465,
+        "workoutName": "Malformed Sport Type",
+    }
+    step = _timed_interval_step(
+        {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+    )
+    step["targetValueOne"] = 4.651
+    step["targetValueTwo"] = 4.878
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Malformed Sport Type",
+    )
+    workout_data["sportType"] = workout_sport
+    if segment_sport is None:
+        workout_data["workoutSegments"][0].pop("sportType")
+    else:
+        workout_data["workoutSegments"][0]["sportType"] = segment_sport
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    assert result is not None
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert (
+        called_step["targetValueOne"],
+        called_step["targetValueTwo"],
+    ) == expected_values
+
+
+@pytest.mark.asyncio
+async def test_rejected_upload_does_not_normalize_running_pace_bounds(
+    app_with_workouts, mock_garmin_client
+):
+    """Validation happens before normalization mutates the caller's payload."""
+    step = _timed_interval_step(
+        {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "pace.zone"}
+    )
+    step["targetValueOne"] = 4.651
+    step["targetValueTwo"] = 4.878
+    workout_data = _running_workout_with_steps([step], name="Invalid Pace Target")
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    assert "targetType mismatch" in result[0][0].text
+    assert step["targetValueOne"] == 4.651
+    assert step["targetValueTwo"] == 4.878
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_upload_workout_rejects_nested_end_condition_mismatch(
     app_with_workouts, mock_garmin_client
 ):
@@ -645,6 +853,8 @@ async def test_upload_workout_accepts_secondary_target_type_with_null_primary(
     called_step = called_data["workoutSegments"][0]["workoutSteps"][0]
     assert called_step["targetType"] is None
     assert called_step["secondaryTargetType"]["workoutTargetTypeKey"] == "pace.zone"
+    assert called_step["secondaryTargetValueOne"] == 0.45
+    assert called_step["secondaryTargetValueTwo"] == 0.6916667
 
     result_data = json_module.loads(result[0][0].text)
     assert result_data["status"] == "success"
@@ -1247,6 +1457,35 @@ async def test_upload_workouts_single(app_with_workouts, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_upload_workouts_normalizes_running_pace_bounds(
+    app_with_workouts, mock_garmin_client
+):
+    """Batch uploads apply the same running pace normalization."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 112,
+        "workoutName": "Batch Pace Range",
+    }
+    step = _timed_interval_step(
+        {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+    )
+    step["targetValueOne"] = 4.651
+    step["targetValueTwo"] = 4.878
+    workout = _running_workout_with_steps([step], name="Batch Pace Range")
+
+    result = await app_with_workouts.call_tool(
+        "upload_workouts",
+        {"workouts": [workout]},
+    )
+
+    assert result is not None
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert called_step["targetValueOne"] == 4.878
+    assert called_step["targetValueTwo"] == 4.651
+
+
+@pytest.mark.asyncio
 async def test_upload_workouts_multiple(app_with_workouts, mock_garmin_client):
     """Test upload_workouts with multiple workouts"""
     import json as json_module
@@ -1623,7 +1862,12 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
     schedule_response.status_code = 200
     mock_garmin_client.client.post.return_value = schedule_response
 
-    inline_data = {"workoutName": "Easy Run", "sportType": {"sportTypeId": 1, "sportTypeKey": "running"}}
+    pace_step = _timed_interval_step(
+        {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"}
+    )
+    pace_step["targetValueOne"] = 4.651
+    pace_step["targetValueTwo"] = 4.878
+    inline_data = _running_workout_with_steps([pace_step], name="Easy Run")
     result = await app_with_workouts.call_tool(
         "schedule_workouts",
         {"schedules": [{"workout_data": inline_data, "calendar_date": "2024-02-01"}]}
@@ -1640,6 +1884,11 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
     assert entry["scheduled_date"] == "2024-02-01"
     assert entry["workout_name"] == "Easy Run"
     mock_garmin_client.upload_workout.assert_called_once_with(inline_data)
+    uploaded_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert uploaded_step["targetValueOne"] == 4.878
+    assert uploaded_step["targetValueTwo"] == 4.651
     mock_garmin_client.client.post.assert_called_once_with(
         "connectapi", "workout-service/schedule/999001", json={"date": "2024-02-01"}
     )

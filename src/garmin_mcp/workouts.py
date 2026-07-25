@@ -120,6 +120,53 @@ def _fix_repeat_group_step(step: dict) -> None:
         _fix_repeat_group_step(nested)
 
 
+def _normalize_running_pace_target_step(step: dict) -> None:
+    """Put running pace bounds in Garmin's native fast-to-slow order.
+
+    Garmin represents running pace ranges as speed in metres per second, but
+    unlike ordinary numeric ranges it expects the faster (larger) speed in
+    targetValueOne and the slower (smaller) speed in targetValueTwo.
+    Garmin-authored running workouts consistently use this canonical order.
+    """
+    target_type = step.get('targetType')
+    if (
+        isinstance(target_type, dict)
+        and target_type.get('workoutTargetTypeKey') == 'pace.zone'
+    ):
+        value_one = step.get('targetValueOne')
+        value_two = step.get('targetValueTwo')
+        if (
+            isinstance(value_one, (int, float))
+            and not isinstance(value_one, bool)
+            and isinstance(value_two, (int, float))
+            and not isinstance(value_two, bool)
+            and value_one < value_two
+        ):
+            step['targetValueOne'], step['targetValueTwo'] = value_two, value_one
+
+    for nested in step.get('workoutSteps', []):
+        _normalize_running_pace_target_step(nested)
+
+
+def _sport_type_key(container: dict) -> Optional[str]:
+    """Return a workout sport key without assuming Garmin's nested shape."""
+    sport_type = container.get('sportType')
+    if not isinstance(sport_type, dict):
+        return None
+    return sport_type.get('sportTypeKey')
+
+
+def _normalize_running_pace_targets(workout_data: dict) -> None:
+    """Normalize primary pace targets in running segments before upload."""
+    workout_sport = _sport_type_key(workout_data)
+    for segment in workout_data.get('workoutSegments', []):
+        segment_sport = _sport_type_key(segment)
+        if (segment_sport or workout_sport) != 'running':
+            continue
+        for step in segment.get('workoutSteps', []):
+            _normalize_running_pace_target_step(step)
+
+
 def _fix_hr_zone_steps(workout_data: dict) -> None:
     """Walk all workout steps and fix HR zone target mistakes."""
     for segment in workout_data.get('workoutSegments', []):
@@ -615,7 +662,12 @@ def register_tools(app):
         - Custom HR range (e.g. 105-143 bpm): set targetType to "heart.rate.zone" and use
           "targetValueOne" (low bpm) / "targetValueTwo" (high bpm). Do NOT set "zoneNumber".
           This matches Garmin Connect's "Custom" heart rate target.
-        For non-HR targets (pace, power, cadence), use targetValueOne/targetValueTwo directly.
+        Running pace targets use primary targetType/targetValueOne/targetValueTwo.
+        The values are speeds in metres per second. Garmin's native order is
+        targetValueOne=fast (higher m/s), targetValueTwo=slow (lower m/s);
+        reversed input is normalized automatically before upload. Swimming pace
+        targets use the secondaryTargetType/secondaryTargetValueOne/
+        secondaryTargetValueTwo fields and are not changed by this normalization.
 
         Note: a safety check converts targetValueOne 1-5 to zoneNumber when zoneNumber is missing,
         to catch the common mistake of putting a zone index in targetValueOne. Typical bpm values
@@ -712,6 +764,7 @@ def register_tools(app):
             _fix_hr_zone_steps(workout_data)
             _validate_end_condition_steps(workout_data)
             _validate_target_type_steps(workout_data)
+            _normalize_running_pace_targets(workout_data)
 
             # Pass dict directly - library handles conversion
             result = garmin_client.upload_workout(workout_data)
@@ -749,6 +802,10 @@ def register_tools(app):
         IMPORTANT: For named heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
         For custom heart-rate ranges, use targetType {"workoutTargetTypeId": 4,
         "workoutTargetTypeKey": "heart.rate.zone"} with targetValueOne/targetValueTwo.
+        For running pace ranges, use primary targetType "pace.zone" with
+        targetValueOne=fast (higher m/s) and targetValueTwo=slow (lower m/s).
+        Reversed running pace bounds are normalized automatically. Swimming pace
+        targets use secondaryTargetType/secondaryTargetValueOne/secondaryTargetValueTwo.
         For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
         For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
         with targetValueOne (low watts) and targetValueTwo (high watts).
@@ -767,6 +824,7 @@ def register_tools(app):
                 _fix_hr_zone_steps(workout_data)
                 _validate_end_condition_steps(workout_data)
                 _validate_target_type_steps(workout_data)
+                _normalize_running_pace_targets(workout_data)
                 result = garmin_client.upload_workout(workout_data)
                 if isinstance(result, dict):
                     entry = {
@@ -1082,6 +1140,7 @@ def register_tools(app):
                     _fix_hr_zone_steps(workout_data)
                     _validate_end_condition_steps(workout_data)
                     _validate_target_type_steps(workout_data)
+                    _normalize_running_pace_targets(workout_data)
                     upload_result = garmin_client.upload_workout(workout_data)
                     if not isinstance(upload_result, dict) or upload_result.get('workoutId') is None:
                         results.append({
