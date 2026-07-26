@@ -647,6 +647,60 @@ def register_tools(app):
             return f"Error retrieving workouts: {str(e)}"
 
     @app.tool()
+    async def get_exercise_types(category: Optional[str] = None) -> str:
+        """List Garmin's strength-exercise catalog for building strength workouts.
+
+        Returns the valid `category` and `exerciseName` keys accepted by
+        upload_workout / create_strength_workout, with each exercise's display
+        name. (Target muscles and equipment are omitted — the model can infer
+        those from the exercise name.)
+
+        Call with no argument first to get the list of categories (with exercise
+        counts), then pass a specific category to get its exercises — the full
+        catalog is large (~1500 exercises), so it is only expanded per category.
+
+        Backed by the bundled catalog in `garminconnect.exercises`.
+
+        Args:
+            category: Category key (e.g. "BENCH_PRESS", case-insensitive). Omit
+                to list all categories.
+        """
+        try:
+            from garminconnect import exercises as gc_exercises
+
+            if category is None:
+                counts: dict[str, int] = {}
+                for entry in gc_exercises.EXERCISES:
+                    key = entry["category"]
+                    counts[key] = counts.get(key, 0) + 1
+                curated = {
+                    "count": len(gc_exercises.CATEGORIES),
+                    "categories": [
+                        {"key": key, "exercise_count": counts.get(key, 0)}
+                        for key in gc_exercises.CATEGORIES
+                    ],
+                    "hint": "Call get_exercise_types(category=<key>) for a category's exercises.",
+                }
+                return json.dumps(curated, indent=2)
+
+            key = category.upper()
+            if key not in gc_exercises.CATEGORIES:
+                return f"Error retrieving exercise types: unknown category '{category}'"
+            exercises = [
+                {"exercise_name": e["exercise"], "display_name": e["name"]}
+                for e in gc_exercises.EXERCISES
+                if e["category"] == key
+            ]
+            curated = {
+                "category": key,
+                "count": len(exercises),
+                "exercises": exercises,
+            }
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving exercise types: {str(e)}"
+
+    @app.tool()
     async def get_workout_by_id(workout_id: Union[int, str]) -> str:
         """Get detailed information for a specific workout
 
@@ -845,6 +899,38 @@ def register_tools(app):
             return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error uploading workout: {str(e)}"
+
+    @app.tool()
+    async def update_workout(workout_id: int, workout_data: dict) -> str:
+        """Update an existing workout.
+
+        Garmin replaces the WHOLE workout, so workout_data must be the complete
+        structure — same format as upload_workout (see that tool for the full DTO
+        reference on steps, targets, sport types, and end conditions). Typical flow:
+        fetch with get_workout_by_id, edit the JSON, pass it here.
+
+        Args:
+            workout_id: ID of the existing workout to overwrite.
+            workout_data: Complete workout structure (name, sport type, segments, steps).
+        """
+        try:
+            _fix_hr_zone_steps(workout_data)
+            _validate_end_condition_steps(workout_data)
+            _validate_target_type_steps(workout_data)
+
+            result = garmin_client.update_workout(workout_id, workout_data)
+
+            result = result if isinstance(result, dict) else {}
+            curated = {
+                "status": "success",
+                "workout_id": result.get("workoutId") or workout_id,
+                "name": result.get("workoutName") or workout_data.get("workoutName"),
+                "message": "Workout updated successfully",
+            }
+            curated = {k: v for k, v in curated.items() if v is not None}
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error updating workout: {str(e)}"
 
     @app.tool()
     async def upload_workouts(workouts: list[dict]) -> str:
