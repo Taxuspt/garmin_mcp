@@ -648,12 +648,14 @@ def register_tools(app):
 
     @app.tool()
     async def get_exercise_types(category: Optional[str] = None) -> str:
-        """List Garmin's strength-exercise catalog for building strength workouts.
+        """List Garmin's bundled strength-exercise catalog.
 
-        Returns the valid `category` and `exerciseName` keys accepted by
-        upload_workout / create_strength_workout, with each exercise's display
-        name. (Target muscles and equipment are omitted — the model can infer
-        those from the exercise name.)
+        Returns valid `category` and `exercise_name` identifiers with each
+        exercise's English display name. In Garmin workout payloads these map
+        to `category` / `exerciseName`. The structured completed-activity tools
+        accept them directly as `category` / `exercise_name` (`name` is also
+        accepted there as Garmin's activity-payload alias). Target muscles and
+        equipment are omitted—the model can infer those from the display name.
 
         Call with no argument first to get the list of categories (with exercise
         counts), then pass a specific category to get its exercises — the full

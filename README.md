@@ -67,14 +67,14 @@ Two tools let you download a raw activity file to disk:
 existing, completed `strength_training` activity. It is separate from
 `create_strength_workout`, which creates a planned workout for a watch.
 
-Use `dry_run=true` first. English exercise names are normalized and matched
-directly against Garmin's public exercise catalog; ambiguous matches are
-rejected rather than guessed. The catalog exposes identifier keys, not
-localized display names, so the server intentionally does not maintain a
-language-specific alias table. Callers should translate localized input to
-English or pass exact Garmin identifiers. A real update requires `confirm=true`
-and is read back from Garmin for verification. Bare names that exist in more
-than one category require an exact `category`/`name` pair.
+Use `dry_run=true` first. English display names and identifiers are normalized
+and matched against the catalog bundled with `garminconnect`—the same source
+exposed by `get_exercise_types`. Ambiguous matches are rejected rather than
+guessed. The server intentionally does not maintain a language-specific alias
+table, so callers should translate localized input to English or pass exact
+Garmin identifiers. A real update requires `confirm=true` and is read back from
+Garmin for verification. Bare names that exist in more than one category
+require an exact `category`/`exercise_name` pair.
 
 Before a confirmed replacement, the tool saves the current set list. If the
 write or its read-back verification fails, it restores that list by default.
@@ -112,8 +112,10 @@ recorded `REST` set. Use explicit `set_type: "REST"` items when recorded rest
 sets are desired, rather than combining both representations for the same gap.
 
 For deterministic matching, pass exact Garmin identifiers instead:
-`{"category": "PUSH_UP", "name": "PUSH_UP"}`. `weight_kg` is converted to
-Garmin's internal unit only inside the server.
+`{"category": "PUSH_UP", "exercise_name": "PUSH_UP"}`. The `name` key is also
+accepted as an alias because Garmin's completed-activity payload calls the same
+identifier `name`. `weight_kg` is converted to Garmin's internal unit only
+inside the server.
 
 `create_strength_training_activity` uses the same validated set format to
 create a completed manual strength activity. It does not create a planned
@@ -252,7 +254,12 @@ Returns: `{"status": "success", "workout_id": 1234567890, ...}`
 
 ### `get_exercise_types`
 
-Lists Garmin's strength-exercise catalog (~1500 exercises across 47 categories) so you can build strength steps with valid `category` / `exerciseName` keys. Call with no argument for the category list, then pass a `category` (e.g. `"BENCH_PRESS"`) to get its exercises with display names.
+Lists Garmin's bundled strength-exercise catalog (~1500 exercises across 47
+categories). Call with no argument for the category list, then pass a
+`category` (e.g. `"BENCH_PRESS"`) to get `exercise_name` identifiers and
+English display names. For planned workout steps, `exercise_name` maps to
+Garmin's `exerciseName` field. The completed-activity tools in this section
+accept it directly as `exercise_name`.
 
 ### `update_workout`
 

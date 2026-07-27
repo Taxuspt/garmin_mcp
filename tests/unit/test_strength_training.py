@@ -9,16 +9,16 @@ from garmin_mcp import strength_training
 
 
 CATALOG = (
-    ("BENCH_PRESS", "BARBELL_BENCH_PRESS"),
-    ("DEADLIFT", "BARBELL_DEADLIFT"),
-    ("FLYE", "INCLINE_REVERSE_FLYE"),
-    ("HIP_STABILITY", "DEAD_BUG"),
-    ("PLANK", "SIDE_PLANK"),
-    ("PULL_UP", "PULL_UP"),
-    ("PUSH_UP", "PUSH_UP"),
-    ("ROW", "BENT_OVER_ROW_WITH_DUMBELL"),
-    ("SHOULDER_PRESS", "DUMBBELL_SHOULDER_PRESS"),
-    ("SQUAT", "BARBELL_BACK_SQUAT"),
+    ("BENCH_PRESS", "BARBELL_BENCH_PRESS", "Barbell Bench Press"),
+    ("DEADLIFT", "BARBELL_DEADLIFT", "Barbell Deadlift"),
+    ("FLYE", "INCLINE_REVERSE_FLYE", "Incline Reverse Flye"),
+    ("HIP_STABILITY", "DEAD_BUG", "Dead Bug"),
+    ("PLANK", "SIDE_PLANK", "Side Plank"),
+    ("PULL_UP", "PULL_UP", "Pull-up"),
+    ("PUSH_UP", "PUSH_UP", "Push-up"),
+    ("ROW", "BENT_OVER_ROW_WITH_DUMBELL", "Bent-over Row with Dumbbell"),
+    ("SHOULDER_PRESS", "DUMBBELL_SHOULDER_PRESS", "Dumbbell Shoulder Press"),
+    ("SQUAT", "BARBELL_BACK_SQUAT", "Barbell Back Squat"),
 )
 
 
@@ -35,45 +35,70 @@ def use_test_catalog(monkeypatch):
     loader.cache_clear()
 
 
-def test_catalog_parser_extracts_category_name_pairs():
-    payload = {
-        "categories": {
-            "PUSH_UP": {
-                "primaryMuscles": ["CHEST"],
-                "exercises": {
-                    "PUSH_UP": {"primaryMuscles": ["CHEST"]},
-                    "DIAMOND_PUSH_UP": {"primaryMuscles": ["TRICEPS"]},
-                },
-            }
-        }
-    }
+def test_catalog_parser_extracts_bundled_catalog_entries():
+    rows = [
+        {
+            "name": "Push-up",
+            "category": "PUSH_UP",
+            "exercise": "PUSH_UP",
+        },
+        {
+            "name": "Diamond Push-up",
+            "category": "PUSH_UP",
+            "exercise": "DIAMOND_PUSH_UP",
+        },
+    ]
 
-    assert strength_training._catalog_pairs_from_payload(payload) == (
-        ("PUSH_UP", "DIAMOND_PUSH_UP"),
-        ("PUSH_UP", "PUSH_UP"),
+    assert strength_training._catalog_entries_from_rows(rows) == (
+        ("PUSH_UP", "DIAMOND_PUSH_UP", "Diamond Push-up"),
+        ("PUSH_UP", "PUSH_UP", "Push-up"),
     )
 
 
-def test_catalog_parser_skips_malformed_keys_and_keeps_valid_pairs():
-    payload = {
-        "categories": {
-            "PUSH_UP": {
-                "exercises": {
-                    "PUSH_UP": {},
-                    "BAD/EXERCISE": {},
-                },
-            },
-            "BAD/CATEGORY": {
-                "exercises": {
-                    "IGNORED_EXERCISE": {},
-                },
-            },
-        }
-    }
+def test_catalog_parser_skips_malformed_rows_and_keeps_valid_entries():
+    rows = [
+        {"name": "Push-up", "category": "PUSH_UP", "exercise": "PUSH_UP"},
+        {
+            "name": "Invalid Exercise",
+            "category": "PUSH_UP",
+            "exercise": "BAD/EXERCISE",
+        },
+        {
+            "name": "Invalid Category",
+            "category": "BAD/CATEGORY",
+            "exercise": "IGNORED_EXERCISE",
+        },
+        None,
+    ]
 
-    assert strength_training._catalog_pairs_from_payload(payload) == (
-        ("PUSH_UP", "PUSH_UP"),
+    assert strength_training._catalog_entries_from_rows(rows) == (
+        ("PUSH_UP", "PUSH_UP", "Push-up"),
     )
+
+
+def test_bundled_catalog_contains_expected_strength_identifiers():
+    catalog = strength_training._catalog_entries_from_rows(
+        strength_training.garmin_exercises.EXERCISES
+    )
+
+    assert len(catalog) > 1_000
+    assert ("PUSH_UP", "PUSH_UP", "Push-up") in catalog
+
+
+def test_get_exercise_types_identifiers_map_directly_to_activity_sets():
+    catalog = strength_training._catalog_entries_from_rows(
+        strength_training.garmin_exercises.EXERCISES
+    )
+
+    match = strength_training._resolve_exercise_spec(
+        {"category": "PUSH_UP", "exercise_name": "PUSH_UP"},
+        0,
+        catalog_loader=lambda: catalog,
+    )
+
+    assert match["name"] == "PUSH_UP"
+    assert match["exercise_name"] == "PUSH_UP"
+    assert match["display_name"] == "Push-up"
 
 
 @pytest.mark.parametrize(
@@ -117,7 +142,10 @@ def test_common_name_in_multiple_catalog_categories_is_rejected(monkeypatch):
     monkeypatch.setattr(
         strength_training,
         "_load_garmin_exercise_catalog",
-        lambda: (("PUSH_UP", "PUSH_UP"), ("SUSPENSION", "PUSH_UP")),
+        lambda: (
+            ("PUSH_UP", "PUSH_UP", "Push-up"),
+            ("SUSPENSION", "PUSH_UP", "Suspension Push-up"),
+        ),
     )
 
     with pytest.raises(
@@ -142,27 +170,25 @@ def test_low_confidence_match_returns_candidates_instead_of_guessing(monkeypatch
     assert "Closest candidates" in str(exc.value)
 
 
-def test_exact_category_name_is_validated(monkeypatch):
+def test_exact_category_exercise_name_is_validated(monkeypatch):
     monkeypatch.setattr(
         strength_training, "_load_garmin_exercise_catalog", lambda: CATALOG
     )
 
     match = strength_training._resolve_exercise_spec(
-        {"category": "push_up", "name": "push-up"},
+        {"category": "push_up", "exercise_name": "push-up"},
         0,
     )
 
     assert match["category"] == "PUSH_UP"
     assert match["name"] == "PUSH_UP"
+    assert match["exercise_name"] == "PUSH_UP"
     assert match["match_type"] == "provided"
 
 
-def test_exact_category_name_remains_available_when_catalog_is_down(monkeypatch):
-    def unavailable():
-        raise RuntimeError("network down")
-
+def test_activity_payload_name_alias_is_accepted(monkeypatch):
     monkeypatch.setattr(
-        strength_training, "_load_garmin_exercise_catalog", unavailable
+        strength_training, "_load_garmin_exercise_catalog", lambda: CATALOG
     )
 
     match = strength_training._resolve_exercise_spec(
@@ -170,33 +196,23 @@ def test_exact_category_name_remains_available_when_catalog_is_down(monkeypatch)
         0,
     )
 
-    assert match["match_type"] == "provided_unverified"
+    assert match["exercise_name"] == "PUSH_UP"
+    assert match["match_type"] == "provided"
 
 
-def test_prepare_sets_attempts_failed_catalog_load_only_once(monkeypatch):
-    attempts = 0
-
-    def unavailable():
-        nonlocal attempts
-        attempts += 1
-        raise RuntimeError("network down")
-
-    monkeypatch.setattr(
-        strength_training, "_load_garmin_exercise_catalog", unavailable
-    )
-
-    payload, matches = strength_training._prepare_strength_sets(
-        [
-            {"category": "PUSH_UP", "name": "PUSH_UP"},
-            {"category": "PULL_UP", "name": "PULL_UP"},
-            {"category": "SQUAT", "name": "BARBELL_BACK_SQUAT"},
-        ],
-        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
-    )
-
-    assert attempts == 1
-    assert len(payload) == 3
-    assert all(match["match_type"] == "provided_unverified" for match in matches)
+def test_conflicting_name_aliases_are_rejected():
+    with pytest.raises(
+        strength_training.StrengthTrainingError,
+        match="must identify the same exercise",
+    ):
+        strength_training._resolve_exercise_spec(
+            {
+                "category": "PUSH_UP",
+                "name": "PUSH_UP",
+                "exercise_name": "DIAMOND_PUSH_UP",
+            },
+            0,
+        )
 
 
 def test_unknown_exact_identifier_is_rejected_with_category_suggestions(

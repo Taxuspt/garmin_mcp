@@ -10,9 +10,9 @@ from garmin_mcp import strength_training
 
 
 CATALOG = (
-    ("PULL_UP", "PULL_UP"),
-    ("PUSH_UP", "PUSH_UP"),
-    ("SQUAT", "BARBELL_BACK_SQUAT"),
+    ("PULL_UP", "PULL_UP", "Pull-up"),
+    ("PUSH_UP", "PUSH_UP", "Push-up"),
+    ("SQUAT", "BARBELL_BACK_SQUAT", "Barbell Back Squat"),
 )
 
 PREVIOUS_SET = {
@@ -36,9 +36,7 @@ PREVIOUS_SET = {
 @pytest.fixture
 def strength_client(monkeypatch):
     client = Mock()
-    client.garmin_connect_activity = "/activity-service/activity"
-    client.client = Mock()
-    client.client.put = Mock(return_value={"accepted": True})
+    client.set_activity_exercise_sets = Mock(return_value={"accepted": True})
     client.get_activity = Mock(
         return_value={
             "activityId": 12345678901,
@@ -103,7 +101,7 @@ async def test_dry_run_resolves_and_expands_sets_without_writing(
     assert data["matches"][0]["category"] == "PUSH_UP"
     assert len(data["preview"]["exerciseSets"]) == 3
     strength_client.get_activity.assert_called_once_with(12345678901)
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
     strength_client.get_activity_exercise_sets.assert_not_called()
 
 
@@ -123,7 +121,7 @@ async def test_write_requires_explicit_confirmation(
     assert data["success"] is False
     assert "confirm=true is required" in data["error"]
     strength_client.get_activity.assert_not_called()
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -132,14 +130,12 @@ async def test_confirmed_write_uses_exercise_sets_endpoint_and_verifies_readback
 ):
     written_payload = {}
 
-    def capture_put(service, url, *, json, api):
-        written_payload.update(json)
-        assert service == "connectapi"
-        assert url == "/activity-service/activity/12345678901/exerciseSets"
-        assert api is True
+    def capture_set(activity_id, payload):
+        assert activity_id == 12345678901
+        written_payload.update(payload)
         return {"accepted": True}
 
-    strength_client.client.put.side_effect = capture_put
+    strength_client.set_activity_exercise_sets.side_effect = capture_set
 
     def read_sets(activity_id):
         if not written_payload:
@@ -155,7 +151,7 @@ async def test_confirmed_write_uses_exercise_sets_endpoint_and_verifies_readback
             "sets": [
                 {
                     "category": "PUSH_UP",
-                    "name": "PUSH_UP",
+                    "exercise_name": "PUSH_UP",
                     "sets": 2,
                     "repetitions": 12,
                     "weight_kg": 5,
@@ -193,8 +189,9 @@ async def test_update_accepts_null_as_an_empty_previous_set_list(
     written_payload = {}
     read_count = 0
 
-    def capture_put(service, url, *, json, api):
-        written_payload.update(json)
+    def capture_set(activity_id, payload):
+        assert activity_id == 12345678901
+        written_payload.update(payload)
         return {"accepted": True}
 
     def read_sets(activity_id):
@@ -204,7 +201,7 @@ async def test_update_accepts_null_as_an_empty_previous_set_list(
             return {"activityId": activity_id, "exerciseSets": None}
         return written_payload
 
-    strength_client.client.put.side_effect = capture_put
+    strength_client.set_activity_exercise_sets.side_effect = capture_set
     strength_client.get_activity_exercise_sets.side_effect = read_sets
 
     result = await strength_app.call_tool(
@@ -219,7 +216,7 @@ async def test_update_accepts_null_as_an_empty_previous_set_list(
     data = _data(result)
     assert data["success"] is True
     assert data["verified"] is True
-    strength_client.client.put.assert_called_once()
+    strength_client.set_activity_exercise_sets.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -242,7 +239,7 @@ async def test_non_strength_activity_is_rejected(
     data = _data(result)
     assert data["success"] is False
     assert "not 'strength_training'" in data["error"]
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -280,7 +277,7 @@ async def test_invalid_exercise_prevents_write(
     data = _data(result)
     assert data["success"] is False
     assert "No Garmin exercise" in data["error"]
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -309,7 +306,7 @@ async def test_readback_mismatch_restores_previous_sets(
     assert data["previous_sets"] == []
     assert "read-back verification failed" in data["error"]
     assert "set count differs" in data["verification_errors"][0]
-    assert strength_client.client.put.call_count == 2
+    assert strength_client.set_activity_exercise_sets.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -330,7 +327,7 @@ async def test_update_aborts_when_previous_sets_cannot_be_saved(
     data = _data(result)
     assert data["success"] is False
     assert "replacement was not attempted" in data["error"]
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -363,7 +360,7 @@ async def test_failed_update_returns_backup_when_rollback_is_disabled(
     assert data["rolled_back"] is False
     assert data["previous_sets"][0]["exercises"][0]["name"] == "PULL_UP"
     assert data["previous_sets"][0]["weightKg"] is None
-    strength_client.client.put.assert_called_once()
+    strength_client.set_activity_exercise_sets.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -380,7 +377,7 @@ async def test_update_reports_rollback_failure(
             "exerciseSets": [],
         },
     ]
-    strength_client.client.put.side_effect = [
+    strength_client.set_activity_exercise_sets.side_effect = [
         {"accepted": True},
         RuntimeError("restore failed"),
     ]
@@ -433,7 +430,7 @@ async def test_readback_error_after_write_still_restores_previous_sets(
     assert data["error"] == "read-back unavailable"
     assert data["rollback_exercise_sets"][0]["weightKg"] is None
     assert "weight" not in data["rollback_exercise_sets"][0]
-    assert strength_client.client.put.call_count == 2
+    assert strength_client.set_activity_exercise_sets.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -544,11 +541,11 @@ async def test_set_timeline_cannot_extend_past_activity_duration(
     data = _data(result)
     assert data["success"] is False
     assert "after the activity" in data["error"]
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_exact_identifiers_work_when_catalog_fetch_fails(
+async def test_bundled_catalog_failure_prevents_unverified_write(
     strength_app, strength_client, monkeypatch
 ):
     def unavailable():
@@ -562,14 +559,20 @@ async def test_exact_identifiers_work_when_catalog_fetch_fails(
         "set_activity_strength_exercise_sets",
         {
             "activity_id": 12345678901,
-            "sets": [{"category": "PUSH_UP", "name": "PUSH_UP"}],
-            "dry_run": True,
+            "sets": [
+                {
+                    "category": "PUSH_UP",
+                    "exercise_name": "PUSH_UP",
+                }
+            ],
+            "confirm": True,
         },
     )
 
     data = _data(result)
-    assert data["success"] is True
-    assert data["matches"][0]["match_type"] == "provided_unverified"
+    assert data["success"] is False
+    assert data["error"] == "catalog unavailable"
+    strength_client.set_activity_exercise_sets.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -605,7 +608,7 @@ async def test_create_strength_activity_dry_run_does_not_create_or_write(
         "2026-07-23T16:00:00.0"
     )
     strength_client.create_manual_activity.assert_not_called()
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -635,14 +638,12 @@ async def test_confirmed_create_attaches_sets_and_verifies(
 ):
     written_payload = {}
 
-    def capture_put(service, url, *, json, api):
-        written_payload.update(json)
-        assert service == "connectapi"
-        assert url == "/activity-service/activity/987654321/exerciseSets"
-        assert api is True
+    def capture_set(activity_id, payload):
+        assert activity_id == 987654321
+        written_payload.update(payload)
         return {"accepted": True}
 
-    strength_client.client.put.side_effect = capture_put
+    strength_client.set_activity_exercise_sets.side_effect = capture_set
     strength_client.get_activity_exercise_sets.side_effect = (
         lambda activity_id: written_payload
     )
@@ -694,8 +695,9 @@ async def test_create_accepts_zero_readback_for_omitted_repetition_counts(
 ):
     written_payload = {}
 
-    def capture_put(service, url, *, json, api):
-        written_payload.update(json)
+    def capture_set(activity_id, payload):
+        assert activity_id == 987654321
+        written_payload.update(payload)
         return {"accepted": True}
 
     def readback_with_zero_repetitions(activity_id):
@@ -710,7 +712,7 @@ async def test_create_accepts_zero_readback_for_omitted_repetition_counts(
             ],
         }
 
-    strength_client.client.put.side_effect = capture_put
+    strength_client.set_activity_exercise_sets.side_effect = capture_set
     strength_client.get_activity_exercise_sets.side_effect = (
         readback_with_zero_repetitions
     )
@@ -740,7 +742,9 @@ async def test_create_accepts_zero_readback_for_omitted_repetition_counts(
 async def test_create_rolls_back_when_attaching_sets_fails(
     strength_app, strength_client
 ):
-    strength_client.client.put.side_effect = RuntimeError("write failed")
+    strength_client.set_activity_exercise_sets.side_effect = RuntimeError(
+        "write failed"
+    )
 
     result = await strength_app.call_tool(
         "create_strength_training_activity",
@@ -766,7 +770,9 @@ async def test_create_rolls_back_when_attaching_sets_fails(
 async def test_create_reports_rollback_failure(
     strength_app, strength_client
 ):
-    strength_client.client.put.side_effect = RuntimeError("write failed")
+    strength_client.set_activity_exercise_sets.side_effect = RuntimeError(
+        "write failed"
+    )
     strength_client.delete_activity.side_effect = RuntimeError("delete failed")
 
     result = await strength_app.call_tool(
@@ -791,7 +797,9 @@ async def test_create_reports_rollback_failure(
 async def test_create_can_leave_incomplete_activity_when_rollback_disabled(
     strength_app, strength_client
 ):
-    strength_client.client.put.side_effect = RuntimeError("write failed")
+    strength_client.set_activity_exercise_sets.side_effect = RuntimeError(
+        "write failed"
+    )
 
     result = await strength_app.call_tool(
         "create_strength_training_activity",
@@ -865,7 +873,7 @@ async def test_create_stops_when_garmin_response_has_no_activity_id(
     assert data["activity_may_exist"] is True
     assert data["manual_cleanup_may_be_required"] is True
     assert "Check Garmin Connect" in data["warning"]
-    strength_client.client.put.assert_not_called()
+    strength_client.set_activity_exercise_sets.assert_not_called()
     strength_client.delete_activity.assert_not_called()
 
 

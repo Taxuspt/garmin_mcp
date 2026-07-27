@@ -17,21 +17,19 @@ from functools import lru_cache
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import requests
+from garminconnect import exercises as garmin_exercises
 
 
 garmin_client = None
 
-GARMIN_EXERCISE_CATALOG_URL = (
-    "https://connect.garmin.com/web-data/exercises/Exercises.json"
-)
-
 _IDENTIFIER_RE = re.compile(r"^[A-Z0-9_]+$")
-_ISO_FRACTION_RE = re.compile(r"\.(\d{1,6})(?=$|[+-])")
 
 # Conservative matching thresholds favor rejecting near-collisions over guessing.
 _MIN_EXERCISE_MATCH_SCORE = 0.82
 _MIN_EXERCISE_MATCH_MARGIN = 0.06
+
+ExerciseCatalogEntry = Tuple[str, str, str]
+ExerciseCatalog = Tuple[ExerciseCatalogEntry, ...]
 
 
 class StrengthTrainingError(ValueError):
@@ -68,62 +66,38 @@ def _normalise_identifier(value: Any, field: str) -> str:
     return identifier
 
 
-def _catalog_pairs_from_payload(payload: Any) -> Tuple[Tuple[str, str], ...]:
-    if not isinstance(payload, dict):
-        raise StrengthTrainingError("Garmin exercise catalog is not a JSON object")
-    categories = payload.get("categories")
-    if not isinstance(categories, dict):
-        raise StrengthTrainingError(
-            "Garmin exercise catalog does not contain categories"
-        )
+def _catalog_entries_from_rows(rows: Any) -> ExerciseCatalog:
+    """Validate the catalog shape bundled with python-garminconnect."""
+    if not isinstance(rows, list):
+        raise StrengthTrainingError("Bundled Garmin exercise catalog is not a list")
 
-    pairs = set()
-    for category, category_payload in categories.items():
-        if not isinstance(category_payload, dict):
+    entries = set()
+    for row in rows:
+        if not isinstance(row, dict):
             continue
         try:
-            category_key = _normalise_identifier(category, "catalog category")
+            category = _normalise_identifier(
+                row.get("category"), "catalog category"
+            )
+            exercise_name = _normalise_identifier(
+                row.get("exercise"), "catalog exercise name"
+            )
         except StrengthTrainingError:
             continue
-        exercises = category_payload.get("exercises")
-        if not isinstance(exercises, dict):
-            continue
-        for exercise_name in exercises:
-            try:
-                name_key = _normalise_identifier(
-                    exercise_name, "catalog exercise name"
-                )
-            except StrengthTrainingError:
-                continue
-            pairs.add((category_key, name_key))
+        display_name = row.get("name")
+        if not isinstance(display_name, str) or not display_name.strip():
+            display_name = exercise_name.replace("_", " ").title()
+        entries.add((category, exercise_name, display_name.strip()))
 
-    if not pairs:
-        raise StrengthTrainingError("Garmin exercise catalog is empty")
-    return tuple(sorted(pairs))
+    if not entries:
+        raise StrengthTrainingError("Bundled Garmin exercise catalog is empty")
+    return tuple(sorted(entries))
 
 
 @lru_cache(maxsize=1)
-def _load_garmin_exercise_catalog() -> Tuple[Tuple[str, str], ...]:
-    """Fetch and parse Garmin's public catalog once per server process."""
-    response = requests.get(
-        GARMIN_EXERCISE_CATALOG_URL,
-        timeout=10,
-        headers={"User-Agent": "garmin-mcp/0.1"},
-    )
-    response.raise_for_status()
-    return _catalog_pairs_from_payload(response.json())
-
-
-def _catalog_or_error() -> Tuple[Tuple[str, str], ...]:
-    try:
-        return _load_garmin_exercise_catalog()
-    except StrengthTrainingError:
-        raise
-    except Exception as exc:
-        raise StrengthTrainingError(
-            "Could not load Garmin's exercise catalog. "
-            "Provide exact category/name identifiers or try again later."
-        ) from exc
+def _load_garmin_exercise_catalog() -> ExerciseCatalog:
+    """Load the same bundled catalog exposed by get_exercise_types."""
+    return _catalog_entries_from_rows(garmin_exercises.EXERCISES)
 
 
 def _match_score(query: str, candidate: str) -> float:
@@ -141,64 +115,77 @@ def _match_score(query: str, candidate: str) -> float:
 
 def _exercise_suggestions(
     query: str,
-    catalog: Iterable[Tuple[str, str]],
+    catalog: Iterable[ExerciseCatalogEntry],
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
     scored = []
-    for category, name in catalog:
+    for category, name, display_name in catalog:
         name_label = _normalise_label(name)
         category_name_label = _normalise_label(f"{category} {name}")
+        display_name_label = _normalise_label(display_name)
         score = max(
             _match_score(query, name_label),
             _match_score(query, category_name_label),
+            _match_score(query, display_name_label),
         )
         if score > 0:
-            scored.append((score, category, name))
+            scored.append((score, category, name, display_name))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
     return [
-        {"category": category, "name": name, "score": round(score, 3)}
-        for score, category, name in scored[:limit]
+        {
+            "category": category,
+            "name": name,
+            "exercise_name": name,
+            "display_name": display_name,
+            "score": round(score, 3),
+        }
+        for score, category, name, display_name in scored[:limit]
     ]
 
 
 def _resolve_exercise_query(
     value: Any,
-    catalog_loader: Optional[
-        Callable[[], Tuple[Tuple[str, str], ...]]
-    ] = None,
+    catalog_loader: Optional[Callable[[], ExerciseCatalog]] = None,
 ) -> Dict[str, Any]:
     if not isinstance(value, str) or not value.strip():
         raise StrengthTrainingError("exercise must be a non-empty string")
 
     query = _normalise_label(value)
-    catalog = (catalog_loader or _catalog_or_error)()
+    catalog = (catalog_loader or _load_garmin_exercise_catalog)()
     exact = []
-    for category, name in catalog:
+    for category, name, display_name in catalog:
         if query in {
             _normalise_label(name),
             _normalise_label(f"{category} {name}"),
+            _normalise_label(display_name),
         }:
-            exact.append((category, name))
+            exact.append((category, name, display_name))
 
     if len(exact) == 1:
-        category, name = exact[0]
+        category, name, display_name = exact[0]
         return {
             "input": value,
             "category": category,
             "name": name,
+            "exercise_name": name,
+            "display_name": display_name,
             "match_type": "catalog_exact",
             "score": 1.0,
         }
     if len(exact) > 1:
-        options = ", ".join(f"{category}/{name}" for category, name in exact[:8])
+        options = ", ".join(
+            f"{category}/{name}" for category, name, _ in exact[:8]
+        )
         raise StrengthTrainingError(
-            f"Exercise '{value}' is ambiguous. Use category/name. Matches: {options}"
+            f"Exercise '{value}' is ambiguous. Use category/exercise_name. "
+            f"Matches: {options}"
         )
 
     suggestions = _exercise_suggestions(query, catalog)
     if not suggestions:
         raise StrengthTrainingError(
-            f"No Garmin exercise matches '{value}'. Use exact category/name identifiers."
+            f"No Garmin exercise matches '{value}'. "
+            "Use exact category/exercise_name identifiers."
         )
 
     best = suggestions[0]
@@ -220,6 +207,8 @@ def _resolve_exercise_query(
         "input": value,
         "category": best["category"],
         "name": best["name"],
+        "exercise_name": best["name"],
+        "display_name": best["display_name"],
         "match_type": "catalog_fuzzy",
         "score": best["score"],
     }
@@ -228,40 +217,53 @@ def _resolve_exercise_query(
 def _resolve_exercise_spec(
     item: Dict[str, Any],
     index: int,
-    catalog_loader: Optional[
-        Callable[[], Tuple[Tuple[str, str], ...]]
-    ] = None,
+    catalog_loader: Optional[Callable[[], ExerciseCatalog]] = None,
 ) -> Dict[str, Any]:
     exercise = item.get("exercise")
     if exercise not in (None, ""):
         return _resolve_exercise_query(exercise, catalog_loader)
 
-    if item.get("category") in (None, "") or item.get("name") in (None, ""):
+    provided_name = item.get("name")
+    provided_exercise_name = item.get("exercise_name")
+    if (
+        provided_name not in (None, "")
+        and provided_exercise_name not in (None, "")
+        and _normalise_identifier(
+            provided_name, f"sets[{index}].name"
+        )
+        != _normalise_identifier(
+            provided_exercise_name, f"sets[{index}].exercise_name"
+        )
+    ):
         raise StrengthTrainingError(
-            f"sets[{index}] must include exercise or exact category/name"
+            f"sets[{index}].name and exercise_name must identify the same exercise"
+        )
+    raw_name = (
+        provided_exercise_name
+        if provided_exercise_name not in (None, "")
+        else provided_name
+    )
+    if item.get("category") in (None, "") or raw_name in (None, ""):
+        raise StrengthTrainingError(
+            f"sets[{index}] must include exercise or exact "
+            "category/exercise_name identifiers"
         )
 
     category = _normalise_identifier(item["category"], f"sets[{index}].category")
-    name = _normalise_identifier(item["name"], f"sets[{index}].name")
+    name = _normalise_identifier(raw_name, f"sets[{index}].exercise_name")
 
-    try:
-        catalog = (catalog_loader or _catalog_or_error)()
-    except Exception:
-        # Exact identifiers remain usable when Garmin's public catalog endpoint
-        # is temporarily unavailable. The activity endpoint remains authoritative.
-        return {
-            "input": f"{category}/{name}",
-            "category": category,
-            "name": name,
-            "match_type": "provided_unverified",
-            "score": None,
-        }
-
-    if (category, name) not in set(catalog):
-        category_names = [candidate for cat, candidate in catalog if cat == category]
+    catalog = (catalog_loader or _load_garmin_exercise_catalog)()
+    catalog_by_identifier = {
+        (catalog_category, catalog_name): display_name
+        for catalog_category, catalog_name, display_name in catalog
+    }
+    if (category, name) not in catalog_by_identifier:
+        category_entries = [
+            entry for entry in catalog if entry[0] == category
+        ]
         nearby = _exercise_suggestions(
             _normalise_label(name),
-            ((category, candidate) for candidate in category_names),
+            category_entries,
         )
         options = ", ".join(item["name"] for item in nearby) or "none"
         raise StrengthTrainingError(
@@ -273,6 +275,8 @@ def _resolve_exercise_spec(
         "input": f"{category}/{name}",
         "category": category,
         "name": name,
+        "exercise_name": name,
+        "display_name": catalog_by_identifier[(category, name)],
         "match_type": "provided",
         "score": 1.0,
     }
@@ -345,15 +349,9 @@ def _zone_info(time_zone: str) -> ZoneInfo:
         raise StrengthTrainingError(f"Unknown IANA time zone '{time_zone}'") from exc
 
 
-def _fromisoformat_compatible(value: str) -> datetime:
-    """Parse ISO timestamps consistently on every supported Python version."""
-    normalized = value.strip().replace("Z", "+00:00")
-    normalized = _ISO_FRACTION_RE.sub(
-        lambda match: f".{match.group(1).ljust(6, '0')}",
-        normalized,
-        count=1,
-    )
-    return datetime.fromisoformat(normalized)
+def _parse_iso_datetime(value: str) -> datetime:
+    """Parse an ISO timestamp using the Python 3.12+ runtime contract."""
+    return datetime.fromisoformat(value.strip())
 
 
 def _parse_local_datetime(value: Any, time_zone: str, field: str) -> datetime:
@@ -361,7 +359,7 @@ def _parse_local_datetime(value: Any, time_zone: str, field: str) -> datetime:
         raise StrengthTrainingError(f"{field} must be a non-empty ISO date-time")
     zone = _zone_info(time_zone)
     try:
-        parsed = _fromisoformat_compatible(value)
+        parsed = _parse_iso_datetime(value)
     except ValueError as exc:
         raise StrengthTrainingError(f"{field} must be an ISO date-time") from exc
     if parsed.tzinfo is None:
@@ -373,7 +371,7 @@ def _parse_gmt_datetime(value: Any, field: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise StrengthTrainingError(f"{field} is missing")
     try:
-        parsed = _fromisoformat_compatible(value)
+        parsed = _parse_iso_datetime(value)
     except ValueError as exc:
         raise StrengthTrainingError(f"{field} is not an ISO date-time") from exc
     if parsed.tzinfo is None:
@@ -406,7 +404,7 @@ def _parse_set_start_time(value: Any, activity_start: datetime) -> datetime:
         )
 
     try:
-        parsed = _fromisoformat_compatible(raw)
+        parsed = _parse_iso_datetime(raw)
     except ValueError as exc:
         raise StrengthTrainingError(
             "start_time must be ISO date-time, HH:MM, or HH:MM:SS"
@@ -499,22 +497,12 @@ def _prepare_strength_sets(
     matches: List[Dict[str, Any]] = []
     cursor = activity_start
     previous_end: Optional[datetime] = None
-    catalog_attempted = False
-    catalog_value: Optional[Tuple[Tuple[str, str], ...]] = None
-    catalog_failure: Optional[Exception] = None
+    catalog_value: Optional[ExerciseCatalog] = None
 
-    def load_catalog_once() -> Tuple[Tuple[str, str], ...]:
-        nonlocal catalog_attempted, catalog_value, catalog_failure
-        if not catalog_attempted:
-            catalog_attempted = True
-            try:
-                catalog_value = _catalog_or_error()
-            except Exception as exc:
-                catalog_failure = exc
-        if catalog_failure is not None:
-            raise catalog_failure
+    def load_catalog_once() -> ExerciseCatalog:
+        nonlocal catalog_value
         if catalog_value is None:
-            raise StrengthTrainingError("Garmin exercise catalog is unavailable")
+            catalog_value = _load_garmin_exercise_catalog()
         return catalog_value
 
     for index, raw_item in enumerate(set_specs):
@@ -560,7 +548,7 @@ def _prepare_strength_sets(
         else:
             if any(
                 item.get(field) not in (None, "")
-                for field in ("exercise", "category", "name")
+                for field in ("exercise", "category", "name", "exercise_name")
             ):
                 raise StrengthTrainingError(
                     f"sets[{index}] is REST and must not specify an exercise"
@@ -769,7 +757,7 @@ def _timestamp_key(value: Any) -> Optional[str]:
     if not isinstance(value, str) or not value:
         return None
     try:
-        parsed = _fromisoformat_compatible(value)
+        parsed = _parse_iso_datetime(value)
     except ValueError:
         return value
     if parsed.tzinfo is None:
@@ -874,19 +862,8 @@ def _replace_activity_strength_sets(
     activity_id: int,
     exercise_sets: List[Dict[str, Any]],
 ) -> Any:
-    base_url = getattr(
-        garmin_client,
-        "garmin_connect_activity",
-        "/activity-service/activity",
-    )
-    url = f"{base_url}/{activity_id}/exerciseSets"
     payload = {"activityId": activity_id, "exerciseSets": exercise_sets}
-    return garmin_client.client.put(
-        "connectapi",
-        url,
-        json=payload,
-        api=True,
-    )
+    return garmin_client.set_activity_exercise_sets(activity_id, payload)
 
 
 def _validate_activity_id(activity_id: Union[int, str]) -> int:
@@ -925,8 +902,10 @@ def register_tools(app):
         activity_start_datetime is only an explicit override.
 
         Each item in sets may contain:
-          - exercise: an English name matched against Garmin's catalog; or
-          - category and name: exact Garmin catalog identifiers
+          - exercise: an English display name or identifier matched against
+            Garmin's bundled catalog; or
+          - category and exercise_name: exact identifiers returned by
+            get_exercise_types (`name` is accepted as an activity-API alias)
           - sets: repeat count within this item (default 1); distinct from the
             top-level sets list
           - repetitions: non-negative repetition count
@@ -938,10 +917,11 @@ def register_tools(app):
             use the activity's start date, so use full ISO after midnight
           - offset_seconds or offset_minutes: offset from activity start
 
-        Garmin's public exercise catalog is used for name matching. It exposes
-        identifier keys rather than localized labels, so callers should
-        translate localized input to English or pass exact category/name
-        identifiers. Ambiguous matches are rejected instead of guessed.
+        The same English catalog bundled with garminconnect and exposed by
+        get_exercise_types is used for name matching. Localized aliases are
+        intentionally not maintained; callers should translate localized input
+        to English or pass exact category/exercise_name identifiers. Ambiguous
+        matches are rejected instead of guessed.
 
         Args:
             activity_id: Existing Garmin strength activity ID
@@ -1141,8 +1121,9 @@ def register_tools(app):
         empty/incomplete activity.
 
         Set fields are identical to set_activity_strength_exercise_sets:
-        exercise or exact category/name, sets, repetitions, weight_kg,
-        duration_seconds, rest_seconds, set_type, start_time, and offsets.
+        exercise or exact category/exercise_name, sets, repetitions,
+        weight_kg, duration_seconds, rest_seconds, set_type, start_time, and
+        offsets. `name` is accepted as an alias for exercise_name.
         Clock-only start_time values use the new activity's start date; sets
         after midnight require a full ISO date-time with the following date.
 
