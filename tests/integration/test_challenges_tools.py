@@ -3,6 +3,8 @@ Integration tests for challenges module MCP tools
 
 Tests all 9 challenges and badges tools using FastMCP integration with mocked Garmin API responses.
 """
+import json
+
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -267,15 +269,17 @@ async def test_get_race_predictions_tool(app_with_challenges, mock_garmin_client
 @pytest.mark.asyncio
 async def test_get_inprogress_virtual_challenges_tool(app_with_challenges, mock_garmin_client):
     """Test get_inprogress_virtual_challenges tool"""
-    # Setup mock
+    # Match the payload shape returned by Garmin for an active expedition.
     virtual_challenges = [
         {
             "uuid": "GHI789",
-            "name": "Virtual NYC Marathon",
-            "startDate": "2024-01-01T00:00:00.0",
-            "endDate": "2024-01-31T23:59:59.0",
-            "progress": 28000.0,
-            "target": 42195.0,
+            "badgeChallengeName": "Camino de Santiago",
+            "startDate": None,
+            "endDate": None,
+            "badgeUnitId": 1,
+            "badgeProgressValue": 159.0,
+            "badgeTargetValue": 784000.0,
+            "userJoined": True,
         }
     ]
     mock_garmin_client.get_inprogress_virtual_challenges.return_value = virtual_challenges
@@ -289,6 +293,23 @@ async def test_get_inprogress_virtual_challenges_tool(app_with_challenges, mock_
     # Verify
     assert result is not None
     mock_garmin_client.get_inprogress_virtual_challenges.assert_called_once_with(1, 20)
+    payload = json.loads(result[0][0].text)
+    assert payload == {
+        "total": 1,
+        "challenges": [
+            {
+                "name": "Camino de Santiago",
+                "uuid": "GHI789",
+                "start_date": None,
+                "end_date": None,
+                "progress_meters": 159.0,
+                "target_meters": 784000.0,
+                "progress_km": "0.16 km",
+                "target_km": "784.00 km",
+                "progress_percent": "0.0%",
+            }
+        ],
+    }
 
 
 # Error handling tests
