@@ -19,7 +19,7 @@ PREVIOUS_SET = {
     "exercises": [
         {
             "category": "PULL_UP",
-            "name": "PULL_UP",
+            "name": None,
             "probability": 100.0,
         }
     ],
@@ -183,6 +183,52 @@ async def test_confirmed_write_uses_exercise_sets_endpoint_and_verifies_readback
 
 
 @pytest.mark.asyncio
+async def test_stale_readback_after_update_is_retried_after_delay(
+    strength_app, strength_client, monkeypatch
+):
+    written_payload = {}
+    read_count = 0
+    delays = []
+
+    async def record_delay(seconds):
+        delays.append(seconds)
+
+    def capture_set(activity_id, payload):
+        assert activity_id == 12345678901
+        written_payload.update(payload)
+        return {"accepted": True}
+
+    def read_sets(activity_id):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return {"activityId": activity_id, "exerciseSets": []}
+        if read_count == 2:
+            return {"activityId": activity_id, "exerciseSets": []}
+        return written_payload
+
+    monkeypatch.setattr(strength_training.asyncio, "sleep", record_delay)
+    strength_client.set_activity_exercise_sets.side_effect = capture_set
+    strength_client.get_activity_exercise_sets.side_effect = read_sets
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [{"exercise": "push up", "repetitions": 10}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["verified"] is True
+    assert strength_client.get_activity_exercise_sets.call_count == 3
+    strength_client.set_activity_exercise_sets.assert_called_once()
+    assert delays == [strength_training._READBACK_RETRY_DELAY_SECONDS]
+
+
+@pytest.mark.asyncio
 async def test_update_accepts_null_as_an_empty_previous_set_list(
     strength_app, strength_client
 ):
@@ -239,6 +285,28 @@ async def test_non_strength_activity_is_rejected(
     data = _data(result)
     assert data["success"] is False
     assert "not 'strength_training'" in data["error"]
+    strength_client.set_activity_exercise_sets.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_activity_with_missing_type_is_rejected(
+    strength_app, strength_client
+):
+    strength_client.get_activity.return_value.pop("activityTypeDTO")
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": "12345678901",
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["activity_id"] == 12345678901
+    assert "type 'unknown'" in data["error"]
     strength_client.set_activity_exercise_sets.assert_not_called()
 
 
@@ -358,7 +426,7 @@ async def test_failed_update_returns_backup_when_rollback_is_disabled(
     data = _data(result)
     assert data["success"] is False
     assert data["rolled_back"] is False
-    assert data["previous_sets"][0]["exercises"][0]["name"] == "PULL_UP"
+    assert data["previous_sets"][0]["exercises"][0]["name"] is None
     assert data["previous_sets"][0]["weightKg"] is None
     strength_client.set_activity_exercise_sets.assert_called_once()
 
@@ -400,8 +468,14 @@ async def test_update_reports_rollback_failure(
 
 @pytest.mark.asyncio
 async def test_readback_error_after_write_still_restores_previous_sets(
-    strength_app, strength_client
+    strength_app, strength_client, monkeypatch
 ):
+    delays = []
+
+    async def record_delay(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(strength_training.asyncio, "sleep", record_delay)
     strength_client.get_activity_exercise_sets.side_effect = [
         {
             "activityId": 12345678901,
@@ -431,6 +505,8 @@ async def test_readback_error_after_write_still_restores_previous_sets(
     assert data["rollback_exercise_sets"][0]["weightKg"] is None
     assert "weight" not in data["rollback_exercise_sets"][0]
     assert strength_client.set_activity_exercise_sets.call_count == 2
+    assert strength_client.get_activity_exercise_sets.call_count == 3
+    assert delays == []
 
 
 @pytest.mark.asyncio
@@ -690,6 +766,53 @@ async def test_confirmed_create_attaches_sets_and_verifies(
 
 
 @pytest.mark.asyncio
+async def test_stale_readback_after_create_is_retried_after_delay(
+    strength_app, strength_client, monkeypatch
+):
+    written_payload = {}
+    read_count = 0
+    delays = []
+
+    async def record_delay(seconds):
+        delays.append(seconds)
+
+    def capture_set(activity_id, payload):
+        assert activity_id == 987654321
+        written_payload.update(payload)
+        return {"accepted": True}
+
+    def read_sets(_activity_id):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return {"activityId": 987654321, "exerciseSets": []}
+        return written_payload
+
+    monkeypatch.setattr(strength_training.asyncio, "sleep", record_delay)
+    strength_client.set_activity_exercise_sets.side_effect = capture_set
+    strength_client.get_activity_exercise_sets.side_effect = read_sets
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["verified"] is True
+    assert strength_client.get_activity_exercise_sets.call_count == 2
+    strength_client.delete_activity.assert_not_called()
+    assert delays == [strength_training._READBACK_RETRY_DELAY_SECONDS]
+
+
+@pytest.mark.asyncio
 async def test_create_accepts_zero_readback_for_omitted_repetition_counts(
     strength_app, strength_client
 ):
@@ -878,6 +1001,37 @@ async def test_create_stops_when_garmin_response_has_no_activity_id(
 
 
 @pytest.mark.asyncio
+async def test_create_warns_when_request_raises_after_possible_submission(
+    strength_app, strength_client
+):
+    strength_client.create_manual_activity.side_effect = TimeoutError(
+        "create request timed out"
+    )
+
+    result = await strength_app.call_tool(
+        "create_strength_training_activity",
+        {
+            "activity_name": "Upper Body",
+            "start_datetime": "2026-07-23T18:00:00",
+            "time_zone": "Europe/Warsaw",
+            "duration_minutes": 30,
+            "sets": [{"exercise": "push up"}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is False
+    assert data["activity_id"] is None
+    assert data["activity_may_exist"] is True
+    assert data["manual_cleanup_may_be_required"] is True
+    assert "Check Garmin Connect" in data["warning"]
+    assert data["error"] == "create request timed out"
+    strength_client.set_activity_exercise_sets.assert_not_called()
+    strength_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_create_accepts_timezone_aware_start_datetime(
     strength_app, strength_client
 ):
@@ -909,6 +1063,7 @@ async def test_create_accepts_timezone_aware_start_datetime(
         ({"activity_name": "  "}, "non-empty"),
         ({"duration_minutes": 0}, "at least"),
         ({"time_zone": "Mars/Olympus"}, "Unknown IANA"),
+        ({"time_zone": ""}, "Unknown IANA"),
     ],
 )
 async def test_create_validates_activity_fields_before_mutation(

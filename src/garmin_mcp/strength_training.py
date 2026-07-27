@@ -7,6 +7,7 @@ construction, and read-after-write verification for that activity endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -27,6 +28,7 @@ _IDENTIFIER_RE = re.compile(r"^[A-Z0-9_]+$")
 # Conservative matching thresholds favor rejecting near-collisions over guessing.
 _MIN_EXERCISE_MATCH_SCORE = 0.82
 _MIN_EXERCISE_MATCH_MARGIN = 0.06
+_READBACK_RETRY_DELAY_SECONDS = 1.0
 
 ExerciseCatalogEntry = Tuple[str, str, str]
 ExerciseCatalog = Tuple[ExerciseCatalogEntry, ...]
@@ -120,14 +122,8 @@ def _exercise_suggestions(
 ) -> List[Dict[str, Any]]:
     scored = []
     for category, name, display_name in catalog:
-        name_label = _normalise_label(name)
-        category_name_label = _normalise_label(f"{category} {name}")
         display_name_label = _normalise_label(display_name)
-        score = max(
-            _match_score(query, name_label),
-            _match_score(query, category_name_label),
-            _match_score(query, display_name_label),
-        )
+        score = _match_score(query, display_name_label)
         if score > 0:
             scored.append((score, category, name, display_name))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
@@ -154,11 +150,7 @@ def _resolve_exercise_query(
     catalog = (catalog_loader or _load_garmin_exercise_catalog)()
     exact = []
     for category, name, display_name in catalog:
-        if query in {
-            _normalise_label(name),
-            _normalise_label(f"{category} {name}"),
-            _normalise_label(display_name),
-        }:
+        if query == _normalise_label(display_name):
             exact.append((category, name, display_name))
 
     if len(exact) == 1:
@@ -253,11 +245,15 @@ def _resolve_exercise_spec(
     name = _normalise_identifier(raw_name, f"sets[{index}].exercise_name")
 
     catalog = (catalog_loader or _load_garmin_exercise_catalog)()
-    catalog_by_identifier = {
-        (catalog_category, catalog_name): display_name
-        for catalog_category, catalog_name, display_name in catalog
-    }
-    if (category, name) not in catalog_by_identifier:
+    display_name = next(
+        (
+            catalog_display_name
+            for catalog_category, catalog_name, catalog_display_name in catalog
+            if (catalog_category, catalog_name) == (category, name)
+        ),
+        None,
+    )
+    if display_name is None:
         category_entries = [
             entry for entry in catalog if entry[0] == category
         ]
@@ -265,7 +261,7 @@ def _resolve_exercise_spec(
             _normalise_label(name),
             category_entries,
         )
-        options = ", ".join(item["name"] for item in nearby) or "none"
+        options = ", ".join(suggestion["name"] for suggestion in nearby) or "none"
         raise StrengthTrainingError(
             f"sets[{index}] contains unknown Garmin exercise "
             f"{category}/{name}. Closest names in that category: {options}"
@@ -276,7 +272,7 @@ def _resolve_exercise_spec(
         "category": category,
         "name": name,
         "exercise_name": name,
-        "display_name": catalog_by_identifier[(category, name)],
+        "display_name": display_name,
         "match_type": "provided",
         "score": 1.0,
     }
@@ -345,7 +341,7 @@ def _non_negative_integer(
 def _zone_info(time_zone: str) -> ZoneInfo:
     try:
         return ZoneInfo(time_zone)
-    except ZoneInfoNotFoundError as exc:
+    except (ZoneInfoNotFoundError, ValueError, TypeError) as exc:
         raise StrengthTrainingError(f"Unknown IANA time zone '{time_zone}'") from exc
 
 
@@ -484,6 +480,13 @@ def _activity_start(
     )
 
 
+def _completed_activity_exercise_name(match: Dict[str, Any]) -> Optional[str]:
+    """Translate a workout-catalog match to the activity endpoint encoding."""
+    if match["name"] == match["category"]:
+        return None
+    return match["name"]
+
+
 def _prepare_strength_sets(
     set_specs: List[Dict[str, Any]],
     activity_start: datetime,
@@ -495,7 +498,8 @@ def _prepare_strength_sets(
 
     exercise_sets: List[Dict[str, Any]] = []
     matches: List[Dict[str, Any]] = []
-    cursor = activity_start
+    activity_start_utc = activity_start.astimezone(timezone.utc)
+    cursor = activity_start_utc
     previous_end: Optional[datetime] = None
     catalog_value: Optional[ExerciseCatalog] = None
 
@@ -510,7 +514,12 @@ def _prepare_strength_sets(
             raise StrengthTrainingError(f"sets[{index}] must be an object")
         item = dict(raw_item)
 
-        set_type = str(item.get("set_type", "ACTIVE")).strip().upper()
+        raw_set_type = item.get("set_type")
+        set_type = (
+            "ACTIVE"
+            if raw_set_type in (None, "")
+            else str(raw_set_type).strip().upper()
+        )
         if set_type not in {"ACTIVE", "REST"}:
             raise StrengthTrainingError(
                 f"sets[{index}].set_type must be ACTIVE or REST"
@@ -530,14 +539,16 @@ def _prepare_strength_sets(
             allow_none=True,
         )
         default_duration = 90.0 if set_type == "REST" else 30.0
+        raw_duration = item.get("duration_seconds")
         duration_seconds = _finite_number(
-            item.get("duration_seconds", default_duration),
+            default_duration if raw_duration in (None, "") else raw_duration,
             f"sets[{index}].duration_seconds",
             minimum=0.001,
         )
         default_rest = 0.0 if set_type == "REST" else 90.0
+        raw_rest = item.get("rest_seconds")
         rest_seconds = _finite_number(
-            item.get("rest_seconds", default_rest),
+            default_rest if raw_rest in (None, "") else raw_rest,
             f"sets[{index}].rest_seconds",
             minimum=0,
         )
@@ -577,21 +588,21 @@ def _prepare_strength_sets(
         if item.get("start_time") not in (None, ""):
             first_start = _parse_set_start_time(
                 item["start_time"], activity_start
-            )
+            ).astimezone(timezone.utc)
         elif item.get("offset_seconds") not in (None, ""):
             offset_seconds = _finite_number(
                 item["offset_seconds"],
                 f"sets[{index}].offset_seconds",
                 minimum=0,
             )
-            first_start = activity_start + timedelta(seconds=offset_seconds)
+            first_start = activity_start_utc + timedelta(seconds=offset_seconds)
         elif item.get("offset_minutes") not in (None, ""):
             offset_minutes = _finite_number(
                 item["offset_minutes"],
                 f"sets[{index}].offset_minutes",
                 minimum=0,
             )
-            first_start = activity_start + timedelta(minutes=offset_minutes)
+            first_start = activity_start_utc + timedelta(minutes=offset_minutes)
         else:
             first_start = cursor
 
@@ -599,7 +610,7 @@ def _prepare_strength_sets(
             set_start = first_start + timedelta(
                 seconds=repeat_index * (duration_seconds + rest_seconds)
             )
-            if set_start < activity_start:
+            if set_start < activity_start_utc:
                 raise StrengthTrainingError(
                     f"sets[{index}] starts before the activity"
                 )
@@ -609,10 +620,14 @@ def _prepare_strength_sets(
                 )
 
             if set_type == "ACTIVE":
+                # The workout-editor catalog represents category-only entries
+                # by repeating the category as the exercise identifier. The
+                # completed-activity endpoint uses a null sub-category for the
+                # same selection and rejects the repeated value with HTTP 400.
                 exercises = [
                     {
                         "category": match["category"],
-                        "name": match["name"],
+                        "name": _completed_activity_exercise_name(match),
                         "probability": 100.0,
                     }
                 ]
@@ -656,7 +671,9 @@ def _validate_sets_within_activity(
     summary = activity.get("summaryDTO")
     if not isinstance(summary, dict):
         summary = {}
-    raw_duration = summary.get("duration") or activity.get("duration")
+    raw_duration = summary.get("duration")
+    if raw_duration in (None, ""):
+        raw_duration = activity.get("duration")
     if raw_duration in (None, ""):
         return
     duration = _finite_number(
@@ -834,27 +851,19 @@ def _response_summary(response: Any) -> Any:
 
 
 def _find_activity_id(value: Any) -> Optional[int]:
-    """Find a positive activityId in the small response returned by Garmin."""
-    if isinstance(value, dict):
-        for key in ("activityId", "activity_id"):
-            candidate = value.get(key)
-            if isinstance(candidate, bool):
-                continue
-            try:
-                parsed = int(candidate)
-            except (TypeError, ValueError):
-                continue
-            if parsed > 0:
-                return parsed
-        for candidate in value.values():
-            found = _find_activity_id(candidate)
-            if found is not None:
-                return found
-    elif isinstance(value, list):
-        for candidate in value:
-            found = _find_activity_id(candidate)
-            if found is not None:
-                return found
+    """Read the positive top-level activityId returned by Garmin."""
+    if not isinstance(value, dict):
+        return None
+    for key in ("activityId", "activity_id"):
+        candidate = value.get(key)
+        if isinstance(candidate, bool):
+            continue
+        try:
+            parsed = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
     return None
 
 
@@ -864,6 +873,22 @@ def _replace_activity_strength_sets(
 ) -> Any:
     payload = {"activityId": activity_id, "exerciseSets": exercise_sets}
     return garmin_client.set_activity_exercise_sets(activity_id, payload)
+
+
+async def _read_and_verify_strength_sets(
+    activity_id: int,
+    expected_sets: List[Dict[str, Any]],
+) -> Tuple[Any, bool, List[str]]:
+    """Retry one stale read after a short delay, then return verification."""
+    readback = garmin_client.get_activity_exercise_sets(activity_id)
+    verified, differences = _verify_exercise_sets(expected_sets, readback)
+    if verified:
+        return readback, verified, differences
+
+    await asyncio.sleep(_READBACK_RETRY_DELAY_SECONDS)
+    readback = garmin_client.get_activity_exercise_sets(activity_id)
+    verified, differences = _verify_exercise_sets(expected_sets, readback)
+    return readback, verified, differences
 
 
 def _validate_activity_id(activity_id: Union[int, str]) -> int:
@@ -902,8 +927,8 @@ def register_tools(app):
         activity_start_datetime is only an explicit override.
 
         Each item in sets may contain:
-          - exercise: an English display name or identifier matched against
-            Garmin's bundled catalog; or
+          - exercise: an English display name matched against Garmin's bundled
+            catalog; or
           - category and exercise_name: exact identifiers returned by
             get_exercise_types (`name` is accepted as an activity-API alias)
           - sets: repeat count within this item (default 1); distinct from the
@@ -933,6 +958,7 @@ def register_tools(app):
             dry_run: Validate and preview without changing Garmin
             rollback_on_failure: Restore the previous sets after a failed write
         """
+        parsed_activity_id: Optional[int] = None
         try:
             parsed_activity_id = _validate_activity_id(activity_id)
             if not dry_run and not confirm:
@@ -947,9 +973,10 @@ def register_tools(app):
                     f"Activity {parsed_activity_id} was not found"
                 )
             type_key = _activity_type_key(activity)
-            if type_key and type_key != "strength_training":
+            if type_key != "strength_training":
                 raise StrengthTrainingError(
-                    f"Activity {parsed_activity_id} has type '{type_key}', "
+                    f"Activity {parsed_activity_id} has type "
+                    f"'{type_key or 'unknown'}', "
                     "not 'strength_training'"
                 )
 
@@ -1002,12 +1029,13 @@ def register_tools(app):
                     exercise_sets,
                 )
                 write_completed = True
-                readback = garmin_client.get_activity_exercise_sets(
-                    parsed_activity_id
-                )
-                verified, differences = _verify_exercise_sets(
-                    exercise_sets,
+                (
                     readback,
+                    verified,
+                    differences,
+                ) = await _read_and_verify_strength_sets(
+                    parsed_activity_id,
+                    exercise_sets,
                 )
                 if verified:
                     return _json_result(
@@ -1061,14 +1089,13 @@ def register_tools(app):
                         parsed_activity_id,
                         previous_sets,
                     )
-                    rollback_readback = (
-                        garmin_client.get_activity_exercise_sets(
-                            parsed_activity_id
-                        )
-                    )
-                    restored, rollback_differences = _verify_exercise_sets(
-                        previous_sets,
+                    (
                         rollback_readback,
+                        restored,
+                        rollback_differences,
+                    ) = await _read_and_verify_strength_sets(
+                        parsed_activity_id,
+                        previous_sets,
                     )
                     failure["rolled_back"] = restored
                     failure["rollback_api_response"] = _response_summary(
@@ -1091,7 +1118,11 @@ def register_tools(app):
             return _json_result(
                 {
                     "success": False,
-                    "activity_id": str(activity_id),
+                    "activity_id": (
+                        parsed_activity_id
+                        if parsed_activity_id is not None
+                        else activity_id
+                    ),
                     "error": str(exc),
                 }
             )
@@ -1139,9 +1170,13 @@ def register_tools(app):
         """
         created_activity_id: Optional[int] = None
         activity_response: Any = None
-        create_request_completed = False
+        create_request_started = False
         matches: List[Dict[str, Any]] = []
         try:
+            if not isinstance(activity_name, str):
+                raise StrengthTrainingError(
+                    "activity_name must be a non-empty string"
+                )
             name = activity_name.strip()
             if not name:
                 raise StrengthTrainingError(
@@ -1189,6 +1224,7 @@ def register_tools(app):
                     }
                 )
 
+            create_request_started = True
             activity_response = garmin_client.create_manual_activity(
                 start_datetime=_garmin_local_timestamp(local_start),
                 time_zone=time_zone,
@@ -1197,7 +1233,6 @@ def register_tools(app):
                 duration_min=duration,
                 activity_name=name,
             )
-            create_request_completed = True
             created_activity_id = _find_activity_id(activity_response)
             if created_activity_id is None:
                 raise StrengthTrainingError(
@@ -1210,12 +1245,13 @@ def register_tools(app):
                     created_activity_id,
                     exercise_sets,
                 )
-                readback = garmin_client.get_activity_exercise_sets(
-                    created_activity_id
-                )
-                verified, differences = _verify_exercise_sets(
-                    exercise_sets,
+                (
                     readback,
+                    verified,
+                    differences,
+                ) = await _read_and_verify_strength_sets(
+                    created_activity_id,
+                    exercise_sets,
                 )
                 if not verified:
                     details = "; ".join(differences)
@@ -1262,13 +1298,13 @@ def register_tools(app):
                 "activity_response": _response_summary(activity_response),
                 "error": str(exc),
             }
-            if create_request_completed and created_activity_id is None:
+            if create_request_started and created_activity_id is None:
                 failure.update(
                     {
                         "activity_may_exist": True,
                         "manual_cleanup_may_be_required": True,
                         "warning": (
-                            "Garmin completed the create request without "
+                            "The create request may have reached Garmin without "
                             "returning an activity ID. Check Garmin Connect for "
                             "an incomplete activity."
                         ),

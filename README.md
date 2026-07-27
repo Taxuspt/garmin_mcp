@@ -67,14 +67,15 @@ Two tools let you download a raw activity file to disk:
 existing, completed `strength_training` activity. It is separate from
 `create_strength_workout`, which creates a planned workout for a watch.
 
-Use `dry_run=true` first. English display names and identifiers are normalized
-and matched against the catalog bundled with `garminconnect`—the same source
-exposed by `get_exercise_types`. Ambiguous matches are rejected rather than
-guessed. The server intentionally does not maintain a language-specific alias
-table, so callers should translate localized input to English or pass exact
-Garmin identifiers. A real update requires `confirm=true` and is read back from
-Garmin for verification. Bare names that exist in more than one category
-require an exact `category`/`exercise_name` pair.
+Use `dry_run=true` first. The `exercise` field is matched against English
+display names from the catalog bundled with `garminconnect`—the same source
+exposed by `get_exercise_types`. Technical identifiers are accepted only as an
+exact `category`/`exercise_name` pair, because an exercise identifier can occur
+in multiple categories. Ambiguous matches are rejected rather than guessed.
+The server intentionally does not maintain a language-specific alias table, so
+callers should translate localized input to English or pass exact Garmin
+identifiers. A real update requires `confirm=true` and is read back from Garmin
+for verification.
 
 Before a confirmed replacement, the tool saves the current set list. If the
 write or its read-back verification fails, it restores that list by default.
@@ -114,8 +115,10 @@ sets are desired, rather than combining both representations for the same gap.
 For deterministic matching, pass exact Garmin identifiers instead:
 `{"category": "PUSH_UP", "exercise_name": "PUSH_UP"}`. The `name` key is also
 accepted as an alias because Garmin's completed-activity payload calls the same
-identifier `name`. `weight_kg` is converted to Garmin's internal unit only
-inside the server.
+identifier `name`. Category-only catalog entries repeat that identifier (for
+example `PUSH_UP/PUSH_UP`); the completed-activity endpoint requires these to
+be encoded with a null sub-category, which the tool handles automatically.
+`weight_kg` is converted to Garmin's internal unit only inside the server.
 
 `create_strength_training_activity` uses the same validated set format to
 create a completed manual strength activity. It does not create a planned
@@ -161,6 +164,9 @@ Some endpoints are not implemented due to performance or complexity consideratio
 
 **Maintenance & Destructive Operations:**
 - `delete_activity()`, `delete_blood_pressure()` - Destructive operations require careful consideration.
+- `create_strength_training_activity` uses the library's activity deletion
+  internally only to roll back an activity created by the same tool call when
+  attaching or verifying its sets fails; no general deletion tool is exposed.
 - Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
 
 If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
