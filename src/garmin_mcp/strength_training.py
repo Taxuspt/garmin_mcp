@@ -27,6 +27,11 @@ GARMIN_EXERCISE_CATALOG_URL = (
 )
 
 _IDENTIFIER_RE = re.compile(r"^[A-Z0-9_]+$")
+_ISO_FRACTION_RE = re.compile(r"\.(\d{1,6})(?=$|[+-])")
+
+# Conservative matching thresholds favor rejecting near-collisions over guessing.
+_MIN_EXERCISE_MATCH_SCORE = 0.82
+_MIN_EXERCISE_MATCH_MARGIN = 0.06
 
 
 class StrengthTrainingError(ValueError):
@@ -198,7 +203,10 @@ def _resolve_exercise_query(
 
     best = suggestions[0]
     runner_up_score = suggestions[1]["score"] if len(suggestions) > 1 else 0.0
-    if best["score"] < 0.82 or best["score"] - runner_up_score < 0.06:
+    if (
+        best["score"] < _MIN_EXERCISE_MATCH_SCORE
+        or best["score"] - runner_up_score < _MIN_EXERCISE_MATCH_MARGIN
+    ):
         options = ", ".join(
             f"{item['category']}/{item['name']} ({item['score']:.3f})"
             for item in suggestions
@@ -337,12 +345,23 @@ def _zone_info(time_zone: str) -> ZoneInfo:
         raise StrengthTrainingError(f"Unknown IANA time zone '{time_zone}'") from exc
 
 
+def _fromisoformat_compatible(value: str) -> datetime:
+    """Parse ISO timestamps consistently on every supported Python version."""
+    normalized = value.strip().replace("Z", "+00:00")
+    normalized = _ISO_FRACTION_RE.sub(
+        lambda match: f".{match.group(1).ljust(6, '0')}",
+        normalized,
+        count=1,
+    )
+    return datetime.fromisoformat(normalized)
+
+
 def _parse_local_datetime(value: Any, time_zone: str, field: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise StrengthTrainingError(f"{field} must be a non-empty ISO date-time")
     zone = _zone_info(time_zone)
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = _fromisoformat_compatible(value)
     except ValueError as exc:
         raise StrengthTrainingError(f"{field} must be an ISO date-time") from exc
     if parsed.tzinfo is None:
@@ -354,7 +373,7 @@ def _parse_gmt_datetime(value: Any, field: str) -> datetime:
     if not isinstance(value, str) or not value.strip():
         raise StrengthTrainingError(f"{field} is missing")
     try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        parsed = _fromisoformat_compatible(value)
     except ValueError as exc:
         raise StrengthTrainingError(f"{field} is not an ISO date-time") from exc
     if parsed.tzinfo is None:
@@ -387,7 +406,7 @@ def _parse_set_start_time(value: Any, activity_start: datetime) -> datetime:
         )
 
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = _fromisoformat_compatible(raw)
     except ValueError as exc:
         raise StrengthTrainingError(
             "start_time must be ISO date-time, HH:MM, or HH:MM:SS"
@@ -411,6 +430,27 @@ def _activity_type_key(activity: Dict[str, Any]) -> Optional[str]:
         if isinstance(value, dict) and value.get("typeKey"):
             return str(value["typeKey"])
     return None
+
+
+def _activity_time_zone(
+    activity: Dict[str, Any],
+    provided_time_zone: Optional[str],
+) -> str:
+    if provided_time_zone is not None:
+        return provided_time_zone
+
+    summary = activity.get("summaryDTO")
+    containers = [activity]
+    if isinstance(summary, dict):
+        containers.append(summary)
+    for container in containers:
+        time_zone_dto = container.get("timeZoneUnitDTO")
+        if not isinstance(time_zone_dto, dict):
+            continue
+        unit_key = time_zone_dto.get("unitKey")
+        if isinstance(unit_key, str) and unit_key.strip():
+            return unit_key.strip()
+    return "UTC"
 
 
 def _activity_start(
@@ -674,6 +714,8 @@ def _extract_readback_sets(value: Any) -> Optional[List[Dict[str, Any]]]:
         sets = value.get("exerciseSets")
         if isinstance(sets, list):
             return sets
+        if "exerciseSets" in value and sets is None:
+            return []
     if isinstance(value, list):
         return value
     return None
@@ -727,7 +769,7 @@ def _timestamp_key(value: Any) -> Optional[str]:
     if not isinstance(value, str) or not value:
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = _fromisoformat_compatible(value)
     except ValueError:
         return value
     if parsed.tzinfo is None:
@@ -867,7 +909,7 @@ def register_tools(app):
         activity_id: Union[int, str],
         sets: List[Dict[str, Any]],
         activity_start_datetime: Optional[str] = None,
-        time_zone: str = "UTC",
+        time_zone: Optional[str] = None,
         confirm: bool = False,
         dry_run: bool = False,
         rollback_on_failure: bool = True,
@@ -892,7 +934,8 @@ def register_tools(app):
           - duration_seconds: set duration (default 30; REST default 90)
           - rest_seconds: spacing before the next automatic set (default 90)
           - set_type: ACTIVE or REST (default ACTIVE)
-          - start_time: ISO date-time, HH:MM, or HH:MM:SS
+          - start_time: ISO date-time, HH:MM, or HH:MM:SS; clock-only values
+            use the activity's start date, so use full ISO after midnight
           - offset_seconds or offset_minutes: offset from activity start
 
         Garmin's public exercise catalog is used for name matching. It exposes
@@ -904,7 +947,8 @@ def register_tools(app):
             activity_id: Existing Garmin strength activity ID
             sets: Complete replacement list of strength set specifications
             activity_start_datetime: Optional ISO start time used for offsets
-            time_zone: IANA zone for naive/local times (default UTC)
+            time_zone: Optional IANA override for naive/local times; otherwise
+                derived from the activity, falling back to UTC
             confirm: Must be true for a write
             dry_run: Validate and preview without changing Garmin
             rollback_on_failure: Restore the previous sets after a failed write
@@ -929,15 +973,17 @@ def register_tools(app):
                     "not 'strength_training'"
                 )
 
+            resolved_time_zone = _activity_time_zone(activity, time_zone)
             start = _activity_start(
                 activity,
                 activity_start_datetime,
-                time_zone,
+                resolved_time_zone,
             )
             exercise_sets, matches = _prepare_strength_sets(sets, start)
             _validate_sets_within_activity(activity, start, exercise_sets)
             preview = {
                 "activityId": parsed_activity_id,
+                "timeZone": resolved_time_zone,
                 "exerciseSets": _display_exercise_sets(exercise_sets),
             }
 
@@ -1097,6 +1143,8 @@ def register_tools(app):
         Set fields are identical to set_activity_strength_exercise_sets:
         exercise or exact category/name, sets, repetitions, weight_kg,
         duration_seconds, rest_seconds, set_type, start_time, and offsets.
+        Clock-only start_time values use the new activity's start date; sets
+        after midnight require a full ISO date-time with the following date.
 
         Args:
             activity_name: Name shown in Garmin Connect

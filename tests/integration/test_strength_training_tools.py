@@ -187,6 +187,42 @@ async def test_confirmed_write_uses_exercise_sets_endpoint_and_verifies_readback
 
 
 @pytest.mark.asyncio
+async def test_update_accepts_null_as_an_empty_previous_set_list(
+    strength_app, strength_client
+):
+    written_payload = {}
+    read_count = 0
+
+    def capture_put(service, url, *, json, api):
+        written_payload.update(json)
+        return {"accepted": True}
+
+    def read_sets(activity_id):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:
+            return {"activityId": activity_id, "exerciseSets": None}
+        return written_payload
+
+    strength_client.client.put.side_effect = capture_put
+    strength_client.get_activity_exercise_sets.side_effect = read_sets
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [{"exercise": "push up", "repetitions": 10}],
+            "confirm": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["verified"] is True
+    strength_client.client.put.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_non_strength_activity_is_rejected(
     strength_app, strength_client
 ):
@@ -450,6 +486,37 @@ async def test_local_set_time_uses_requested_zone_with_gmt_activity_start(
 
     data = _data(result)
     assert data["success"] is True
+    assert data["preview"]["exerciseSets"][0]["startTime"] == (
+        "2026-07-23T08:30:00.0"
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_set_time_uses_activity_zone_when_no_override_is_given(
+    strength_app, strength_client
+):
+    strength_client.get_activity.return_value["timeZoneUnitDTO"] = {
+        "unitKey": "Europe/Warsaw"
+    }
+
+    result = await strength_app.call_tool(
+        "set_activity_strength_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [
+                {
+                    "exercise": "push up",
+                    "start_time": "10:30",
+                    "duration_seconds": 30,
+                }
+            ],
+            "dry_run": True,
+        },
+    )
+
+    data = _data(result)
+    assert data["success"] is True
+    assert data["preview"]["timeZone"] == "Europe/Warsaw"
     assert data["preview"]["exerciseSets"][0]["startTime"] == (
         "2026-07-23T08:30:00.0"
     )

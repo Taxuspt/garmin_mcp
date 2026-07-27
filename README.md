@@ -86,6 +86,10 @@ inside one specification is its repeat count; for example, `"sets": 3`
 expands that item into three identical sets. Returned set data uses
 `weightKg`, not Garmin's internal gram value.
 
+For updates, `time_zone` is optional and is derived from the activity when
+available. Clock-only set times such as `00:15` use the activity's start date;
+use a full ISO date-time for sets occurring after midnight.
+
 ```json
 {
   "activity_id": "12345678901",
@@ -97,15 +101,15 @@ expands that item into three identical sets. Returned set data uses
       "weight_kg": 60,
       "duration_seconds": 35,
       "rest_seconds": 90
-    },
-    {
-      "set_type": "REST",
-      "duration_seconds": 90
     }
   ],
   "dry_run": true
 }
 ```
+
+`rest_seconds` spaces automatically repeated sets but does not create a
+recorded `REST` set. Use explicit `set_type: "REST"` items when recorded rest
+sets are desired, rather than combining both representations for the same gap.
 
 For deterministic matching, pass exact Garmin identifiers instead:
 `{"category": "PUSH_UP", "name": "PUSH_UP"}`. `weight_kg` is converted to

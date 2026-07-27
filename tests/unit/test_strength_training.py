@@ -297,6 +297,43 @@ def test_clock_start_time_uses_activity_date_and_zone():
     assert payload[0]["startTime"] == "2026-12-10T17:30:15.0"
 
 
+def test_offsets_place_sets_relative_to_activity_start():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "offset_seconds": 60,
+                "duration_seconds": 30,
+            },
+            {
+                "exercise": "push up",
+                "offset_minutes": 2,
+                "duration_seconds": 30,
+            },
+        ],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert payload[0]["startTime"] == "2026-07-23T09:01:00.0"
+    assert payload[1]["startTime"] == "2026-07-23T09:02:00.0"
+
+
+def test_aware_iso_set_start_time_is_converted_to_utc():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "start_time": "2026-07-23T10:30:00.0+02:00",
+            }
+        ],
+        datetime(
+            2026, 7, 23, 10, 0, tzinfo=ZoneInfo("Europe/Warsaw")
+        ),
+    )
+
+    assert payload[0]["startTime"] == "2026-07-23T08:30:00.0"
+
+
 def test_out_of_order_or_overlapping_sets_are_rejected():
     with pytest.raises(
         strength_training.StrengthTrainingError, match="overlaps or precedes"
