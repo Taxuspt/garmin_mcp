@@ -134,8 +134,8 @@ def _parse_iso_date(iso_string: str) -> str:
     return iso_string.split("T")[0] if "T" in iso_string else iso_string
 
 
-def _first_non_none(data: dict, *keys: str):
-    """Return the first present, non-None value for the supplied keys."""
+def _first_non_none(data: dict, *keys: str) -> Any:
+    """Return the first non-None value for the supplied keys."""
     for key in keys:
         value = data.get(key)
         if value is not None:
@@ -576,12 +576,9 @@ def register_tools(app):
             curated_challenges = []
             for challenge in challenge_list:
                 curated = {
-                    "name": _first_non_none(
-                        challenge,
-                        "badgeChallengeName",
-                        "name",
-                        "challengeName",
-                    ),
+                    "name": challenge.get("badgeChallengeName")
+                    or challenge.get("name")
+                    or challenge.get("challengeName"),
                     "uuid": challenge.get("uuid"),
                     "start_date": _parse_iso_date(challenge.get("startDate")),
                     "end_date": _parse_iso_date(challenge.get("endDate")),
@@ -600,11 +597,18 @@ def register_tools(app):
                     "target",
                     "targetValue",
                 )
-                if progress is not None and target is not None:
-                    curated["progress_meters"] = progress
-                    curated["target_meters"] = target
-                    curated["progress_km"] = f"{progress / 1000:.2f} km"
-                    curated["target_km"] = f"{target / 1000:.2f} km"
+                if progress is not None and target is not None and target > 0:
+                    unit_id = challenge.get("badgeUnitId")
+                    if unit_id in (None, 1):
+                        # Preserve the existing output contract for distance
+                        # challenges and legacy payloads without unit metadata.
+                        curated["progress_meters"] = progress
+                        curated["target_meters"] = target
+                        curated["progress_km"] = f"{progress / 1000:.2f} km"
+                        curated["target_km"] = f"{target / 1000:.2f} km"
+                    else:
+                        curated["progress"] = _format_badge_value(progress, unit_id)
+                        curated["target"] = _format_badge_value(target, unit_id)
                     curated["progress_percent"] = _calculate_progress_percent(
                         progress, target
                     )
