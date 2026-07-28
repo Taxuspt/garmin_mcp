@@ -20,6 +20,37 @@ def configure(client):
     _activity_type_cache = None  # Reset cache when client changes
 
 
+def _as_dict(value: Any) -> Dict[str, Any]:
+    """Return a dict for Garmin sections that may be null or another shape."""
+    return value if isinstance(value, dict) else {}
+
+
+def _extract_vo2_value(data: Any) -> Optional[float]:
+    """Find a VO2 max value in known Garmin response shapes."""
+    data = _as_dict(data)
+    candidate_paths = (
+        ("vo2MaxRunning",),
+        ("vo2MaxCycling",),
+        ("vo2Max",),
+        ("vo2MaxValue",),
+        ("vo2MaxPreciseValue",),
+        ("mostRecentVO2Max", "generic", "vo2MaxValue"),
+        ("mostRecentVO2Max", "generic", "vo2MaxPreciseValue"),
+        ("mostRecentVO2Max", "cycling", "vo2MaxValue"),
+        ("mostRecentVO2Max", "cycling", "vo2MaxPreciseValue"),
+        ("userData", "vo2MaxRunning"),
+        ("userData", "vo2MaxCycling"),
+    )
+
+    for path in candidate_paths:
+        current: Any = data
+        for key in path:
+            current = _as_dict(current).get(key)
+        if isinstance(current, (int, float)):
+            return float(current)
+    return None
+
+
 def _get_activity_type_mapping() -> Dict[int, str]:
     """Get or build a cached mapping of activity type IDs to names"""
     global _activity_type_cache
@@ -1018,28 +1049,61 @@ def register_tools(app):
         current = start
         while current <= end:
             date_str = current.isoformat()
-            try:
-                data = garmin_client.get_training_status(date_str)
-                if data:
-                    vo2_data = (data.get("mostRecentVO2Max") or {}).get("generic") or {}
-                    vo2 = vo2_data.get("vo2MaxValue")
-                    if vo2 is not None:
-                        vo2_rounded = round(vo2, 1)
-                        if vo2_rounded != last_vo2:  # deduplicate unchanged values
-                            trend.append({"date": date_str, "vo2_max": vo2_rounded})
-                            last_vo2 = vo2_rounded
-            except Exception:
-                pass
+            vo2 = None
+            source = None
+
+            for method_name in (
+                "get_max_metrics",
+                "get_fitnessage_data",
+                "get_training_status",
+            ):
+                method = getattr(garmin_client, method_name, None)
+                if not method:
+                    continue
+                try:
+                    vo2 = _extract_vo2_value(method(date_str))
+                except Exception:
+                    continue
+                if vo2 is not None:
+                    source = method_name
+                    break
+
+            if vo2 is not None:
+                vo2_rounded = round(vo2, 1)
+                if vo2_rounded != last_vo2:  # deduplicate unchanged values
+                    trend.append(
+                        {
+                            "date": date_str,
+                            "vo2_max": vo2_rounded,
+                            "source": source,
+                        }
+                    )
+                    last_vo2 = vo2_rounded
             current += datetime.timedelta(days=1)
 
         if not trend:
-            return f"No VO2 max data found between {start_date} and {end_date}."
+            try:
+                profile = garmin_client.get_user_profile()
+            except Exception:
+                profile = None
+
+            current_vo2 = _extract_vo2_value(profile)
+            if current_vo2 is None:
+                return f"No VO2 max data found between {start_date} and {end_date}."
+
+            trend.append(
+                {
+                    "date": end_date,
+                    "vo2_max": round(current_vo2, 1),
+                    "source": "get_user_profile",
+                }
+            )
 
         first_vo2 = trend[0]["vo2_max"] if trend else None
         latest_vo2 = trend[-1]["vo2_max"] if trend else None
         change = round(latest_vo2 - first_vo2, 1) if (first_vo2 and latest_vo2) else None
 
-        return json.dumps({
+        response = {
             "start_date": start_date,
             "end_date": end_date,
             "data_points": len(trend),
@@ -1047,7 +1111,14 @@ def register_tools(app):
             "latest_vo2_max": latest_vo2,
             "change": change,
             "trend": trend,
-        }, indent=2)
+        }
+        if trend and trend[-1].get("source") == "get_user_profile":
+            response["note"] = (
+                "Historical VO2 max values were not available from Garmin's "
+                "training status endpoint; returning the current profile estimate."
+            )
+
+        return json.dumps(response, indent=2)
 
     @app.tool()
     async def get_respiration_trend(start_date: str, end_date: str) -> str:
