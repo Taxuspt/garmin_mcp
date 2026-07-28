@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 from garmin_mcp.workout_builders import (
     build_walk_run_json,
     build_z2_walk_json,
@@ -67,6 +69,48 @@ def test_build_run_json_structure():
     assert steps[1]["zoneNumber"] == 3
     assert steps[2]["stepType"]["stepTypeKey"] == "cooldown"
     assert steps[2]["endConditionValue"] == 300.0
+
+
+def test_build_run_json_custom_hr_range():
+    """hr_min/hr_max should produce a custom bpm-range target, not a zoneNumber."""
+    result = build_run_json(
+        name="Base run - custom range",
+        run_seconds=1440,
+        warmup_min=5,
+        cooldown_min=5,
+        hr_min=136,
+        hr_max=148,
+    )
+    steps = result["workoutSegments"][0]["workoutSteps"]
+    interval_step = steps[1]
+    assert interval_step["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone"
+    assert interval_step["targetValueOne"] == 136.0
+    assert interval_step["targetValueTwo"] == 148.0
+    assert "zoneNumber" not in interval_step
+    assert "136-148bpm" in result["description"]
+
+
+def test_build_run_json_custom_hr_range_requires_both_bounds():
+    with pytest.raises(ValueError, match="hr_min and hr_max must both be provided together"):
+        build_run_json(
+            name="Bad range",
+            run_seconds=1440,
+            warmup_min=5,
+            cooldown_min=5,
+            hr_min=136,
+        )
+
+
+def test_build_run_json_custom_hr_range_rejects_inverted_bounds():
+    with pytest.raises(ValueError, match="must be less than"):
+        build_run_json(
+            name="Bad range",
+            run_seconds=1440,
+            warmup_min=5,
+            cooldown_min=5,
+            hr_min=148,
+            hr_max=136,
+        )
 
 
 def test_build_strength_json_structure():

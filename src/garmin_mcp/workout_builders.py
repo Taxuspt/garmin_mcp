@@ -45,22 +45,54 @@ def _zone_number(zone: str) -> int:
     raise ValueError(f"Invalid hr_zone '{zone}'. Use Z1-Z5 or 1-5.")
 
 
+def _hr_target(
+    hr_zone: str,
+    hr_min: Optional[int],
+    hr_max: Optional[int],
+) -> tuple:
+    """Resolve HR target fields and a short description suffix.
+
+    Returns (target_extra_fields, description_suffix). If hr_min/hr_max are
+    both given, builds a custom bpm-range target (targetValueOne/targetValueTwo)
+    instead of a named Garmin zone. A custom range and a named zone are mutually
+    exclusive -- if a range is given, hr_zone is ignored.
+    """
+    if hr_min is not None or hr_max is not None:
+        if hr_min is None or hr_max is None:
+            raise ValueError("hr_min and hr_max must both be provided together.")
+        if hr_min >= hr_max:
+            raise ValueError(f"hr_min ({hr_min}) must be less than hr_max ({hr_max}).")
+        return (
+            {"targetValueOne": float(hr_min), "targetValueTwo": float(hr_max)},
+            f"{hr_min}-{hr_max}bpm",
+        )
+    zone = _zone_number(hr_zone)
+    return ({"zoneNumber": zone}, f"Z{zone}")
+
+
 def build_run_json(
     name: str,
     run_seconds: int,
     warmup_min: int,
     cooldown_min: int,
     hr_zone: str = "Z3",
+    hr_min: Optional[int] = None,
+    hr_max: Optional[int] = None,
 ) -> dict:
-    """Build the Garmin Connect JSON for a continuous run workout."""
-    zone = _zone_number(hr_zone)
+    """Build the Garmin Connect JSON for a continuous run workout.
+
+    Targets a named heart-rate zone (hr_zone) by default. Pass hr_min and
+    hr_max together to target an exact custom bpm range instead (e.g. a
+    136-148 bpm range that doesn't line up with any single Garmin zone).
+    """
+    hr_target_fields, hr_desc = _hr_target(hr_zone, hr_min, hr_max)
     run_display = (
         f"{run_seconds // 60}m" if run_seconds % 60 == 0 else f"{run_seconds}s"
     )
     return {
         "workoutName": name,
         "description": (
-            f"{warmup_min}m warmup + {run_display} run Z{zone} + {cooldown_min}m cooldown"
+            f"{warmup_min}m warmup + {run_display} run {hr_desc} + {cooldown_min}m cooldown"
         ),
         "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
         "workoutSegments": [{
@@ -80,11 +112,11 @@ def build_run_json(
                     "type": "ExecutableStepDTO",
                     "stepOrder": 2,
                     "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-                    "description": f"Run {run_seconds}s Z{zone}",
+                    "description": f"Run {run_seconds}s {hr_desc}",
                     "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
                     "endConditionValue": float(run_seconds),
                     "targetType": {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"},
-                    "zoneNumber": zone,
+                    **hr_target_fields,
                 },
                 {
                     "type": "ExecutableStepDTO",
@@ -347,17 +379,28 @@ def register_tools(app):
         warmup_min: int,
         cooldown_min: int,
         hr_zone: str = "Z3",
+        hr_min: Optional[int] = None,
+        hr_max: Optional[int] = None,
     ) -> str:
         """Create a continuous run workout and upload it to Garmin Connect.
 
         Builds a single uninterrupted run interval with warmup and cooldown walks.
+
+        Targets a named Garmin heart-rate zone by default. Named zones (Z1-Z5)
+        don't line up with every real training target -- e.g. a 136-148 bpm
+        Zone 2 goal straddles Garmin's Z2 (118-137) and Z3 (138-157). Pass
+        hr_min and hr_max together to target that exact bpm range instead;
+        the watch will then show "in range" only for the range you actually
+        want, not a whole zone that over- or under-shoots it.
 
         Args:
             name: Workout name (e.g. "Step 8 - 30min continuous")
             run_seconds: Duration of the run in seconds
             warmup_min: Warmup walk duration in minutes
             cooldown_min: Cooldown walk duration in minutes
-            hr_zone: Target heart-rate zone (Z1-Z5, default Z3)
+            hr_zone: Target heart-rate zone (Z1-Z5, default Z3). Ignored if hr_min/hr_max are given.
+            hr_min: Optional custom target heart rate range, minimum bpm (must be given with hr_max)
+            hr_max: Optional custom target heart rate range, maximum bpm (must be given with hr_min)
         """
         try:
             workout_json = build_run_json(
@@ -366,6 +409,8 @@ def register_tools(app):
                 warmup_min=warmup_min,
                 cooldown_min=cooldown_min,
                 hr_zone=hr_zone,
+                hr_min=hr_min,
+                hr_max=hr_max,
             )
             result = garmin_client.upload_workout(workout_json)
 
