@@ -655,14 +655,15 @@ def register_tools(app):
     async def get_activity_weather(activity_id: Union[int, str]) -> str:
         """Get weather data for an activity.
 
-        The temperature and dew_point values are in the unit matching the
-        account's measurement system (Fahrenheit for statute_us / imperial
-        accounts, Celsius for metric). The temperature_unit field ("F" or "C")
-        reflects whichever unit the API returned; do not assume Celsius.
+        Garmin's weather endpoint returns temperatures in Fahrenheit (from the
+        weather-station source) with no unit indicator, regardless of account
+        settings. This tool converts them to the account's display unit: metric
+        accounts get Celsius, statute_us accounts keep Fahrenheit. The
+        temperature_unit field ("F" or "C") states which unit was returned.
 
-        Wind speed unit also follows the measurement system (mph for imperial,
-        km/h for metric), but no wind_speed_unit field is included because the
-        Garmin API does not document the wind speed unit explicitly.
+        Wind speed, unlike temperature, is already returned in the account's
+        display unit (km/h for metric, mph for statute_us), so it is passed
+        through unconverted and labeled via the wind_speed_unit field.
 
         Args:
             activity_id: ID of the activity to retrieve weather data for
@@ -673,26 +674,53 @@ def register_tools(app):
             if not weather:
                 return f"No weather data found for activity with ID {activity_id}"
 
-            # Determine temperature unit from the account's measurement system.
-            # Garmin's weather endpoint returns temp in the account's display
-            # unit (no unit indicator in the payload itself).
+            # Garmin's activity-weather endpoint returns temperatures in
+            # FAHRENHEIT (from the METAR/station source), regardless of the
+            # account's measurement system — the payload carries no unit field.
+            # (Confirmed: a metric account still gets °F here, e.g. temp 57.)
+            # So convert the raw Fahrenheit values to the account's display unit.
+            def _f_to_c(value):
+                return round((value - 32) * 5 / 9, 1) if value is not None else None
+
             try:
                 unit_system = garmin_client.get_unit_system()
-                temp_unit = "F" if unit_system == "statute_us" else "C"
             except Exception:
-                temp_unit = None
+                unit_system = None
+
+            raw_temp = weather.get('temp')
+            raw_apparent = weather.get('apparentTemp')
+            raw_dew = weather.get('dewPoint')
+
+            if unit_system is not None and unit_system != "statute_us":
+                # Metric (or non-US-statute) account → present in Celsius.
+                temp_unit = "C"
+                out_temp, out_apparent, out_dew = (
+                    _f_to_c(raw_temp), _f_to_c(raw_apparent), _f_to_c(raw_dew)
+                )
+            else:
+                # statute_us account (or unknown) → leave the raw Fahrenheit.
+                temp_unit = "F" if unit_system == "statute_us" else None
+                out_temp, out_apparent, out_dew = raw_temp, raw_apparent, raw_dew
+
+            # Wind, unlike temperature, IS already returned in the account's
+            # display unit (verified against a local weather station: metric
+            # accounts get km/h, not mph). So don't convert it — just label it.
+            wind_unit = "mph" if unit_system == "statute_us" else (
+                "km/h" if unit_system is not None else None
+            )
 
             weather_type_dto = weather.get('weatherTypeDTO') or {}
             station_dto = weather.get('weatherStationDTO') or {}
 
             curated = {
                 "activity_id": activity_id,
-                "temperature": weather.get('temp'),
+                "temperature": out_temp,
                 "temperature_unit": temp_unit,
-                "apparent_temperature": weather.get('apparentTemp'),
-                "dew_point": weather.get('dewPoint'),
+                "apparent_temperature": out_apparent,
+                "dew_point": out_dew,
                 "humidity_percent": weather.get('relativeHumidity'),
                 "wind_speed": weather.get('windSpeed'),
+                "wind_speed_unit": wind_unit,
                 "wind_direction_degrees": weather.get('windDirection'),
                 "wind_direction_compass": weather.get('windDirectionCompassPoint'),
                 "wind_gust": weather.get('windGust'),

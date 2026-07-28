@@ -483,31 +483,54 @@ async def test_get_activity_split_summaries_tool(app_with_activity_management, m
 
 
 @pytest.mark.asyncio
-async def test_get_activity_weather_tool(app_with_activity_management, mock_garmin_client):
-    """Test get_activity_weather tool returns weather data"""
-    # Setup mock
-    weather_data = {
-        "temp": 18.0,
-        "apparentTemp": 16.0,
-        "dewPoint": 10.0,
-        "relativeHumidity": 65,
-        "windSpeed": 5.0,
-        "windDirection": 180,
-        "latitude": 40.7128,
-        "longitude": -74.0060
+async def test_get_activity_weather_metric_converts_to_celsius(
+    app_with_activity_management, mock_garmin_client
+):
+    """Garmin returns Fahrenheit; a metric account must see Celsius."""
+    import json as json_module
+
+    # Raw Garmin payload is Fahrenheit (no unit field), e.g. 57 F for Erfurt.
+    mock_garmin_client.get_activity_weather.return_value = {
+        "temp": 57, "apparentTemp": 57, "dewPoint": 50, "relativeHumidity": 77,
+        "windSpeed": 8,
     }
-    mock_garmin_client.get_activity_weather.return_value = weather_data
+    mock_garmin_client.get_unit_system.return_value = "metric"
 
-    # Call tool
-    activity_id = 12345678901
     result = await app_with_activity_management.call_tool(
-        "get_activity_weather",
-        {"activity_id": activity_id}
+        "get_activity_weather", {"activity_id": 23651251274}
     )
+    data = json_module.loads(result[0][0].text)
+    assert data["temperature_unit"] == "C"
+    assert data["temperature"] == 13.9   # 57 F -> 13.9 C, not the raw 57
+    assert data["apparent_temperature"] == 13.9
+    assert data["dew_point"] == 10.0      # 50 F -> 10 C
+    # Wind is already metric — labeled km/h, NOT converted.
+    assert data["wind_speed"] == 8
+    assert data["wind_speed_unit"] == "km/h"
 
-    # Verify
-    assert result is not None
-    mock_garmin_client.get_activity_weather.assert_called_once_with(activity_id)
+
+@pytest.mark.asyncio
+async def test_get_activity_weather_statute_us_keeps_fahrenheit(
+    app_with_activity_management, mock_garmin_client
+):
+    """A statute_us account keeps the raw Fahrenheit values."""
+    import json as json_module
+
+    mock_garmin_client.get_activity_weather.return_value = {
+        "temp": 57, "dewPoint": 50, "windSpeed": 8,
+    }
+    mock_garmin_client.get_unit_system.return_value = "statute_us"
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity_weather", {"activity_id": 1}
+    )
+    data = json_module.loads(result[0][0].text)
+    assert data["temperature_unit"] == "F"
+    assert data["temperature"] == 57      # unchanged
+    assert data["dew_point"] == 50
+    assert data["wind_speed"] == 8
+    assert data["wind_speed_unit"] == "mph"
+    mock_garmin_client.get_activity_weather.assert_called_once_with(1)
 
 
 @pytest.mark.asyncio
