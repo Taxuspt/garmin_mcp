@@ -950,3 +950,122 @@ async def test_set_nutrition_daily_settings_api_error(app_with_nutrition, mock_g
     )
     assert "Error updating nutrition settings" in result[0][0].text
     assert "403" in result[0][0].text
+
+
+# search_foods tests
+
+_SEARCH_RESPONSE = {
+    "results": [
+        {
+            "foodMetaData": {
+                "foodId": "4132350",
+                "foodName": "Cheerios",
+                "foodType": "BRANDED",
+                "source": "FATSECRET",
+                "brandName": "General Mills",
+                "regionCode": "US",
+                "languageCode": "en",
+            },
+            "nutritionContents": [
+                {
+                    "servingId": "srv001",
+                    "servingUnit": "cup",
+                    "numberOfUnits": 1.0,
+                    "calories": 100.0,
+                    "carbs": 20.0,
+                    "protein": 3.0,
+                    "fat": 2.0,
+                }
+            ],
+        }
+    ],
+    "moreDataAvailable": False,
+}
+
+
+@pytest.mark.asyncio
+async def test_search_foods_returns_results(app_with_nutrition, mock_garmin_client):
+    """search_foods returns formatted catalog results."""
+    mock_garmin_client.connectapi.return_value = _SEARCH_RESPONSE
+
+    result = await app_with_nutrition.call_tool(
+        "search_foods",
+        {"query": "Cheerios"},
+    )
+    data = json.loads(result[0][0].text)
+    assert data["count"] == 1
+    assert data["results"][0]["name"] == "Cheerios"
+    assert data["results"][0]["source"] == "FATSECRET"
+    assert data["results"][0]["brand"] == "General Mills"
+    assert data["results"][0]["servings"][0]["calories"] == 100.0
+    assert not data["has_more"]
+    mock_garmin_client.connectapi.assert_called_once()
+    called_url = mock_garmin_client.connectapi.call_args[0][0]
+    assert "Cheerios" in called_url
+
+
+@pytest.mark.asyncio
+async def test_search_foods_empty_response(app_with_nutrition, mock_garmin_client):
+    """search_foods returns a clear message when no results are found."""
+    mock_garmin_client.connectapi.return_value = None
+
+    result = await app_with_nutrition.call_tool(
+        "search_foods",
+        {"query": "xyzunknownfood"},
+    )
+    assert "No foods found" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_search_foods_error(app_with_nutrition, mock_garmin_client):
+    """search_foods surfaces API errors cleanly."""
+    mock_garmin_client.connectapi.side_effect = Exception("503 Service Unavailable")
+
+    result = await app_with_nutrition.call_tool(
+        "search_foods",
+        {"query": "Cheerios"},
+    )
+    assert "Error searching foods" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_log_custom_food_uses_fatsecret_source(app_with_nutrition, mock_garmin_client):
+    """log_custom_food passes through the source parameter for FATSECRET foods."""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.return_value = {"success": True}
+
+    await app_with_nutrition.call_tool(
+        "log_custom_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "08:00:00",
+            "food_id": "4132350",
+            "serving_id": "srv001",
+            "source": "FATSECRET",
+        },
+    )
+
+    payload = mock_garmin_client.client.put.call_args[1]["json"]
+    item = payload["foodLogItems"][0]
+    assert item["source"] == "FATSECRET"
+
+
+@pytest.mark.asyncio
+async def test_log_custom_food_defaults_to_garmin_source(app_with_nutrition, mock_garmin_client):
+    """log_custom_food uses GARMIN source by default (backwards compatible)."""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.return_value = {"success": True}
+
+    await app_with_nutrition.call_tool(
+        "log_custom_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "08:00:00",
+            "food_id": "abc-uuid-123",
+            "serving_id": "srv002",
+        },
+    )
+
+    payload = mock_garmin_client.client.put.call_args[1]["json"]
+    item = payload["foodLogItems"][0]
+    assert item["source"] == "GARMIN"
