@@ -62,13 +62,6 @@ def get_mfa() -> str:
     return input("Enter MFA code: ")
 
 
-def _resolve_tokenstore_path(path: str) -> str:
-    """Resolve token paths, including placeholders left by MCP clients."""
-    expanded = os.path.expandvars(path)
-    expanded = expanded.replace("${HOME}", os.path.expanduser("~"))
-    return os.path.expanduser(expanded)
-
-
 # Get credentials from environment
 email = os.environ.get("GARMIN_EMAIL")
 email_file = os.environ.get("GARMIN_EMAIL_FILE")
@@ -90,12 +83,8 @@ elif password_file:
     with open(password_file, "r") as password_file:
         password = password_file.read().rstrip()
 
-tokenstore = _resolve_tokenstore_path(
-    os.getenv("GARMINTOKENS") or "~/.garminconnect"
-)
-tokenstore_base64 = _resolve_tokenstore_path(
-    os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
-)
+tokenstore = token_utils.get_token_path()
+tokenstore_base64 = token_utils.get_token_base64_path()
 is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
 
@@ -305,17 +294,15 @@ def init_api(email, password):
                 file=sys.stderr,
             )
             # Encode Oauth1 and Oauth2 tokens to base64 string and save to file for next login (alternative way)
-            expanded_tokenstore = os.path.expanduser(tokenstore)
-            token_json_path = os.path.join(expanded_tokenstore, "garmin_tokens.json")
+            token_json_path = os.path.join(tokenstore, "garmin_tokens.json")
             with open(token_json_path, "r") as f:
                 token_data = f.read()
             token_base64 = base64.b64encode(token_data.encode()).decode()
-            dir_path = os.path.expanduser(tokenstore_base64)
-            with open(dir_path, "w") as token_file:
+            with open(tokenstore_base64, "w") as token_file:
                 token_file.write(token_base64)
-            os.chmod(dir_path, 0o600)
+            os.chmod(tokenstore_base64, 0o600)
             print(
-                f"Oauth tokens encoded as base64 string and saved to '{dir_path}' file for future use. (second method)\n",
+                f"Oauth tokens encoded as base64 string and saved to '{tokenstore_base64}' file for future use. (second method)\n",
                 file=sys.stderr,
             )
         except (
