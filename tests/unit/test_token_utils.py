@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
+from garmin_mcp import _resolve_tokenstore_path
 from garmin_mcp.token_utils import (
     get_token_path,
     get_token_base64_path,
@@ -31,6 +32,26 @@ class TestGetTokenPath:
         """Test that environment variable path is used when set."""
         with patch.dict(os.environ, {"GARMINTOKENS": "/custom/path"}):
             assert get_token_path() == "/custom/path"
+
+
+class TestResolveTokenstorePath:
+    """Tests for token paths passed to the MCP server process."""
+
+    def test_expands_unresolved_home_placeholder(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/tmp/garmin-home")
+
+        assert (
+            _resolve_tokenstore_path("${HOME}/.garminconnect")
+            == "/tmp/garmin-home/.garminconnect"
+        )
+
+    def test_expands_tilde_default(self, monkeypatch):
+        monkeypatch.setenv("HOME", "/tmp/garmin-home")
+
+        assert (
+            _resolve_tokenstore_path("~/.garminconnect")
+            == "/tmp/garmin-home/.garminconnect"
+        )
 
 
 class TestGetTokenBase64Path:

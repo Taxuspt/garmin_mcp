@@ -49,7 +49,7 @@
       "title": "Token storage directory",
       "description": "Directory where your Garmin OAuth tokens are stored. You must run garmin-mcp-auth once in a terminal to generate these tokens before using the server.",
       "required": false,
-      "default": "${HOME}/.garminconnect"
+      "default": "~/.garminconnect"
     },
     "garmin_email": {
       "type": "string",

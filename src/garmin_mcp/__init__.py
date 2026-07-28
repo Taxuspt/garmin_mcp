@@ -62,6 +62,13 @@ def get_mfa() -> str:
     return input("Enter MFA code: ")
 
 
+def _resolve_tokenstore_path(path: str) -> str:
+    """Resolve token paths, including placeholders left by MCP clients."""
+    expanded = os.path.expandvars(path)
+    expanded = expanded.replace("${HOME}", os.path.expanduser("~"))
+    return os.path.expanduser(expanded)
+
+
 # Get credentials from environment
 email = os.environ.get("GARMIN_EMAIL")
 email_file = os.environ.get("GARMIN_EMAIL_FILE")
@@ -83,8 +90,12 @@ elif password_file:
     with open(password_file, "r") as password_file:
         password = password_file.read().rstrip()
 
-tokenstore = os.getenv("GARMINTOKENS") or "~/.garminconnect"
-tokenstore_base64 = os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
+tokenstore = _resolve_tokenstore_path(
+    os.getenv("GARMINTOKENS") or "~/.garminconnect"
+)
+tokenstore_base64 = _resolve_tokenstore_path(
+    os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
+)
 is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
 
