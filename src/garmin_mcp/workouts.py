@@ -914,7 +914,7 @@ def register_tools(app):
             workout_data: Complete workout structure (name, sport type, segments, steps).
         """
         try:
-            _fix_hr_zone_steps(workout_data)
+            _normalize_workout_steps(workout_data)
             _validate_end_condition_steps(workout_data)
             _validate_target_type_steps(workout_data)
 
