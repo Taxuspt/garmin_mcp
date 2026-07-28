@@ -60,39 +60,101 @@ def configure(client):
     garmin_client = client
 
 
-_PRIMARY_TARGET_VALUE_FIELDS = (
-    'targetValueOne',
-    'targetValueTwo',
-)
+_TARGET_FIELD_LAYOUTS = {
+    'targetType': {
+        'bounds': ('targetValueOne', 'targetValueTwo'),
+        'zone': 'zoneNumber',
+    },
+    'secondaryTargetType': {
+        'bounds': ('secondaryTargetValueOne', 'secondaryTargetValueTwo'),
+        'zone': 'secondaryZoneNumber',
+    },
+}
 
 
-def _fix_nested_target_values_step(step: dict, path: str) -> None:
-    """Move target values out of targetType, where Garmin silently ignores them."""
-    target_type = step.get('targetType')
-    if isinstance(target_type, dict):
-        nested_fields = [
-            field
-            for field in _PRIMARY_TARGET_VALUE_FIELDS
-            if field in target_type
-        ]
-
-        for field in nested_fields:
-            if field in step and step[field] != target_type[field]:
-                raise ValueError(
-                    f"{path}.{field} conflicts with "
-                    f"{path}.targetType.{field}"
-                )
-
-        for field in nested_fields:
-            if field not in step:
-                step[field] = target_type[field]
-            target_type.pop(field)
-
+def _iter_step_tree(step: dict, path: str):
+    """Yield a workout step and every nested step with its request path."""
+    yield step, path
     for index, nested in enumerate(step.get('workoutSteps', [])):
-        _fix_nested_target_values_step(
+        yield from _iter_step_tree(
             nested,
             f"{path}.workoutSteps[{index}]",
         )
+
+
+def _iter_workout_steps(workout_data: dict):
+    """Yield every workout step with a stable request path."""
+    for segment_index, segment in enumerate(
+        workout_data.get('workoutSegments', [])
+    ):
+        for step_index, step in enumerate(segment.get('workoutSteps', [])):
+            path = (
+                f"workoutSegments[{segment_index}]"
+                f".workoutSteps[{step_index}]"
+            )
+            yield from _iter_step_tree(step, path)
+
+
+def _validate_nested_target_fields(step: dict, path: str) -> None:
+    """Reject conflicting or ambiguous target fields before any repair."""
+    for target_field, layout in _TARGET_FIELD_LAYOUTS.items():
+        target_type = step.get(target_field)
+        if not isinstance(target_type, dict):
+            continue
+
+        fields = (*layout['bounds'], layout['zone'])
+        for field in fields:
+            nested_value = target_type.get(field)
+            if (
+                nested_value is not None
+                and step.get(field) is not None
+                and step[field] != nested_value
+            ):
+                raise ValueError(
+                    f"{path}.{field}={step[field]!r} conflicts with "
+                    f"{path}.{target_field}.{field}={nested_value!r}; "
+                    f"keep only the step-level {field}"
+                )
+
+        zone_field = layout['zone']
+        zone_value = step.get(zone_field)
+        if zone_value is None:
+            zone_value = target_type.get(zone_field)
+
+        bound_values = []
+        for field in layout['bounds']:
+            value = step.get(field)
+            if value is None:
+                value = target_type.get(field)
+            if value is not None:
+                bound_values.append((field, value))
+
+        if zone_value is not None and bound_values:
+            bounds = ", ".join(
+                f"{field}={value!r}"
+                for field, value in bound_values
+            )
+            raise ValueError(
+                f"{path} mixes {zone_field}={zone_value!r} with custom "
+                f"range fields ({bounds}); use either a named zone or a "
+                f"custom range"
+            )
+
+
+def _move_nested_target_fields(step: dict) -> None:
+    """Move target fields to the step level, where Garmin reads them."""
+    for target_field, layout in _TARGET_FIELD_LAYOUTS.items():
+        target_type = step.get(target_field)
+        if not isinstance(target_type, dict):
+            continue
+
+        fields = (*layout['bounds'], layout['zone'])
+        for field in fields:
+            if field not in target_type:
+                continue
+            value = target_type.pop(field)
+            if value is not None and step.get(field) is None:
+                step[field] = value
 
 
 def _fix_hr_zone_step(step: dict) -> None:
@@ -105,8 +167,12 @@ def _fix_hr_zone_step(step: dict) -> None:
     Custom HR bpm ranges (e.g. targetValueOne=105, targetValueTwo=143) are left
     unchanged — these are legitimate custom heart rate targets in Garmin Connect.
     """
-    target_type = step.get('targetType') or {}
-    target_key = target_type.get('workoutTargetTypeKey', '')
+    target_type = step.get('targetType')
+    target_key = (
+        target_type.get('workoutTargetTypeKey', '')
+        if isinstance(target_type, dict)
+        else ''
+    )
 
     if target_key == 'heart.rate.zone' and 'zoneNumber' not in step:
         zone = step.get('targetValueOne')
@@ -157,15 +223,18 @@ def _fix_repeat_group_step(step: dict) -> None:
 
 def _normalize_workout_steps(workout_data: dict) -> None:
     """Repair recoverable step-shape mistakes before validation and upload."""
-    for segment_index, segment in enumerate(
-        workout_data.get('workoutSegments', [])
-    ):
-        for step_index, step in enumerate(segment.get('workoutSteps', [])):
-            path = (
-                f"workoutSegments[{segment_index}]"
-                f".workoutSteps[{step_index}]"
-            )
-            _fix_nested_target_values_step(step, path)
+    steps = list(_iter_workout_steps(workout_data))
+
+    # Preflight the complete workout so a later conflict cannot leave an
+    # earlier step partially repaired.
+    for step, path in steps:
+        _validate_nested_target_fields(step, path)
+    for step, _ in steps:
+        _move_nested_target_fields(step)
+
+    # These helpers recurse, so invoke them only for top-level steps.
+    for segment in workout_data.get('workoutSegments', []):
+        for step in segment.get('workoutSteps', []):
             _fix_hr_zone_step(step)
             _fix_repeat_group_step(step)
 
@@ -660,6 +729,8 @@ def register_tools(app):
         For non-HR targets (pace, power, cadence), use targetValueOne/targetValueTwo directly.
         Target values are fields on the workout step, alongside targetType; do not put
         targetValueOne, targetValueTwo, or zoneNumber inside the targetType object.
+        Use either zoneNumber or targetValueOne/targetValueTwo, not both. Garmin silently
+        discards a custom range when a named zone is also present.
 
         Note: a safety check converts targetValueOne 1-5 to zoneNumber when zoneNumber is missing,
         to catch the common mistake of putting a zone index in targetValueOne. Typical bpm values
