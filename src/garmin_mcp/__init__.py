@@ -62,6 +62,12 @@ def get_mfa() -> str:
     return input("Enter MFA code: ")
 
 
+def _normalize_optional_user_config(value: str | None, key: str) -> str | None:
+    """Treat an unresolved optional Desktop Extension value as unset."""
+    unresolved_placeholder = f"${{user_config.{key}}}"
+    return None if value == unresolved_placeholder else value
+
+
 # Get credentials from environment
 email = os.environ.get("GARMIN_EMAIL")
 email_file = os.environ.get("GARMIN_EMAIL_FILE")
@@ -217,6 +223,12 @@ class _ToolFilter:
 def init_api(email, password):
     """Initialize Garmin API with your credentials."""
     import io
+
+    # Claude Desktop may leave blank optional user_config values as literal
+    # placeholders. Do not mistake those strings for credentials and trigger a
+    # rate-limited Garmin login from a non-interactive MCP process.
+    email = _normalize_optional_user_config(email, "garmin_email")
+    password = _normalize_optional_user_config(password, "garmin_password")
 
     try:
         # Using Oauth1 and OAuth2 token files from directory
