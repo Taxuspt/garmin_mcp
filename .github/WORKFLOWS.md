@@ -11,12 +11,12 @@ This repository uses GitHub Actions for continuous integration and security chec
 - Pushes to `main` or `master`
 
 **What it does:**
-- Tests the codebase across Python versions 3.10, 3.11, 3.12, and 3.13
+- Tests the codebase across Python versions 3.12 and 3.13
 - Runs all integration and unit tests
 - Uses uv for fast dependency management
 - Provides a test summary
 
-**Matrix:** Tests run in parallel across 4 Python versions for comprehensive compatibility checks.
+**Matrix:** Tests run in parallel across 2 Python versions (3.12, 3.13) for comprehensive compatibility checks.
 
 ### 2. PR Validation (`pr-validation.yml`)
 

@@ -1,0 +1,710 @@
+"""Unit tests for structured strength activity helpers."""
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from garmin_mcp import strength_training
+
+
+CATALOG = (
+    ("BENCH_PRESS", "BARBELL_BENCH_PRESS", "Barbell Bench Press"),
+    ("DEADLIFT", "BARBELL_DEADLIFT", "Barbell Deadlift"),
+    ("FLYE", "INCLINE_REVERSE_FLYE", "Incline Reverse Flye"),
+    ("HIP_STABILITY", "DEAD_BUG", "Dead Bug"),
+    ("PLANK", "SIDE_PLANK", "Side Plank"),
+    ("PULL_UP", "PULL_UP", "Pull-up"),
+    ("PUSH_UP", "PUSH_UP", "Push-up"),
+    ("ROW", "BENT_OVER_ROW_WITH_DUMBELL", "Bent-over Row with Dumbbell"),
+    ("SHOULDER_PRESS", "DUMBBELL_SHOULDER_PRESS", "Dumbbell Shoulder Press"),
+    ("SQUAT", "BARBELL_BACK_SQUAT", "Barbell Back Squat"),
+)
+
+
+def test_catalog_parser_extracts_bundled_catalog_entries():
+    rows = [
+        {
+            "name": "Push-up",
+            "category": "PUSH_UP",
+            "exercise": "PUSH_UP",
+        },
+        {
+            "name": "Diamond Push-up",
+            "category": "PUSH_UP",
+            "exercise": "DIAMOND_PUSH_UP",
+        },
+    ]
+
+    assert strength_training._catalog_entries_from_rows(rows) == (
+        ("PUSH_UP", "DIAMOND_PUSH_UP", "Diamond Push-up"),
+        ("PUSH_UP", "PUSH_UP", "Push-up"),
+    )
+
+
+def test_catalog_parser_skips_malformed_rows_and_keeps_valid_entries():
+    rows = [
+        {"name": "Push-up", "category": "PUSH_UP", "exercise": "PUSH_UP"},
+        {
+            "name": "Invalid Exercise",
+            "category": "PUSH_UP",
+            "exercise": "BAD/EXERCISE",
+        },
+        {
+            "name": "Invalid Category",
+            "category": "BAD/CATEGORY",
+            "exercise": "IGNORED_EXERCISE",
+        },
+        None,
+    ]
+
+    assert strength_training._catalog_entries_from_rows(rows) == (
+        ("PUSH_UP", "PUSH_UP", "Push-up"),
+    )
+
+
+def test_bundled_catalog_contains_expected_strength_identifiers():
+    catalog = strength_training._catalog_entries_from_rows(
+        strength_training.garmin_exercises.EXERCISES
+    )
+
+    assert len(catalog) > 1_000
+    assert ("PUSH_UP", "PUSH_UP", "Push-up") in catalog
+
+
+def test_category_only_catalog_entries_use_null_activity_subcategory():
+    catalog = strength_training._catalog_entries_from_rows(
+        strength_training.garmin_exercises.EXERCISES
+    )
+    category_only = [
+        (category, name)
+        for category, name, _display_name in catalog
+        if category == name
+    ]
+
+    assert {category for category, _name in category_only} == set(
+        strength_training.garmin_exercises.CATEGORIES
+    )
+    assert all(
+        strength_training._completed_activity_exercise_name(
+            {"category": category, "name": name}
+        )
+        is None
+        for category, name in category_only
+    )
+
+
+def test_get_exercise_types_identifiers_are_accepted_by_resolver():
+    catalog = strength_training._catalog_entries_from_rows(
+        strength_training.garmin_exercises.EXERCISES
+    )
+
+    match = strength_training._resolve_exercise_spec(
+        {"category": "PUSH_UP", "exercise_name": "PUSH_UP"},
+        0,
+        catalog_loader=lambda: catalog,
+    )
+
+    assert match["name"] == "PUSH_UP"
+    assert match["exercise_name"] == "PUSH_UP"
+    assert match["display_name"] == "Push-up"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("push up", ("PUSH_UP", "PUSH_UP")),
+        ("pull up", ("PULL_UP", "PULL_UP")),
+        ("squat", ("SQUAT", "SQUAT")),
+        ("deadlift", ("DEADLIFT", "DEADLIFT")),
+        ("barbell bench press", ("BENCH_PRESS", "BARBELL_BENCH_PRESS")),
+        ("dead bug", ("HIP_STABILITY", "DEAD_BUG")),
+    ],
+)
+def test_english_names_are_matched_directly_from_catalog(query, expected):
+    match = strength_training._resolve_exercise_query(query)
+
+    assert (match["category"], match["name"]) == expected
+    assert match["match_type"] == "catalog_exact"
+
+
+def test_localized_names_are_not_maintained_as_manual_aliases():
+    with pytest.raises(
+        strength_training.StrengthTrainingError,
+        match="No Garmin exercise matches",
+    ):
+        strength_training._resolve_exercise_query("pompki")
+
+
+def test_catalog_exact_match_uses_english_display_name():
+    match = strength_training._resolve_exercise_query(
+        "Bent-over Row with Dumbbell"
+    )
+
+    assert match["category"] == "ROW"
+    assert match["name"] == "BENT_OVER_ROW_WITH_DUMBELL"
+    assert match["match_type"] == "catalog_exact"
+
+
+@pytest.mark.parametrize("query", ["overhead press", "ab twist"])
+def test_bare_identifier_does_not_select_a_specialty_variant(query):
+    with pytest.raises(
+        strength_training.StrengthTrainingError, match="No confident"
+    ):
+        strength_training._resolve_exercise_query(query)
+
+
+def test_duplicate_display_names_are_rejected(monkeypatch):
+    monkeypatch.setattr(
+        strength_training,
+        "_load_garmin_exercise_catalog",
+        lambda: (
+            ("PUSH_UP", "PUSH_UP", "Push-up"),
+            ("SUSPENSION", "PUSH_UP", "Push-up"),
+        ),
+    )
+    with pytest.raises(
+        strength_training.StrengthTrainingError, match="ambiguous"
+    ) as exc:
+        strength_training._resolve_exercise_query("push up")
+
+    assert "PUSH_UP/PUSH_UP" in str(exc.value)
+    assert "SUSPENSION/PUSH_UP" in str(exc.value)
+
+
+def test_low_confidence_match_returns_candidates_instead_of_guessing(monkeypatch):
+    monkeypatch.setattr(
+        strength_training, "_load_garmin_exercise_catalog", lambda: CATALOG
+    )
+
+    with pytest.raises(
+        strength_training.StrengthTrainingError, match="No confident"
+    ) as exc:
+        strength_training._resolve_exercise_query("shoulder movement machine")
+
+    assert "Closest candidates" in str(exc.value)
+
+
+def test_exact_category_exercise_name_is_validated(monkeypatch):
+    monkeypatch.setattr(
+        strength_training, "_load_garmin_exercise_catalog", lambda: CATALOG
+    )
+
+    match = strength_training._resolve_exercise_spec(
+        {"category": "push_up", "exercise_name": "push-up"},
+        0,
+    )
+
+    assert match["category"] == "PUSH_UP"
+    assert match["name"] == "PUSH_UP"
+    assert match["exercise_name"] == "PUSH_UP"
+    assert match["match_type"] == "provided"
+
+
+def test_activity_payload_name_alias_is_accepted(monkeypatch):
+    monkeypatch.setattr(
+        strength_training, "_load_garmin_exercise_catalog", lambda: CATALOG
+    )
+
+    match = strength_training._resolve_exercise_spec(
+        {"category": "PUSH_UP", "name": "PUSH_UP"},
+        0,
+    )
+
+    assert match["exercise_name"] == "PUSH_UP"
+    assert match["match_type"] == "provided"
+
+
+def test_conflicting_name_aliases_are_rejected():
+    with pytest.raises(
+        strength_training.StrengthTrainingError,
+        match="must identify the same exercise",
+    ):
+        strength_training._resolve_exercise_spec(
+            {
+                "category": "PUSH_UP",
+                "name": "PUSH_UP",
+                "exercise_name": "DIAMOND_PUSH_UP",
+            },
+            0,
+        )
+
+
+def test_unknown_exact_identifier_is_rejected_with_category_suggestions(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        strength_training, "_load_garmin_exercise_catalog", lambda: CATALOG
+    )
+
+    with pytest.raises(
+        strength_training.StrengthTrainingError, match="unknown Garmin exercise"
+    ):
+        strength_training._resolve_exercise_spec(
+            {"category": "PUSH_UP", "name": "PUSH_DOWN"},
+            0,
+        )
+
+
+def test_prepare_sets_expands_repeats_and_converts_kg_and_time_zone():
+    activity_start = datetime(
+        2026, 7, 23, 10, 0, tzinfo=ZoneInfo("Europe/Warsaw")
+    )
+
+    payload, matches = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "sets": 2,
+                "repetitions": 10,
+                "weight_kg": 12.5,
+                "duration_seconds": 40,
+                "rest_seconds": 80,
+            },
+            {"set_type": "REST", "duration_seconds": 60},
+        ],
+        activity_start,
+    )
+
+    assert len(payload) == 3
+    assert len(matches) == 1
+    assert payload[0] == {
+        "exercises": [
+            {
+                "category": "PUSH_UP",
+                "name": None,
+                "probability": 100.0,
+            }
+        ],
+        "duration": 40.0,
+        "repetitionCount": 10,
+        "weight": 12500.0,
+        "setType": "ACTIVE",
+        "startTime": "2026-07-23T08:00:00.0",
+        "wktStepIndex": None,
+        "messageIndex": None,
+    }
+    assert payload[1]["startTime"] == "2026-07-23T08:02:00.0"
+    assert payload[2]["startTime"] == "2026-07-23T08:04:00.0"
+    assert payload[2]["setType"] == "REST"
+    assert payload[2]["exercises"] == []
+    assert payload[2]["weight"] is None
+
+
+def test_completed_activity_payload_preserves_specific_subcategory():
+    payload, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "barbell bench press"}],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert payload[0]["exercises"] == [
+        {
+            "category": "BENCH_PRESS",
+            "name": "BARBELL_BENCH_PRESS",
+            "probability": 100.0,
+        }
+    ]
+
+
+def test_integral_float_set_and_repetition_counts_are_accepted():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "sets": 2.0,
+                "repetitions": 10.0,
+            }
+        ],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert len(payload) == 2
+    assert all(item["repetitionCount"] == 10 for item in payload)
+
+
+def test_bodyweight_is_encoded_as_unset_weight():
+    payload, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "push up", "repetitions": 12}],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert payload[0]["weight"] == -1.0
+    assert strength_training._display_exercise_sets(payload)[0]["weightKg"] is None
+
+
+def test_clock_start_time_uses_activity_date_and_zone():
+    payload, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "push up", "start_time": "18:30:15"}],
+        datetime(
+            2026, 12, 10, 9, 0, tzinfo=ZoneInfo("Europe/Warsaw")
+        ),
+    )
+
+    assert payload[0]["startTime"] == "2026-12-10T17:30:15.0"
+
+
+def test_offsets_place_sets_relative_to_activity_start():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "offset_seconds": 60,
+                "duration_seconds": 30,
+            },
+            {
+                "exercise": "push up",
+                "offset_minutes": 2,
+                "duration_seconds": 30,
+            },
+        ],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert payload[0]["startTime"] == "2026-07-23T09:01:00.0"
+    assert payload[1]["startTime"] == "2026-07-23T09:02:00.0"
+
+
+def test_repeat_timeline_uses_elapsed_time_across_dst_fallback():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "sets": 6,
+                "duration_seconds": 600,
+                "rest_seconds": 600,
+            }
+        ],
+        datetime(
+            2026,
+            10,
+            25,
+            1,
+            50,
+            tzinfo=ZoneInfo("Europe/Warsaw"),
+        ),
+    )
+
+    starts = [
+        strength_training._parse_gmt_datetime(
+            item["startTime"], f"exerciseSets[{index}].startTime"
+        )
+        for index, item in enumerate(payload)
+    ]
+    assert [
+        (later - earlier).total_seconds()
+        for earlier, later in zip(starts, starts[1:])
+    ] == [1200.0] * 5
+
+
+def test_aware_iso_set_start_time_is_converted_to_utc():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "start_time": "2026-07-23T10:30:00.0+02:00",
+            }
+        ],
+        datetime(
+            2026, 7, 23, 10, 0, tzinfo=ZoneInfo("Europe/Warsaw")
+        ),
+    )
+
+    assert payload[0]["startTime"] == "2026-07-23T08:30:00.0"
+
+
+def test_out_of_order_or_overlapping_sets_are_rejected():
+    with pytest.raises(
+        strength_training.StrengthTrainingError, match="overlaps or precedes"
+    ):
+        strength_training._prepare_strength_sets(
+            [
+                {
+                    "exercise": "push up",
+                    "start_time": "10:05:00",
+                    "duration_seconds": 60,
+                },
+                {
+                    "exercise": "push up",
+                    "start_time": "10:04:30",
+                    "duration_seconds": 30,
+                },
+            ],
+            datetime(
+                2026, 7, 23, 10, 0, tzinfo=ZoneInfo("Europe/Warsaw")
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("spec", "message"),
+    [
+        ({"exercise": "push up", "sets": 0}, "positive integer"),
+        ({"exercise": "push up", "sets": 1.5}, "positive integer"),
+        ({"exercise": "push up", "repetitions": -1}, "non-negative"),
+        ({"exercise": "push up", "repetitions": 2.5}, "non-negative"),
+        ({"exercise": "push up", "weight_kg": -1}, "at least 0"),
+        ({"exercise": "push up", "duration_seconds": 0}, "at least"),
+        ({"exercise": "push up", "set_type": "WARMUP"}, "ACTIVE or REST"),
+        (
+            {"set_type": "REST", "exercise": "push up"},
+            "must not specify an exercise",
+        ),
+        (
+            {
+                "exercise": "push up",
+                "offset_seconds": 10,
+                "offset_minutes": 1,
+            },
+            "cannot specify both",
+        ),
+    ],
+)
+def test_invalid_set_specs_are_rejected(spec, message):
+    with pytest.raises(strength_training.StrengthTrainingError, match=message):
+        strength_training._prepare_strength_sets(
+            [spec],
+            datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+        )
+
+
+def test_explicit_null_uses_defaults_for_optional_timing_fields():
+    payload, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "sets": 2,
+                "set_type": None,
+                "duration_seconds": None,
+                "rest_seconds": None,
+            }
+        ],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+
+    assert [item["setType"] for item in payload] == ["ACTIVE", "ACTIVE"]
+    assert [item["duration"] for item in payload] == [30.0, 30.0]
+    assert [item["startTime"] for item in payload] == [
+        "2026-07-23T09:00:00.0",
+        "2026-07-23T09:02:00.0",
+    ]
+
+
+def test_readback_verification_accepts_garmin_bodyweight_normalisation():
+    expected, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "push up", "repetitions": 12}],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    readback = {
+        "activityId": 123,
+        "exerciseSets": [
+            {
+                **expected[0],
+                "weight": 0.0,
+                "messageIndex": 7,
+                "exercises": [
+                    {
+                        "category": "PUSH_UP",
+                        "name": None,
+                        "probability": 84.0,
+                    },
+                    {
+                        "category": "TRICEPS_EXTENSION",
+                        "name": "BENCH_DIP",
+                        "probability": 40.0,
+                    },
+                ],
+            }
+        ],
+    }
+
+    verified, differences = strength_training._verify_exercise_sets(
+        expected, readback
+    )
+
+    assert verified is True
+    assert differences == []
+
+
+def test_readback_verification_accepts_subgram_weight_normalisation():
+    expected, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "push up", "weight_kg": 12.5}],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    readback = {
+        "exerciseSets": [
+            {
+                **expected[0],
+                "weight": 12500.75,
+            }
+        ]
+    }
+
+    verified, differences = strength_training._verify_exercise_sets(
+        expected, readback
+    )
+
+    assert verified is True
+    assert differences == []
+
+
+@pytest.mark.parametrize(
+    "set_spec",
+    [
+        {"exercise": "push up"},
+        {"set_type": "REST"},
+    ],
+)
+def test_readback_verification_accepts_zero_for_an_absent_repetition_count(
+    set_spec,
+):
+    expected, _ = strength_training._prepare_strength_sets(
+        [set_spec],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    readback = {
+        "exerciseSets": [
+            {
+                **expected[0],
+                "repetitionCount": 0,
+            }
+        ]
+    }
+
+    verified, differences = strength_training._verify_exercise_sets(
+        expected, readback
+    )
+
+    assert verified is True
+    assert differences == []
+
+
+def test_readback_verification_reports_material_differences():
+    expected, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "push up", "repetitions": 12}],
+        datetime(2026, 7, 23, 9, 0, tzinfo=ZoneInfo("UTC")),
+    )
+    readback = {
+        "exerciseSets": [
+            {
+                **expected[0],
+                "repetitionCount": 10,
+                "exercises": [
+                    {
+                        "category": "PULL_UP",
+                        "name": "PULL_UP",
+                        "probability": 100,
+                    }
+                ],
+            }
+        ]
+    }
+
+    verified, differences = strength_training._verify_exercise_sets(
+        expected, readback
+    )
+
+    assert verified is False
+    assert any("repetitionCount" in difference for difference in differences)
+    assert any("PUSH_UP/None" in difference for difference in differences)
+
+
+def test_activity_start_prefers_gmt_and_represents_it_in_the_requested_zone():
+    activity = {
+        "summaryDTO": {
+            "startTimeGMT": "2026-07-23T08:00:00.0",
+            "startTimeLocal": "2026-07-23T10:00:00.0",
+        }
+    }
+
+    start = strength_training._activity_start(
+        activity, None, "Europe/Warsaw"
+    )
+
+    assert start.isoformat() == "2026-07-23T10:00:00+02:00"
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        ({"activityId": 123}, 123),
+        ({"activity_id": "456"}, 456),
+        ({"activity": {"activity_id": "456"}}, None),
+        ({"results": [{"activityId": 789}]}, None),
+        (
+            {
+                "status": "ok",
+                "conflicts": [{"activityId": 999999}],
+                "detail": {"activityId": 12345},
+            },
+            None,
+        ),
+        ({"activityId": 0}, None),
+        ({"activityId": True}, None),
+        ({"unrelatedId": 123}, None),
+    ],
+)
+def test_find_activity_id_handles_known_response_shapes(response, expected):
+    assert strength_training._find_activity_id(response) == expected
+
+
+def test_local_garmin_timestamp_drops_offset_without_changing_wall_clock():
+    value = datetime(
+        2026, 7, 23, 18, 5, 7, tzinfo=ZoneInfo("Europe/Warsaw")
+    )
+
+    assert (
+        strength_training._garmin_local_timestamp(value)
+        == "2026-07-23T18:05:07.000"
+    )
+
+
+def test_sets_must_fit_inside_known_activity_duration():
+    activity_start = datetime(2026, 7, 23, 8, 0, tzinfo=ZoneInfo("UTC"))
+    exercise_sets, _ = strength_training._prepare_strength_sets(
+        [
+            {
+                "exercise": "push up",
+                "start_time": "08:09:50",
+                "duration_seconds": 20,
+            }
+        ],
+        activity_start,
+    )
+
+    with pytest.raises(
+        strength_training.StrengthTrainingError, match="after the activity"
+    ):
+        strength_training._validate_sets_within_activity(
+            {"summaryDTO": {"duration": 600}},
+            activity_start,
+            exercise_sets,
+        )
+
+
+def test_zero_summary_duration_does_not_fall_back_to_outer_duration():
+    activity_start = datetime(2026, 7, 23, 8, 0, tzinfo=ZoneInfo("UTC"))
+    exercise_sets, _ = strength_training._prepare_strength_sets(
+        [{"exercise": "push up"}],
+        activity_start,
+    )
+
+    with pytest.raises(
+        strength_training.StrengthTrainingError,
+        match="activity duration must be at least",
+    ):
+        strength_training._validate_sets_within_activity(
+            {
+                "summaryDTO": {"duration": 0},
+                "duration": 3600,
+            },
+            activity_start,
+            exercise_sets,
+        )
+
+
+def test_empty_time_zone_uses_friendly_validation_error():
+    with pytest.raises(
+        strength_training.StrengthTrainingError,
+        match="Unknown IANA time zone",
+    ):
+        strength_training._zone_info("")

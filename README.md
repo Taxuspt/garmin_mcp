@@ -10,7 +10,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 - List recent activities with pagination support
 - Get detailed activity information
-- Edit activities: name, type, description/notes, event type, perceived effort (RPE), and feel
+- Edit activities: name, type, description/notes, event type, perceived effort (RPE), feel, and structured strength sets
 - Access health metrics (steps, heart rate, sleep, stress, respiration)
 - View body composition data
 - Track training status and readiness
@@ -25,7 +25,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.7):
 
 - ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
@@ -41,6 +41,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (3 tools) - list / upload GPX as course / delete course
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
+- ✅ Structured Strength Activities (2 tools) - create completed strength activities or safely replace and verify their sets
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
@@ -60,6 +61,97 @@ Two tools let you download a raw activity file to disk:
 
 **First-run behavior:** if no directory is configured, `download_activity_file` returns `status: "needs_setup"`. The assistant will ask where you want to save files (suggesting the current directory as default), call `set_fit_download_dir` to persist your choice, and then retry the download automatically.
 
+### Structured Strength Activity Sets
+
+`set_activity_strength_exercise_sets` replaces the complete set list on an
+existing, completed `strength_training` activity. It is separate from
+`create_strength_workout`, which creates a planned workout for a watch.
+
+Use `dry_run=true` first. The `exercise` field is matched against English
+display names from the catalog bundled with `garminconnect`—the same source
+exposed by `get_exercise_types`. Technical identifiers are accepted only as an
+exact `category`/`exercise_name` pair, because an exercise identifier can occur
+in multiple categories. Ambiguous matches are rejected rather than guessed.
+The server intentionally does not maintain a language-specific alias table, so
+callers should translate localized input to English or pass exact Garmin
+identifiers. A real update requires `confirm=true` and is read back from Garmin
+for verification.
+
+Before a confirmed replacement, the tool saves the current set list. If the
+write or its read-back verification fails, it restores that list by default.
+Set `rollback_on_failure=false` only when the failed replacement should remain
+available for manual inspection.
+
+The top-level `sets` value is the list of set specifications. A `sets` field
+inside one specification is its repeat count; for example, `"sets": 3`
+expands that item into three identical sets. Returned set data uses
+`weightKg`, not Garmin's internal gram value.
+
+For updates, `time_zone` is optional and is derived from the activity when
+available. Clock-only set times such as `00:15` use the activity's start date;
+use a full ISO date-time for sets occurring after midnight.
+
+```json
+{
+  "activity_id": "12345678901",
+  "sets": [
+    {
+      "exercise": "barbell bench press",
+      "sets": 3,
+      "repetitions": 10,
+      "weight_kg": 60,
+      "duration_seconds": 35,
+      "rest_seconds": 90
+    }
+  ],
+  "dry_run": true
+}
+```
+
+`rest_seconds` spaces automatically repeated sets but does not create a
+recorded `REST` set. Use explicit `set_type: "REST"` items when recorded rest
+sets are desired, rather than combining both representations for the same gap.
+
+For deterministic matching, pass exact Garmin identifiers instead:
+`{"category": "PUSH_UP", "exercise_name": "PUSH_UP"}`. The `name` key is also
+accepted as an alias because Garmin's completed-activity payload calls the same
+identifier `name`. Category-only catalog entries repeat that identifier (for
+example `PUSH_UP/PUSH_UP`); the completed-activity endpoint requires these to
+be encoded with a null sub-category, which the tool handles automatically.
+`weight_kg` is converted to Garmin's internal unit only inside the server.
+
+`create_strength_training_activity` uses the same validated set format to
+create a completed manual strength activity. It does not create a planned
+workout for a watch. The tool first creates the private activity, attaches its
+sets, and verifies them with a read-back. By default, a newly created activity
+is deleted again if attaching or verifying its sets fails. Unlike the update
+tool, it requires `start_datetime` because no existing activity start is
+available to derive from Garmin.
+
+```json
+{
+  "activity_name": "Upper Body",
+  "start_datetime": "2026-07-23T18:00:00",
+  "time_zone": "Europe/Warsaw",
+  "duration_minutes": 30,
+  "sets": [
+    {
+      "exercise": "barbell bench press",
+      "sets": 3,
+      "repetitions": 10,
+      "weight_kg": 60,
+      "duration_seconds": 35,
+      "rest_seconds": 90
+    }
+  ],
+  "dry_run": true
+}
+```
+
+Change `dry_run` to `false` and pass `confirm=true` only after reviewing the
+preview. Set `rollback_on_failure=false` only when an incomplete activity
+should deliberately remain in Garmin for manual repair.
+
 ### Intentionally Skipped Endpoints
 
 Some endpoints are not implemented due to performance or complexity considerations:
@@ -72,6 +164,9 @@ Some endpoints are not implemented due to performance or complexity consideratio
 
 **Maintenance & Destructive Operations:**
 - `delete_activity()`, `delete_blood_pressure()` - Destructive operations require careful consideration.
+- `create_strength_training_activity` uses the library's activity deletion
+  internally only to roll back an activity created by the same tool call when
+  attaching or verifying its sets fails; no general deletion tool is exposed.
 - Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
 
 If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
@@ -162,6 +257,19 @@ categories — anything else, including `OTHER` and `UNASSIGNED`, is rejected wi
 ```
 
 Returns: `{"status": "success", "workout_id": 1234567890, ...}`
+
+### `get_exercise_types`
+
+Lists Garmin's bundled strength-exercise catalog (~1500 exercises across 47
+categories). Call with no argument for the category list, then pass a
+`category` (e.g. `"BENCH_PRESS"`) to get `exercise_name` identifiers and
+English display names. For planned workout steps, `exercise_name` maps to
+Garmin's `exerciseName` field. The completed-activity tools in this section
+accept it directly as `exercise_name`.
+
+### `update_workout`
+
+Edits an existing workout in-place, keeping the same workout ID so any calendar schedules stay valid. Full-replace semantics: pass the complete workout structure (same shape as `upload_workout`). Typical flow: `get_workout_by_id` → edit the JSON → `update_workout`.
 
 ### `schedule_week`
 
