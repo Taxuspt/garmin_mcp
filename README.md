@@ -239,7 +239,9 @@ treats the numeric ID as authoritative: a mismatched payload such as
 `pace.zone`, because ID `6` means `pace.zone`.
 
 For a custom heart-rate range, use target type ID `4` with `heart.rate.zone` and
-put the bpm range in `targetValueOne` / `targetValueTwo`:
+put the bpm range in `targetValueOne` / `targetValueTwo`. These value fields
+belong on the workout step, alongside `targetType`; do not nest them inside the
+`targetType` object:
 
 ```json
 {
@@ -252,6 +254,26 @@ put the bpm range in `targetValueOne` / `targetValueTwo`:
 }
 ```
 
+The same shape applies to a custom running pace range. Pace bounds use meters
+per second:
+
+```json
+{
+  "targetType": {
+    "workoutTargetTypeId": 6,
+    "workoutTargetTypeKey": "pace.zone"
+  },
+  "targetValueOne": 1.9607843,
+  "targetValueTwo": 2.0833333
+}
+```
+
+That example represents `8:00–8:30 min/km`. The lower numeric bound is listed
+first for consistency with the heart-rate example; Garmin normalizes either
+bound order. Garmin silently discards values nested inside `targetType`, leaving
+a pace target with no active range. The upload tools repair that unambiguous
+nesting mistake, but reject the request if nested and step-level values conflict.
+
 For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
 
 ```json
@@ -263,6 +285,11 @@ For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
   "zoneNumber": 3
 }
 ```
+
+Use either `zoneNumber` or `targetValueOne` / `targetValueTwo` on a target, not
+both. Garmin treats the named zone as authoritative and silently discards a
+coexisting custom range, so the upload tools reject that ambiguous shape.
+
 ## One-click Install (Claude Desktop)
 
 The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop Extension file — no JSON editing required.

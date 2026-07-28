@@ -8,7 +8,10 @@ from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import workouts
-from garmin_mcp.workouts import _fix_repeat_group_step
+from garmin_mcp.workouts import (
+    _fix_repeat_group_step,
+    _normalize_workout_steps,
+)
 from tests.fixtures.garmin_responses import (
     MOCK_WORKOUTS,
     MOCK_WORKOUT_DETAILS,
@@ -54,6 +57,21 @@ def _timed_interval_step(target_type):
         "targetValueTwo": 157,
     }
 
+
+def _distance_pace_step_with_nested_bounds():
+    return {
+        "type": "ExecutableStepDTO",
+        "stepOrder": 1,
+        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+        "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance"},
+        "endConditionValue": 400,
+        "targetType": {
+            "workoutTargetTypeId": 6,
+            "workoutTargetTypeKey": "pace.zone",
+            "targetValueOne": 2.0833333,
+            "targetValueTwo": 1.9607843,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -309,6 +327,229 @@ async def test_upload_workout_tool(app_with_workouts, mock_garmin_client):
     # Verify - dict is passed directly to the API
     assert result is not None
     mock_garmin_client.upload_workout.assert_called_once_with(workout_data)
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_promotes_bounds_nested_inside_target_type(
+    app_with_workouts, mock_garmin_client
+):
+    """Repair the exact payload shape that caused issue #210."""
+    import json as json_module
+
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 210001,
+        "workoutName": "Issue 210",
+    }
+    workout_data = _running_workout_with_steps(
+        [_distance_pace_step_with_nested_bounds()],
+        name="Issue 210",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert called_step["targetValueOne"] == 2.0833333
+    assert called_step["targetValueTwo"] == 1.9607843
+    assert "targetValueOne" not in called_step["targetType"]
+    assert "targetValueTwo" not in called_step["targetType"]
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_promotes_nested_bounds_inside_repeat_group(
+    app_with_workouts, mock_garmin_client
+):
+    """Repair misplaced bounds recursively in the original nested shape."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 210002,
+        "workoutName": "Issue 210 Repeat",
+    }
+    workout_data = _running_workout_with_steps(
+        [{
+            "type": "RepeatGroupDTO",
+            "stepOrder": 1,
+            "numberOfIterations": 3,
+            "endCondition": {
+                "conditionTypeId": 7,
+                "conditionTypeKey": "iterations",
+            },
+            "endConditionValue": 3,
+            "workoutSteps": [_distance_pace_step_with_nested_bounds()],
+        }],
+        name="Issue 210 Repeat",
+    )
+
+    await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]["workoutSteps"][0]
+    assert called_step["targetValueOne"] == 2.0833333
+    assert called_step["targetValueTwo"] == 1.9607843
+    assert set(called_step["targetType"]) == {
+        "workoutTargetTypeId",
+        "workoutTargetTypeKey",
+    }
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_rejects_conflicting_nested_and_step_bounds(
+    app_with_workouts, mock_garmin_client
+):
+    """Do not guess when malformed and canonical fields disagree."""
+    step = _distance_pace_step_with_nested_bounds()
+    step["targetValueOne"] = 2.5
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Conflicting Pace Bounds",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    message = result[0][0].text
+    assert (
+        "workoutSegments[0].workoutSteps[0].targetValueOne=2.5 conflicts with "
+        "workoutSegments[0].workoutSteps[0].targetType.targetValueOne="
+        "2.0833333"
+    ) in message
+    assert "keep only the step-level targetValueOne" in message
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_promotes_zone_nested_inside_target_type(
+    app_with_workouts, mock_garmin_client
+):
+    """Garmin drops zoneNumber inside targetType, so move it to the step."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 210005,
+        "workoutName": "Nested HR Zone",
+    }
+    step = _distance_pace_step_with_nested_bounds()
+    step["targetType"] = {
+        "workoutTargetTypeId": 4,
+        "workoutTargetTypeKey": "heart.rate.zone",
+        "zoneNumber": 3,
+    }
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Nested HR Zone",
+    )
+
+    await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert called_step["zoneNumber"] == 3
+    assert "zoneNumber" not in called_step["targetType"]
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_promotes_nested_hr_zone_value_before_hr_fix(
+    app_with_workouts, mock_garmin_client
+):
+    """Pin the order: move a mistaken HR value first, then convert it to a zone."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 210006,
+        "workoutName": "Nested HR Target Value",
+    }
+    step = _distance_pace_step_with_nested_bounds()
+    step["targetType"] = {
+        "workoutTargetTypeId": 4,
+        "workoutTargetTypeKey": "heart.rate.zone",
+        "targetValueOne": 3,
+    }
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Nested HR Target Value",
+    )
+
+    await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert called_step["zoneNumber"] == 3
+    assert "targetValueOne" not in called_step
+    assert "targetValueOne" not in called_step["targetType"]
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_promotes_bounds_nested_inside_secondary_target_type(
+    app_with_workouts, mock_garmin_client
+):
+    """Secondary target bounds have the same Garmin step-level shape."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 210007,
+        "workoutName": "Nested Secondary Pace",
+    }
+    step = _distance_pace_step_with_nested_bounds()
+    step["targetType"] = None
+    step["secondaryTargetType"] = {
+        "workoutTargetTypeId": 6,
+        "workoutTargetTypeKey": "pace.zone",
+        "secondaryTargetValueOne": 0.45,
+        "secondaryTargetValueTwo": 0.6916667,
+    }
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Nested Secondary Pace",
+    )
+
+    await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert called_step["secondaryTargetValueOne"] == 0.45
+    assert called_step["secondaryTargetValueTwo"] == 0.6916667
+    assert "secondaryTargetValueOne" not in called_step["secondaryTargetType"]
+    assert "secondaryTargetValueTwo" not in called_step["secondaryTargetType"]
+
+
+@pytest.mark.asyncio
+async def test_upload_workout_rejects_zone_mixed_with_custom_range(
+    app_with_workouts, mock_garmin_client
+):
+    """Do not guess whether a named zone or custom range should win."""
+    step = _distance_pace_step_with_nested_bounds()
+    step["zoneNumber"] = 3
+    workout_data = _running_workout_with_steps(
+        [step],
+        name="Ambiguous Pace Target",
+    )
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": workout_data},
+    )
+
+    message = result[0][0].text
+    assert "mixes zoneNumber=3 with custom range fields" in message
+    assert "use either a named zone or a custom range" in message
+    mock_garmin_client.upload_workout.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1247,6 +1488,34 @@ async def test_upload_workouts_single(app_with_workouts, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_upload_workouts_promotes_bounds_nested_inside_target_type(
+    app_with_workouts, mock_garmin_client
+):
+    """Batch uploads use the same issue #210 repair as upload_workout."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 210003,
+        "workoutName": "Issue 210 Batch",
+    }
+    workout_data = _running_workout_with_steps(
+        [_distance_pace_step_with_nested_bounds()],
+        name="Issue 210 Batch",
+    )
+
+    await app_with_workouts.call_tool(
+        "upload_workouts",
+        {"workouts": [workout_data]},
+    )
+
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert called_step["targetValueOne"] == 2.0833333
+    assert called_step["targetValueTwo"] == 1.9607843
+    assert "targetValueOne" not in called_step["targetType"]
+    assert "targetValueTwo" not in called_step["targetType"]
+
+
+@pytest.mark.asyncio
 async def test_upload_workouts_multiple(app_with_workouts, mock_garmin_client):
     """Test upload_workouts with multiple workouts"""
     import json as json_module
@@ -1646,6 +1915,44 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
 
 
 @pytest.mark.asyncio
+async def test_schedule_workouts_inline_promotes_nested_target_bounds(
+    app_with_workouts, mock_garmin_client
+):
+    """The issue #210 schedule_workouts path repairs bounds before upload."""
+    from unittest.mock import MagicMock
+
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 210004,
+        "workoutName": "Issue 210 Inline",
+    }
+    schedule_response = MagicMock()
+    schedule_response.status_code = 200
+    mock_garmin_client.client.post.return_value = schedule_response
+    inline_data = _running_workout_with_steps(
+        [_distance_pace_step_with_nested_bounds()],
+        name="Issue 210 Inline",
+    )
+
+    await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {
+            "schedules": [{
+                "workout_data": inline_data,
+                "calendar_date": "2024-02-01",
+            }]
+        },
+    )
+
+    called_step = mock_garmin_client.upload_workout.call_args[0][0][
+        "workoutSegments"
+    ][0]["workoutSteps"][0]
+    assert called_step["targetValueOne"] == 2.0833333
+    assert called_step["targetValueTwo"] == 1.9607843
+    assert "targetValueOne" not in called_step["targetType"]
+    assert "targetValueTwo" not in called_step["targetType"]
+
+
+@pytest.mark.asyncio
 async def test_schedule_workouts_inline_upload_rejects_end_condition_mismatch(
     app_with_workouts, mock_garmin_client
 ):
@@ -1773,8 +2080,89 @@ async def test_schedule_workouts_inline_upload_no_id_returned(app_with_workouts,
 
 
 # ---------------------------------------------------------------------------
-# _fix_repeat_group_step (unit tests)
+# Target/repeat normalization helper tests
 # ---------------------------------------------------------------------------
+
+
+def test_nested_target_conflict_does_not_partially_mutate_step():
+    step = _distance_pace_step_with_nested_bounds()
+    step["targetValueOne"] = 2.5
+    workout_data = _running_workout_with_steps([step])
+
+    with pytest.raises(ValueError, match="targetValueOne=.*conflicts"):
+        _normalize_workout_steps(workout_data)
+
+    assert step["targetValueOne"] == 2.5
+    assert "targetValueTwo" not in step
+    assert step["targetType"]["targetValueOne"] == 2.0833333
+    assert step["targetType"]["targetValueTwo"] == 1.9607843
+
+
+def test_nested_target_conflict_does_not_mutate_earlier_workout_step():
+    first_step = _distance_pace_step_with_nested_bounds()
+    second_step = _distance_pace_step_with_nested_bounds()
+    second_step["targetValueOne"] = 2.5
+    workout_data = _running_workout_with_steps([first_step, second_step])
+
+    with pytest.raises(ValueError, match="targetValueOne=.*conflicts"):
+        _normalize_workout_steps(workout_data)
+
+    assert "targetValueOne" not in first_step
+    assert first_step["targetType"]["targetValueOne"] == 2.0833333
+    assert first_step["targetType"]["targetValueTwo"] == 1.9607843
+
+
+def test_nested_target_fields_promote_single_bound_and_deduplicate_equal_value():
+    step = {
+        "targetValueOne": 2.0833333,
+        "targetType": {
+            "targetValueOne": 2.0833333,
+            "targetValueTwo": 1.9607843,
+        },
+    }
+    workout_data = _running_workout_with_steps([step])
+
+    _normalize_workout_steps(workout_data)
+
+    assert step["targetValueOne"] == 2.0833333
+    assert step["targetValueTwo"] == 1.9607843
+    assert step["targetType"] == {}
+
+
+def test_nested_null_target_field_is_removed_without_injecting_step_null():
+    step = {"targetType": {"targetValueOne": None}}
+    workout_data = _running_workout_with_steps([step])
+
+    _normalize_workout_steps(workout_data)
+
+    assert step == {"targetType": {}}
+
+
+def test_nested_value_replaces_explicit_step_null():
+    step = {
+        "targetValueOne": None,
+        "targetType": {"targetValueOne": 2.0833333},
+    }
+    workout_data = _running_workout_with_steps([step])
+
+    _normalize_workout_steps(workout_data)
+
+    assert step["targetValueOne"] == 2.0833333
+    assert step["targetType"] == {}
+
+
+@pytest.mark.parametrize("target_type", [None, "pace.zone", []])
+def test_nested_target_repair_ignores_missing_or_non_dict_target_type(
+    target_type,
+):
+    step = {} if target_type is None else {"targetType": target_type}
+    original = step.copy()
+    workout_data = _running_workout_with_steps([step])
+
+    _normalize_workout_steps(workout_data)
+
+    assert step == original
+
 
 def test_fix_repeat_group_adds_missing_condition_type_id():
     """Adds conditionTypeId:7 when conditionTypeKey is 'iterations' but id is absent."""

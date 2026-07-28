@@ -60,6 +60,103 @@ def configure(client):
     garmin_client = client
 
 
+_TARGET_FIELD_LAYOUTS = {
+    'targetType': {
+        'bounds': ('targetValueOne', 'targetValueTwo'),
+        'zone': 'zoneNumber',
+    },
+    'secondaryTargetType': {
+        'bounds': ('secondaryTargetValueOne', 'secondaryTargetValueTwo'),
+        'zone': 'secondaryZoneNumber',
+    },
+}
+
+
+def _iter_step_tree(step: dict, path: str):
+    """Yield a workout step and every nested step with its request path."""
+    yield step, path
+    for index, nested in enumerate(step.get('workoutSteps', [])):
+        yield from _iter_step_tree(
+            nested,
+            f"{path}.workoutSteps[{index}]",
+        )
+
+
+def _iter_workout_steps(workout_data: dict):
+    """Yield every workout step with a stable request path."""
+    for segment_index, segment in enumerate(
+        workout_data.get('workoutSegments', [])
+    ):
+        for step_index, step in enumerate(segment.get('workoutSteps', [])):
+            path = (
+                f"workoutSegments[{segment_index}]"
+                f".workoutSteps[{step_index}]"
+            )
+            yield from _iter_step_tree(step, path)
+
+
+def _validate_nested_target_fields(step: dict, path: str) -> None:
+    """Reject conflicting or ambiguous target fields before any repair."""
+    for target_field, layout in _TARGET_FIELD_LAYOUTS.items():
+        target_type = step.get(target_field)
+        if not isinstance(target_type, dict):
+            continue
+
+        fields = (*layout['bounds'], layout['zone'])
+        for field in fields:
+            nested_value = target_type.get(field)
+            if (
+                nested_value is not None
+                and step.get(field) is not None
+                and step[field] != nested_value
+            ):
+                raise ValueError(
+                    f"{path}.{field}={step[field]!r} conflicts with "
+                    f"{path}.{target_field}.{field}={nested_value!r}; "
+                    f"keep only the step-level {field}"
+                )
+
+        zone_field = layout['zone']
+        zone_value = step.get(zone_field)
+        if zone_value is None:
+            zone_value = target_type.get(zone_field)
+
+        bound_values = []
+        for field in layout['bounds']:
+            value = step.get(field)
+            if value is None:
+                value = target_type.get(field)
+            if value is not None:
+                bound_values.append((field, value))
+
+        if zone_value is not None and bound_values:
+            bounds = ", ".join(
+                f"{field}={value!r}"
+                for field, value in bound_values
+            )
+            raise ValueError(
+                f"{path} mixes {zone_field}={zone_value!r} with custom "
+                f"range fields ({bounds}); use either a named zone or a "
+                f"custom range"
+            )
+
+
+def _move_nested_target_fields(step: dict) -> None:
+    """Move target fields to the step level, where Garmin reads them."""
+    for target_field, layout in _TARGET_FIELD_LAYOUTS.items():
+        target_type = step.get(target_field)
+        if not isinstance(target_type, dict):
+            continue
+
+        fields = (*layout['bounds'], layout['zone'])
+        for field in fields:
+            if field not in target_type:
+                continue
+            value = target_type.pop(field)
+            if value is not None and step.get(field) is None:
+                step[field] = value
+
+
 def _fix_hr_zone_step(step: dict) -> None:
     """Fix a common mistake where HR zone targets use targetValueOne instead of zoneNumber.
 
@@ -70,8 +167,12 @@ def _fix_hr_zone_step(step: dict) -> None:
     Custom HR bpm ranges (e.g. targetValueOne=105, targetValueTwo=143) are left
     unchanged — these are legitimate custom heart rate targets in Garmin Connect.
     """
-    target_type = step.get('targetType') or {}
-    target_key = target_type.get('workoutTargetTypeKey', '')
+    target_type = step.get('targetType')
+    target_key = (
+        target_type.get('workoutTargetTypeKey', '')
+        if isinstance(target_type, dict)
+        else ''
+    )
 
     if target_key == 'heart.rate.zone' and 'zoneNumber' not in step:
         zone = step.get('targetValueOne')
@@ -120,8 +221,18 @@ def _fix_repeat_group_step(step: dict) -> None:
         _fix_repeat_group_step(nested)
 
 
-def _fix_hr_zone_steps(workout_data: dict) -> None:
-    """Walk all workout steps and fix HR zone target mistakes."""
+def _normalize_workout_steps(workout_data: dict) -> None:
+    """Repair recoverable step-shape mistakes before validation and upload."""
+    steps = list(_iter_workout_steps(workout_data))
+
+    # Preflight the complete workout so a later conflict cannot leave an
+    # earlier step partially repaired.
+    for step, path in steps:
+        _validate_nested_target_fields(step, path)
+    for step, _ in steps:
+        _move_nested_target_fields(step)
+
+    # These helpers recurse, so invoke them only for top-level steps.
     for segment in workout_data.get('workoutSegments', []):
         for step in segment.get('workoutSteps', []):
             _fix_hr_zone_step(step)
@@ -616,6 +727,10 @@ def register_tools(app):
           "targetValueOne" (low bpm) / "targetValueTwo" (high bpm). Do NOT set "zoneNumber".
           This matches Garmin Connect's "Custom" heart rate target.
         For non-HR targets (pace, power, cadence), use targetValueOne/targetValueTwo directly.
+        Target values are fields on the workout step, alongside targetType; do not put
+        targetValueOne, targetValueTwo, or zoneNumber inside the targetType object.
+        Use either zoneNumber or targetValueOne/targetValueTwo, not both. Garmin silently
+        discards a custom range when a named zone is also present.
 
         Note: a safety check converts targetValueOne 1-5 to zoneNumber when zoneNumber is missing,
         to catch the common mistake of putting a zone index in targetValueOne. Typical bpm values
@@ -708,8 +823,7 @@ def register_tools(app):
             workout_data: Dictionary containing workout structure (name, sport type, segments, etc.)
         """
         try:
-            # Fix common mistake: HR zone targets using targetValueOne instead of zoneNumber
-            _fix_hr_zone_steps(workout_data)
+            _normalize_workout_steps(workout_data)
             _validate_end_condition_steps(workout_data)
             _validate_target_type_steps(workout_data)
 
@@ -749,6 +863,7 @@ def register_tools(app):
         IMPORTANT: For named heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
         For custom heart-rate ranges, use targetType {"workoutTargetTypeId": 4,
         "workoutTargetTypeKey": "heart.rate.zone"} with targetValueOne/targetValueTwo.
+        Target values belong on the workout step, alongside targetType, not inside it.
         For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
         For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
         with targetValueOne (low watts) and targetValueTwo (high watts).
@@ -764,7 +879,7 @@ def register_tools(app):
         results = []
         for workout_data in workouts:
             try:
-                _fix_hr_zone_steps(workout_data)
+                _normalize_workout_steps(workout_data)
                 _validate_end_condition_steps(workout_data)
                 _validate_target_type_steps(workout_data)
                 result = garmin_client.upload_workout(workout_data)
@@ -1028,7 +1143,8 @@ def register_tools(app):
                 - calendar_date (str): Date to schedule the workout in YYYY-MM-DD format (required)
                 - workout_id (int): ID of an existing workout to schedule (required unless workout_data is provided)
                 - workout_data (dict): Inline workout JSON to upload first, then schedule (optional).
-                  When provided, workout_id is not required. Uses the same structure as upload_workout.
+                  When provided, workout_id is not required. Uses the same structure and
+                  target-value rules as upload_workout.
 
         Examples:
             Schedule existing workouts by ID:
@@ -1079,7 +1195,7 @@ def register_tools(app):
 
                 if workout_data is not None:
                     # Upload the workout first, then use the returned ID to schedule
-                    _fix_hr_zone_steps(workout_data)
+                    _normalize_workout_steps(workout_data)
                     _validate_end_condition_steps(workout_data)
                     _validate_target_type_steps(workout_data)
                     upload_result = garmin_client.upload_workout(workout_data)
