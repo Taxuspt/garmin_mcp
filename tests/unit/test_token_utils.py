@@ -10,6 +10,7 @@ import pytest
 from garmin_mcp.token_utils import (
     get_token_path,
     get_token_base64_path,
+    resolve_token_path,
     token_exists,
     validate_tokens,
     remove_tokens,
@@ -25,12 +26,52 @@ class TestGetTokenPath:
         with patch.dict(os.environ, {}, clear=False):
             # Remove GARMINTOKENS if set
             os.environ.pop("GARMINTOKENS", None)
-            assert get_token_path() == "~/.garminconnect"
+            assert Path(get_token_path()) == Path.home() / ".garminconnect"
 
     def test_env_var_path(self):
         """Test that environment variable path is used when set."""
         with patch.dict(os.environ, {"GARMINTOKENS": "/custom/path"}):
             assert get_token_path() == "/custom/path"
+
+    def test_env_var_home_placeholder_is_resolved(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.setenv("GARMINTOKENS", "${HOME}/.garminconnect")
+
+        assert Path(get_token_path()) == tmp_path / ".garminconnect"
+
+
+class TestResolveTokenPath:
+    """Tests for token paths passed to the MCP server process."""
+
+    def test_expands_home_placeholder(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+        assert Path(resolve_token_path("${HOME}/.garminconnect")) == (
+            tmp_path / ".garminconnect"
+        )
+
+    def test_expands_tilde_default(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+
+        assert Path(resolve_token_path("~/.garminconnect")) == (
+            tmp_path / ".garminconnect"
+        )
+
+    def test_expands_home_placeholder_when_home_is_unset(self, monkeypatch):
+        monkeypatch.delenv("HOME", raising=False)
+        expected_home = Path(os.path.expanduser("~"))
+
+        assert Path(resolve_token_path("${HOME}/.garminconnect")) == (
+            expected_home / ".garminconnect"
+        )
+
+    def test_absolute_path_is_unchanged(self, tmp_path):
+        absolute_path = tmp_path / ".garminconnect"
+
+        assert resolve_token_path(str(absolute_path)) == str(absolute_path)
 
 
 class TestGetTokenBase64Path:
@@ -41,12 +82,26 @@ class TestGetTokenBase64Path:
         with patch.dict(os.environ, {}, clear=False):
             # Remove GARMINTOKENS_BASE64 if set
             os.environ.pop("GARMINTOKENS_BASE64", None)
-            assert get_token_base64_path() == "~/.garminconnect_base64"
+            assert (
+                Path(get_token_base64_path())
+                == Path.home() / ".garminconnect_base64"
+            )
 
     def test_env_var_path(self):
         """Test that environment variable path is used when set."""
         with patch.dict(os.environ, {"GARMINTOKENS_BASE64": "/custom/path.b64"}):
             assert get_token_base64_path() == "/custom/path.b64"
+
+    def test_env_var_home_placeholder_is_resolved(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.setenv(
+            "GARMINTOKENS_BASE64", "${HOME}/.garminconnect_base64"
+        )
+
+        assert Path(get_token_base64_path()) == (
+            tmp_path / ".garminconnect_base64"
+        )
 
 
 class TestTokenExists:
@@ -253,5 +308,5 @@ class TestGetTokenInfo:
 
         info = get_token_info()
 
-        assert info["path"] == "~/.garminconnect"
+        assert Path(info["path"]) == Path.home() / ".garminconnect"
         mock_get_path.assert_called_once()

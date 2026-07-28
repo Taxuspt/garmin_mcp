@@ -184,6 +184,48 @@ class TestAuthenticate:
         # Verify restrictive permissions were applied to the base64 file
         mock_chmod.assert_any_call(os.path.expanduser(base64_path), 0o600)
 
+    @patch("garmin_mcp.auth_cli.token_exists", return_value=False)
+    @patch(
+        "garmin_mcp.auth_cli.get_credentials",
+        return_value=("test@example.com", "secret"),
+    )
+    @patch("garmin_mcp.auth_cli.Garmin")
+    @patch(
+        "garmin_mcp.auth_cli._verify_saved_tokens",
+        return_value=(True, "Test User"),
+    )
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_authentication_resolves_home_in_token_paths(
+        self,
+        mock_chmod,
+        mock_verify,
+        mock_garmin,
+        _mock_get_creds,
+        mock_exists,
+        monkeypatch,
+        tmp_path,
+    ):
+        """The CLI writes and verifies tokens at the same resolved paths."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        mock_garmin.return_value.login.return_value = (None, None)
+
+        with patch("builtins.open", mock_open(read_data="{}")):
+            result = authenticate(
+                "${HOME}/.garminconnect",
+                "${HOME}/.garminconnect_base64",
+            )
+
+        expected_token_path = str(tmp_path / ".garminconnect")
+        expected_base64_path = str(tmp_path / ".garminconnect_base64")
+        assert result is True
+        mock_exists.assert_called_once_with(expected_token_path)
+        mock_garmin.return_value.client.dump.assert_called_once_with(
+            expected_token_path
+        )
+        mock_verify.assert_called_once_with(expected_token_path, False)
+        mock_chmod.assert_any_call(expected_base64_path, 0o600)
+
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
