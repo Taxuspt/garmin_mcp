@@ -483,7 +483,29 @@ def main():
             file=sys.stderr,
         )
 
-    # Run the MCP server
+        # Simple shared-secret check in front of the whole app. /healthz stays
+        # open so Render's health checks keep working; everything else needs
+        # a matching "Authorization: Bearer <token>" header.
+        import uvicorn
+        expected_token = os.environ.get("GARMIN_MCP_AUTH_TOKEN")
+
+        asgi_app = fastmcp.streamable_http_app()
+
+        async def guarded_app(scope, receive, send):
+            if scope["type"] == "http" and scope["path"] != "/healthz":
+                headers = dict(scope.get("headers", []))
+                auth_header = headers.get(b"authorization", b"").decode()
+                if not expected_token or auth_header != f"Bearer {expected_token}":
+                    from starlette.responses import PlainTextResponse as _PTR
+                    response = _PTR("Unauthorized", status_code=401)
+                    await response(scope, receive, send)
+                    return
+            await asgi_app(scope, receive, send)
+
+        uvicorn.run(guarded_app, host=http_host, port=http_port)
+        return
+
+    # Run the MCP server (stdio only reaches here)
     app.run(transport=transport)
 
 
