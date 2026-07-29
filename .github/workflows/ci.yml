@@ -27,7 +27,7 @@ jobs:
       run: uv python install ${{ matrix.python-version }}
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --locked
 
     - name: Run integration tests
       run: uv run pytest tests/integration tests/unit -v --tb=short
@@ -58,10 +58,28 @@ jobs:
       run: |
         mkdir -p "$RUNNER_TEMP/garmin-token-secret"
         printf '%s\n' '{"di_token":"test-di-token","di_refresh_token":"test-refresh-token","di_client_id":"test-client-id"}' > "$RUNNER_TEMP/garmin-token-secret/garmin_tokens.json"
+        volume_name="garmin-mcp-token-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        trap 'docker volume rm -f "$volume_name" >/dev/null 2>&1' EXIT
+        docker volume create "$volume_name"
+
         docker run --rm \
           --entrypoint python \
           --env GARMINTOKENS=/var/lib/garmin-tokens \
           --env GARMIN_TOKENS_FILE=/run/secrets/garmin_tokens.json \
           --mount "type=bind,source=$RUNNER_TEMP/garmin-token-secret/garmin_tokens.json,target=/run/secrets/garmin_tokens.json,readonly" \
+          --mount "type=volume,source=$volume_name,target=/var/lib/garmin-tokens" \
           garmin-mcp:test \
-          -c "import json, os, stat; from pathlib import Path; from garmin_mcp.token_utils import bootstrap_tokens; installed = bootstrap_tokens(); assert installed == Path('/var/lib/garmin-tokens/garmin_tokens.json'); assert json.loads(installed.read_text())['di_client_id'] == 'test-client-id'; assert stat.S_IMODE(installed.stat().st_mode) == 0o600; os.environ.pop('GARMIN_TOKENS_FILE'); os.environ['GARMIN_TOKENS_JSON'] = 'invalid'; assert bootstrap_tokens() is None"
+          /app/tests/docker/token_bootstrap_smoke.py installed
+
+        docker run --rm \
+          --entrypoint python \
+          --env GARMINTOKENS=/var/lib/garmin-tokens \
+          --env GARMIN_TOKENS_JSON=invalid \
+          --mount "type=volume,source=$volume_name,target=/var/lib/garmin-tokens" \
+          garmin-mcp:test \
+          /app/tests/docker/token_bootstrap_smoke.py preserved
+
+        if docker run --rm --env GARMIN_TOKENS_JSON=invalid garmin-mcp:test; then
+          echo "Expected the real entrypoint to reject invalid bootstrap JSON"
+          exit 1
+        fi

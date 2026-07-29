@@ -5,24 +5,25 @@ services:
       dockerfile: Dockerfile
     container_name: garmin-mcp-server
 
-    # Option 1: Use environment variables directly
+    # Option 1: Use credentials from environment variables.
+    # Comment these two entries when using option 2 or 3.
     environment:
       - GARMIN_EMAIL=${GARMIN_EMAIL}
       - GARMIN_PASSWORD=${GARMIN_PASSWORD}
       # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
 
     # Option 2: Bootstrap from a pre-authenticated OAuth token secret.
-    # Remove GARMIN_EMAIL/GARMIN_PASSWORD above when using this option.
-    # environment:
+    # Add this entry to the environment list above:
     #   - GARMIN_TOKENS_FILE=/run/secrets/garmin_tokens
-    # secrets:
-    #   - garmin_tokens
 
     # Option 3: Use file-based credentials for first-time authentication
-    # environment:
+    # Add these entries to the environment list above:
     #   - GARMIN_EMAIL_FILE=/run/secrets/garmin_email
     #   - GARMIN_PASSWORD_FILE=/run/secrets/garmin_password
+
+    # Uncomment the corresponding secret names for option 2 or 3.
     # secrets:
+    #   - garmin_tokens
     #   - garmin_email
     #   - garmin_password
 

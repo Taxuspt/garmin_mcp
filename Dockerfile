@@ -16,16 +16,16 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 
 # Install locked runtime dependencies before the source for better layer caching
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 
 # Copy and install the application
+COPY README.md ./
 COPY src/ ./src/
 RUN uv sync --locked --no-dev
 
-# Copy test files (optional, for testing in container)
+# Copy the dependency-free Docker smoke test used by CI
 COPY tests/ ./tests/
-COPY pytest.ini ./
 
 # Create directory for Garmin tokens
 RUN mkdir -p /root/.garminconnect && \

@@ -1,5 +1,6 @@
 """Unit tests for token_utils module."""
 
+import errno
 import json
 import os
 import stat
@@ -8,9 +9,11 @@ from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 
 import pytest
+from garminconnect import Garmin
 
 from garmin_mcp.token_utils import (
     TokenBootstrapError,
+    TokenBootstrapResult,
     bootstrap_tokens,
     get_token_path,
     get_token_base64_path,
@@ -150,6 +153,26 @@ class TestBootstrapTokens:
         assert bootstrap_tokens(str(tmp_path / "tokens")) is None
         assert not (tmp_path / "tokens").exists()
 
+    @pytest.mark.parametrize("blank", ["", "   \t"])
+    def test_blank_sources_are_treated_as_unset(self, monkeypatch, tmp_path, blank):
+        monkeypatch.setenv("GARMIN_TOKENS_FILE", blank)
+        monkeypatch.setenv("GARMIN_TOKENS_JSON", blank)
+
+        assert bootstrap_tokens(str(tmp_path / "tokens")) is None
+        assert not (tmp_path / "tokens").exists()
+
+    def test_blank_file_source_does_not_conflict_with_inline_json(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("GARMIN_TOKENS_FILE", " ")
+        monkeypatch.setenv(
+            "GARMIN_TOKENS_JSON", json.dumps(VALID_BOOTSTRAP_TOKENS)
+        )
+
+        result = bootstrap_tokens(str(tmp_path / "tokens"))
+
+        assert result.installed is True
+
     def test_inline_json_initializes_directory_store(self, monkeypatch, tmp_path):
         token_dir = tmp_path / "tokens"
         monkeypatch.delenv("GARMIN_TOKENS_FILE", raising=False)
@@ -157,12 +180,36 @@ class TestBootstrapTokens:
             "GARMIN_TOKENS_JSON", json.dumps(VALID_BOOTSTRAP_TOKENS)
         )
 
-        installed = bootstrap_tokens(str(token_dir))
+        result = bootstrap_tokens(str(token_dir))
 
-        assert installed == token_dir / "garmin_tokens.json"
-        assert json.loads(installed.read_text()) == VALID_BOOTSTRAP_TOKENS
+        assert result == TokenBootstrapResult(
+            token_dir / "garmin_tokens.json", installed=True
+        )
+        assert json.loads(result.path.read_text()) == VALID_BOOTSTRAP_TOKENS
         assert stat.S_IMODE(token_dir.stat().st_mode) == 0o700
-        assert stat.S_IMODE(installed.stat().st_mode) == 0o600
+        assert stat.S_IMODE(result.path.stat().st_mode) == 0o600
+
+        client = Garmin().client
+        client.load(str(token_dir))
+        assert client.di_token == VALID_BOOTSTRAP_TOKENS["di_token"]
+        assert client.di_refresh_token == VALID_BOOTSTRAP_TOKENS["di_refresh_token"]
+        assert client.di_client_id == VALID_BOOTSTRAP_TOKENS["di_client_id"]
+
+    def test_existing_token_directory_permissions_are_preserved(
+        self, monkeypatch, tmp_path
+    ):
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir(mode=0o755)
+        os.chmod(token_dir, 0o755)
+        monkeypatch.setenv(
+            "GARMIN_TOKENS_JSON", json.dumps(VALID_BOOTSTRAP_TOKENS)
+        )
+        monkeypatch.delenv("GARMIN_TOKENS_FILE", raising=False)
+
+        result = bootstrap_tokens(str(token_dir))
+
+        assert result.installed is True
+        assert stat.S_IMODE(token_dir.stat().st_mode) == 0o755
 
     def test_secret_file_initializes_explicit_json_path(
         self, monkeypatch, tmp_path
@@ -173,9 +220,9 @@ class TestBootstrapTokens:
         monkeypatch.setenv("GARMIN_TOKENS_FILE", str(source))
         monkeypatch.delenv("GARMIN_TOKENS_JSON", raising=False)
 
-        installed = bootstrap_tokens(str(target))
+        result = bootstrap_tokens(str(target))
 
-        assert installed == target
+        assert result == TokenBootstrapResult(target, installed=True)
         assert json.loads(target.read_text()) == VALID_BOOTSTRAP_TOKENS
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
         assert source.read_text() == json.dumps(VALID_BOOTSTRAP_TOKENS)
@@ -188,8 +235,26 @@ class TestBootstrapTokens:
         monkeypatch.setenv("GARMIN_TOKENS_JSON", "not valid JSON")
         monkeypatch.delenv("GARMIN_TOKENS_FILE", raising=False)
 
-        assert bootstrap_tokens(str(token_dir)) is None
+        assert bootstrap_tokens(str(token_dir)) == TokenBootstrapResult(
+            target, installed=False
+        )
         assert target.read_text() == '{"existing":"refreshed"}'
+
+    def test_symlink_destination_is_rejected(self, monkeypatch, tmp_path):
+        token_dir = tmp_path / "tokens"
+        token_dir.mkdir()
+        real_target = tmp_path / "real-tokens.json"
+        real_target.write_text('{"existing":"tokens"}')
+        (token_dir / "garmin_tokens.json").symlink_to(real_target)
+        monkeypatch.setenv(
+            "GARMIN_TOKENS_JSON", json.dumps(VALID_BOOTSTRAP_TOKENS)
+        )
+        monkeypatch.delenv("GARMIN_TOKENS_FILE", raising=False)
+
+        with pytest.raises(TokenBootstrapError, match="symbolic link"):
+            bootstrap_tokens(str(token_dir))
+
+        assert real_target.read_text() == '{"existing":"tokens"}'
 
     def test_file_and_inline_sources_are_mutually_exclusive(
         self, monkeypatch, tmp_path
@@ -205,10 +270,9 @@ class TestBootstrapTokens:
     @pytest.mark.parametrize(
         ("raw_tokens", "message"),
         [
-            ("", "empty"),
             ("not-json", "not valid JSON"),
             ("[]", "JSON object"),
-            ('{"di_token":"only-one-field"}', "di_refresh_token, di_client_id"),
+            ('{"di_refresh_token":"only-refresh"}', "di_token"),
         ],
     )
     def test_invalid_inline_tokens_fail_without_writing(
@@ -223,6 +287,21 @@ class TestBootstrapTokens:
 
         assert not token_dir.exists()
 
+    def test_di_token_without_refresh_fields_is_accepted(
+        self, monkeypatch, tmp_path
+    ):
+        token_dir = tmp_path / "tokens"
+        monkeypatch.setenv("GARMIN_TOKENS_JSON", '{"di_token":"short-lived-token"}')
+        monkeypatch.delenv("GARMIN_TOKENS_FILE", raising=False)
+
+        result = bootstrap_tokens(str(token_dir))
+
+        assert result.installed is True
+        client = Garmin().client
+        client.load(str(token_dir))
+        assert client.di_token == "short-lived-token"
+        assert client.di_refresh_token is None
+
     def test_missing_secret_file_fails_without_writing(self, monkeypatch, tmp_path):
         token_dir = tmp_path / "tokens"
         monkeypatch.setenv(
@@ -234,6 +313,51 @@ class TestBootstrapTokens:
             bootstrap_tokens(str(token_dir))
 
         assert not token_dir.exists()
+
+    def test_non_utf8_secret_fails_without_writing(self, monkeypatch, tmp_path):
+        source = tmp_path / "secret.json"
+        source.write_bytes(b"\xff\xfe")
+        token_dir = tmp_path / "tokens"
+        monkeypatch.setenv("GARMIN_TOKENS_FILE", str(source))
+        monkeypatch.delenv("GARMIN_TOKENS_JSON", raising=False)
+
+        with pytest.raises(TokenBootstrapError, match="not valid UTF-8"):
+            bootstrap_tokens(str(token_dir))
+
+        assert not token_dir.exists()
+
+    def test_install_works_without_os_fchmod(self, monkeypatch, tmp_path):
+        token_dir = tmp_path / "tokens"
+        monkeypatch.setenv(
+            "GARMIN_TOKENS_JSON", json.dumps(VALID_BOOTSTRAP_TOKENS)
+        )
+        monkeypatch.delenv("GARMIN_TOKENS_FILE", raising=False)
+        monkeypatch.delattr(os, "fchmod")
+
+        result = bootstrap_tokens(str(token_dir))
+
+        assert result.installed is True
+        assert json.loads(result.path.read_text()) == VALID_BOOTSTRAP_TOKENS
+
+    def test_exclusive_create_fallback_when_hard_links_are_unsupported(
+        self, monkeypatch, tmp_path
+    ):
+        token_dir = tmp_path / "tokens"
+        monkeypatch.setenv(
+            "GARMIN_TOKENS_JSON", json.dumps(VALID_BOOTSTRAP_TOKENS)
+        )
+        monkeypatch.delenv("GARMIN_TOKENS_FILE", raising=False)
+        monkeypatch.setattr(
+            os,
+            "link",
+            Mock(side_effect=OSError(errno.EOPNOTSUPP, "not supported")),
+        )
+
+        result = bootstrap_tokens(str(token_dir))
+
+        assert result.installed is True
+        assert json.loads(result.path.read_text()) == VALID_BOOTSTRAP_TOKENS
+        assert stat.S_IMODE(result.path.stat().st_mode) == 0o600
 
 
 class TestTokenExists:

@@ -16,6 +16,7 @@ from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnec
 from garmin_mcp.token_utils import (
     get_token_path,
     get_token_base64_path,
+    get_token_json_path,
     token_exists,
     validate_tokens,
     get_token_info,
@@ -172,7 +173,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         print(f"\n✓ OAuth tokens saved to: {token_path}")
 
         # Save tokens as base64
-        token_json_path = os.path.join(token_path, "garmin_tokens.json")
+        token_json_path = get_token_json_path(token_path)
         with open(token_json_path, "r") as f:
             token_data = f.read()
         token_base64 = base64.b64encode(token_data.encode()).decode()

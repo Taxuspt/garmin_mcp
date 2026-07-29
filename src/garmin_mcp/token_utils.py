@@ -1,8 +1,10 @@
 """Token management utilities for Garmin MCP authentication."""
 
+import errno
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
@@ -13,7 +15,24 @@ class TokenBootstrapError(ValueError):
     """Raised when configured bootstrap tokens cannot be installed safely."""
 
 
-_REQUIRED_TOKEN_FIELDS = ("di_token", "di_refresh_token", "di_client_id")
+@dataclass(frozen=True)
+class TokenBootstrapResult:
+    """Outcome of a configured token bootstrap."""
+
+    path: Path
+    installed: bool
+
+
+_REQUIRED_TOKEN_FIELDS = ("di_token",)
+_LINK_FALLBACK_ERRNOS = {
+    errno.EACCES,
+    errno.EPERM,
+    errno.EXDEV,
+    errno.EINVAL,
+    getattr(errno, "ENOSYS", errno.EPERM),
+    getattr(errno, "ENOTSUP", errno.EPERM),
+    getattr(errno, "EOPNOTSUPP", errno.EPERM),
+}
 
 
 def resolve_token_path(path: str) -> str:
@@ -104,14 +123,12 @@ def _parse_bootstrap_tokens(raw_tokens: str) -> dict:
     return tokens
 
 
-def _write_tokens_atomically(
-    target: Path, tokens: dict, directory_store: bool
-) -> bool:
-    """Install validated tokens atomically without replacing another writer."""
+def _write_tokens_atomically(target: Path, tokens: dict) -> bool:
+    """Install validated tokens safely without replacing another writer."""
     parent_existed = target.parent.exists()
     try:
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if directory_store or not parent_existed:
+        if not parent_existed:
             os.chmod(target.parent, 0o700)
     except OSError as exc:
         raise TokenBootstrapError(
@@ -126,7 +143,8 @@ def _write_tokens_atomically(
             prefix=f".{target.name}.",
         )
         temp_path = Path(temp_name)
-        os.fchmod(fd, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as token_file:
             fd = None
             json.dump(tokens, token_file, separators=(",", ":"))
@@ -139,9 +157,13 @@ def _write_tokens_atomically(
             # bootstrap the same shared volume without overwriting each other.
             os.link(temp_path, target)
         except FileExistsError:
-            if target.is_file():
+            if target.is_file() and not target.is_symlink():
                 return False
             raise
+        except OSError as exc:
+            if exc.errno not in _LINK_FALLBACK_ERRNOS:
+                raise
+            return _write_tokens_exclusively(target, temp_path)
         return True
     except OSError as exc:
         raise TokenBootstrapError(
@@ -160,7 +182,51 @@ def _write_tokens_atomically(
                 pass
 
 
-def bootstrap_tokens(token_path: str = None) -> Path | None:
+def _write_tokens_exclusively(target: Path, source: Path) -> bool:
+    """Fallback for filesystems that cannot hard-link the prepared token file."""
+    fd = None
+    created = False
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+        fd = os.open(target, flags, 0o600)
+        created = True
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        payload = source.read_bytes()
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written == 0:
+                raise OSError("zero-byte write while installing token file")
+            remaining = remaining[written:]
+        os.fsync(fd)
+        return True
+    except FileExistsError:
+        if target.is_file() and not target.is_symlink():
+            return False
+        raise
+    except Exception:
+        if created:
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _non_blank_env(name: str) -> str | None:
+    """Return a configured value, treating empty/whitespace values as unset."""
+    value = os.getenv(name)
+    return value if value is not None and value.strip() else None
+
+
+def bootstrap_tokens(token_path: str = None) -> TokenBootstrapResult | None:
     """Initialize an empty writable token store from a deployment secret.
 
     ``GARMIN_TOKENS_FILE`` points to a JSON secret file and is the recommended
@@ -172,10 +238,10 @@ def bootstrap_tokens(token_path: str = None) -> Path | None:
     than replacing them with stale bootstrap credentials on every restart.
 
     Returns:
-        The installed token file path, or ``None`` when no bootstrap was needed.
+        The configured bootstrap outcome, or ``None`` when no source was set.
     """
-    source_file = os.getenv("GARMIN_TOKENS_FILE")
-    inline_tokens = os.getenv("GARMIN_TOKENS_JSON")
+    source_file = _non_blank_env("GARMIN_TOKENS_FILE")
+    inline_tokens = _non_blank_env("GARMIN_TOKENS_JSON")
 
     if source_file is None and inline_tokens is None:
         return None
@@ -186,25 +252,29 @@ def bootstrap_tokens(token_path: str = None) -> Path | None:
 
     if token_path is None:
         token_path = get_token_path()
-    store = Path(resolve_token_path(token_path))
-    directory_store = store.is_dir() or not store.name.endswith(".json")
     target = get_token_json_path(token_path)
 
     # A writable store may contain tokens refreshed after the bootstrap secret
     # was created. It is therefore the source of truth once initialized.
+    if target.is_symlink():
+        raise TokenBootstrapError(
+            f"token destination '{target}' must not be a symbolic link"
+        )
     if target.is_file():
-        return None
+        return TokenBootstrapResult(target, installed=False)
     if target.exists():
         raise TokenBootstrapError(
             f"token destination '{target}' exists but is not a regular file"
         )
 
     if source_file is not None:
-        if not source_file.strip():
-            raise TokenBootstrapError("GARMIN_TOKENS_FILE is empty")
         source = Path(resolve_token_path(source_file))
         try:
             raw_tokens = source.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            raise TokenBootstrapError(
+                f"token secret '{source}' is not valid UTF-8"
+            ) from None
         except OSError as exc:
             raise TokenBootstrapError(
                 f"cannot read token secret '{source}': {exc.strerror or exc}"
@@ -213,8 +283,8 @@ def bootstrap_tokens(token_path: str = None) -> Path | None:
         raw_tokens = inline_tokens
 
     tokens = _parse_bootstrap_tokens(raw_tokens)
-    installed = _write_tokens_atomically(target, tokens, directory_store)
-    return target if installed else None
+    installed = _write_tokens_atomically(target, tokens)
+    return TokenBootstrapResult(target, installed=installed)
 
 
 def token_exists(token_path: str = None) -> bool:

@@ -430,7 +430,7 @@ Authentication and token storage can be configured with environment variables:
 - `GARMIN_FIT_DOWNLOAD_DIR`: Default directory for downloaded activity files. When set, skips the first-run setup prompt in `download_activity_file`.
 - `GARMIN_FIT_CONFIG`: Path to the persisted download-directory config file (default: `~/.garminconnect_fit_config.json`).
 
-File-based secrets are useful in container environments. Set only one of `GARMIN_TOKENS_FILE` and `GARMIN_TOKENS_JSON`; the file option is safer and recommended. An existing token file is never overwritten by bootstrap input, allowing refreshed tokens in the writable store to survive restarts. Similarly, do not set both the direct and `_FILE` forms of the email or password.
+File-based secrets are useful in container environments. Set only one of `GARMIN_TOKENS_FILE` and `GARMIN_TOKENS_JSON`; blank values are treated as unset, and the file option is safer and recommended. An existing token file is never overwritten by bootstrap input, allowing refreshed tokens in the writable store to survive restarts. When a configured source is skipped for this reason, the server reports the destination path without printing token contents. Similarly, do not set both the direct and `_FILE` forms of the email or password.
 
 ### Transport
 
@@ -720,7 +720,7 @@ volumes:
   garmin-tokens:
 ```
 
-On the first start, the server validates the secret structure and atomically installs it as `/root/.garminconnect/garmin_tokens.json` with owner-only permissions. Later starts use the writable volume copy, so token refreshes are not replaced by an older bootstrap secret.
+On the first start, the server validates the secret structure and safely installs it as `/root/.garminconnect/garmin_tokens.json` with owner-only permissions. It uses an atomic create-if-absent operation where the filesystem supports hard links and an exclusive-create fallback elsewhere. Later starts use the writable volume copy, so token refreshes are not replaced by an older bootstrap secret.
 
 To rotate the bootstrap secret, stop the service, update the secret source, and clear the token volume before starting it again. Clearing the volume removes the current persisted login.
 
