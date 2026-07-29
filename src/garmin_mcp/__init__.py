@@ -230,6 +230,22 @@ def init_api(email, password):
     email = _normalize_optional_user_config(email, "garmin_email")
     password = _normalize_optional_user_config(password, "garmin_password")
 
+    # If GARMINTOKENS_BASE64 holds the base64-encoded token JSON directly
+    # (e.g. set as a cloud/Render environment variable rather than a token
+    # file on disk), decode it into the token directory before attempting
+    # login. This lets a stateless host reuse tokens generated locally.
+    base64_env = os.environ.get("GARMINTOKENS_BASE64")
+    if base64_env:
+        try:
+            os.makedirs(tokenstore, exist_ok=True)
+            token_json = base64.b64decode(base64_env).decode()
+            token_json_path = os.path.join(tokenstore, "garmin_tokens.json")
+            with open(token_json_path, "w") as f:
+                f.write(token_json)
+            os.chmod(token_json_path, 0o600)
+        except Exception as exc:
+            print(f"Warning: failed to decode GARMINTOKENS_BASE64: {exc}", file=sys.stderr)
+
     try:
         # Using Oauth1 and OAuth2 token files from directory
         print(
