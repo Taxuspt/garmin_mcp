@@ -266,49 +266,128 @@ async def test_get_training_status_tool(app_with_training, mock_garmin_client):
 async def test_get_vo2max_trend_falls_back_to_profile(
     app_with_training, mock_garmin_client
 ):
-    """Test VO2 trend returns current profile estimate if history is unavailable"""
+    """Test current profile estimate is separate from unavailable history"""
+    mock_garmin_client.get_training_status.return_value = {}
     mock_garmin_client.get_max_metrics.return_value = {}
-    mock_garmin_client.get_fitnessage_data.return_value = {}
     mock_garmin_client.get_user_profile.return_value = {
         "userData": {"vo2MaxRunning": 28.0}
     }
 
     result = await app_with_training.call_tool(
-        "get_vo2max_trend",
-        {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
     )
 
     data = json.loads(result[0][0].text)
-    assert data["latest_vo2_max"] == 28.0
-    assert data["trend"] == [
-        {
-            "date": "2024-01-15",
-            "vo2_max": 28.0,
-            "source": "get_user_profile",
-        }
-    ]
+    assert data["data_points"] == 0
+    assert data["first_vo2_max"] is None
+    assert data["latest_vo2_max"] is None
+    assert data["change"] is None
+    assert data["trend"] == []
+    assert data["current_vo2_max_estimate"] == {
+        "vo2_max": 28.0,
+        "sport": "running",
+        "source": "get_user_profile",
+    }
     assert "Historical VO2 max values were not available" in data["note"]
+    assert mock_garmin_client.get_training_status.call_count == 2
+    assert mock_garmin_client.get_max_metrics.call_count == 2
+    mock_garmin_client.get_fitnessage_data.assert_not_called()
+    mock_garmin_client.get_user_profile.assert_called_once_with()
 
 
 @pytest.mark.asyncio
 async def test_get_vo2max_trend_uses_daily_metrics(
     app_with_training, mock_garmin_client
 ):
-    """Test VO2 trend uses daily max metrics when Garmin returns them"""
+    """Test VO2 trend reads the real list-of-dicts max metrics shape"""
+    mock_garmin_client.get_training_status.return_value = {}
     mock_garmin_client.get_max_metrics.side_effect = [
-        {"vo2MaxValue": 27.5},
-        {"vo2MaxValue": 28.0},
+        [{"generic": {"vo2MaxValue": 27.5}}],
+        [{"generic": {"vo2MaxValue": 28.0}}],
     ]
 
     result = await app_with_training.call_tool(
-        "get_vo2max_trend",
-        {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
     )
 
     data = json.loads(result[0][0].text)
     assert data["latest_vo2_max"] == 28.0
     assert data["change"] == 0.5
-    assert data["trend"][0]["source"] == "get_max_metrics"
+    assert data["sport"] == "running"
+    assert data["trend"] == [
+        {
+            "date": "2024-01-14",
+            "vo2_max": 27.5,
+            "source": "get_max_metrics",
+        },
+        {
+            "date": "2024-01-15",
+            "vo2_max": 28.0,
+            "source": "get_max_metrics",
+        },
+    ]
+    assert mock_garmin_client.get_training_status.call_count == 2
+    assert mock_garmin_client.get_max_metrics.call_count == 2
+    mock_garmin_client.get_fitnessage_data.assert_not_called()
+    mock_garmin_client.get_user_profile.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_prefers_training_status(
+    app_with_training, mock_garmin_client
+):
+    """Test common historical data avoids extra fallback requests"""
+    mock_garmin_client.get_training_status.side_effect = [
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.0}}},
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.5}}},
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["latest_vo2_max"] == 48.5
+    assert data["sport"] == "running"
+    assert all(point["source"] == "get_training_status" for point in data["trend"])
+    assert mock_garmin_client.get_training_status.call_count == 2
+    mock_garmin_client.get_max_metrics.assert_not_called()
+    mock_garmin_client.get_fitnessage_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_does_not_mix_sports(
+    app_with_training, mock_garmin_client
+):
+    """Test fallback sources keep the first selected sport consistent"""
+    mock_garmin_client.get_training_status.side_effect = [
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 50.0}}},
+        {"mostRecentVO2Max": {"cycling": {"vo2MaxValue": 55.0}}},
+    ]
+    mock_garmin_client.get_max_metrics.return_value = [
+        {"generic": {"vo2MaxValue": 51.0}}
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "running"
+    assert data["change"] == 1.0
+    assert data["trend"] == [
+        {
+            "date": "2024-01-14",
+            "vo2_max": 50.0,
+            "source": "get_training_status",
+        },
+        {
+            "date": "2024-01-15",
+            "vo2_max": 51.0,
+            "source": "get_max_metrics",
+        },
+    ]
+    mock_garmin_client.get_max_metrics.assert_called_once_with("2024-01-15")
 
 
 @pytest.mark.asyncio
