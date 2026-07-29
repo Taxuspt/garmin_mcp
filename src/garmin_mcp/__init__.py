@@ -495,7 +495,16 @@ def main():
             if scope["type"] == "http" and scope["path"] != "/healthz":
                 headers = dict(scope.get("headers", []))
                 auth_header = headers.get(b"authorization", b"").decode()
-                if not expected_token or auth_header != f"Bearer {expected_token}":
+                query_string = scope.get("query_string", b"").decode()
+                query_token = None
+                for pair in query_string.split("&"):
+                    if pair.startswith("token="):
+                        query_token = pair.split("=", 1)[1]
+                token_ok = (
+                    auth_header == f"Bearer {expected_token}"
+                    or query_token == expected_token
+                )
+                if not expected_token or not token_ok:
                     from starlette.responses import PlainTextResponse as _PTR
                     response = _PTR("Unauthorized", status_code=401)
                     await response(scope, receive, send)
