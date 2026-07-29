@@ -306,7 +306,7 @@ def init_api(email, password):
                 file=sys.stderr,
             )
             # Encode Oauth1 and Oauth2 tokens to base64 string and save to file for next login (alternative way)
-            token_json_path = os.path.join(tokenstore, "garmin_tokens.json")
+            token_json_path = token_utils.get_token_json_path(tokenstore)
             with open(token_json_path, "r") as f:
                 token_data = f.read()
             token_base64 = base64.b64encode(token_data.encode()).decode()
@@ -375,6 +375,23 @@ def main():
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
 
+    try:
+        bootstrap_result = token_utils.bootstrap_tokens(tokenstore)
+    except token_utils.TokenBootstrapError as exc:
+        print(f"ERROR: Garmin token bootstrap failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if bootstrap_result is not None:
+        if bootstrap_result.installed:
+            message = (
+                f"Garmin OAuth tokens bootstrapped into '{bootstrap_result.path}'."
+            )
+        else:
+            message = (
+                "Configured Garmin token bootstrap source skipped because "
+                f"'{bootstrap_result.path}' already exists."
+            )
+        print(message, file=sys.stderr)
+
     # --- Transport configuration --------------------------------------------
     # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
     # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.
@@ -391,7 +408,7 @@ def main():
     garmin_client = init_api(email, password)
     if not garmin_client:
         print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
-        return
+        sys.exit(1)
 
     print("Garmin Connect client initialized successfully.", file=sys.stderr)
 

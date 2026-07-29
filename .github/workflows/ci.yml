@@ -27,7 +27,7 @@ jobs:
       run: uv python install ${{ matrix.python-version }}
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --locked
 
     - name: Run integration tests
       run: uv run pytest tests/integration tests/unit -v --tb=short
@@ -42,3 +42,54 @@ jobs:
         else
           echo "❌ Some tests failed"
         fi
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build image
+      run: docker build --tag garmin-mcp:test .
+
+    - name: Smoke test token bootstrap
+      run: |
+        mkdir -p "$RUNNER_TEMP/garmin-token-secret"
+        printf '%s\n' '{"di_token":"test-di-token","di_refresh_token":"test-refresh-token","di_client_id":"test-client-id"}' > "$RUNNER_TEMP/garmin-token-secret/garmin_tokens.json"
+        volume_name="garmin-mcp-token-bootstrap-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        trap 'docker volume rm -f "$volume_name" >/dev/null 2>&1' EXIT
+        docker volume create "$volume_name"
+
+        docker run --rm \
+          --entrypoint python \
+          --env GARMINTOKENS=/var/lib/garmin-tokens \
+          --env GARMIN_TOKENS_FILE=/run/secrets/garmin_tokens.json \
+          --mount "type=bind,source=$RUNNER_TEMP/garmin-token-secret/garmin_tokens.json,target=/run/secrets/garmin_tokens.json,readonly" \
+          --mount "type=volume,source=$volume_name,target=/var/lib/garmin-tokens" \
+          garmin-mcp:test \
+          /app/tests/docker/token_bootstrap_smoke.py installed
+
+        docker run --rm \
+          --entrypoint python \
+          --env GARMINTOKENS=/var/lib/garmin-tokens \
+          --env GARMIN_TOKENS_JSON=invalid \
+          --mount "type=volume,source=$volume_name,target=/var/lib/garmin-tokens" \
+          garmin-mcp:test \
+          /app/tests/docker/token_bootstrap_smoke.py preserved
+
+        bootstrap_status=0
+        bootstrap_output="$(docker run --rm \
+          --env GARMIN_TOKENS_JSON=invalid \
+          garmin-mcp:test 2>&1)" || bootstrap_status=$?
+        printf '%s\n' "$bootstrap_output" >&2
+
+        if [ "$bootstrap_status" -eq 0 ] || \
+          ! grep -Fq \
+            "bootstrap failed: the configured token value is not valid JSON" \
+            <<<"$bootstrap_output"; then
+          echo "Expected the real entrypoint to reject invalid bootstrap JSON"
+          exit 1
+        fi
+        echo "Real entrypoint rejected invalid bootstrap JSON"
