@@ -102,3 +102,12 @@ def test_get_max_metrics_range_reports_unsupported_client():
         client, "2024-01-14", "2024-01-15"
     ) == (False, None)
     client.connectapi.assert_not_called()
+
+
+def test_get_max_metrics_range_handles_missing_connectapi():
+    client = Mock(spec=["garmin_connect_metrics_url"])
+    client.garmin_connect_metrics_url = "/metrics-service/metrics/maxmet/daily"
+
+    assert training._get_max_metrics_range(
+        client, "2024-01-14", "2024-01-15"
+    ) == (False, None)

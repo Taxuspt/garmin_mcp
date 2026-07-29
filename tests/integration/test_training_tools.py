@@ -305,10 +305,13 @@ async def test_get_vo2max_trend_falls_back_to_profile(
 async def test_get_vo2max_trend_uses_daily_metrics(
     app_with_training, mock_garmin_client
 ):
-    """Test VO2 trend reads the max metrics range response in one request"""
+    """Test range metrics take precedence without daily training-status calls"""
     mock_garmin_client.garmin_connect_metrics_url = (
         "/metrics-service/metrics/maxmet/daily"
     )
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentVO2Max": {"generic": {"vo2MaxValue": 99.0}}
+    }
     mock_garmin_client.connectapi.return_value = [
         {
             "generic": {
