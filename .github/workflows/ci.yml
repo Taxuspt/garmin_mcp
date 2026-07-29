@@ -79,7 +79,17 @@ jobs:
           garmin-mcp:test \
           /app/tests/docker/token_bootstrap_smoke.py preserved
 
-        if docker run --rm --env GARMIN_TOKENS_JSON=invalid garmin-mcp:test; then
+        bootstrap_status=0
+        bootstrap_output="$(docker run --rm \
+          --env GARMIN_TOKENS_JSON=invalid \
+          garmin-mcp:test 2>&1)" || bootstrap_status=$?
+        printf '%s\n' "$bootstrap_output" >&2
+
+        if [ "$bootstrap_status" -eq 0 ] || \
+          ! grep -Fq \
+            "bootstrap failed: the configured token value is not valid JSON" \
+            <<<"$bootstrap_output"; then
           echo "Expected the real entrypoint to reject invalid bootstrap JSON"
           exit 1
         fi
+        echo "Real entrypoint rejected invalid bootstrap JSON"

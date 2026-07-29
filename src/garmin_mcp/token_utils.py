@@ -89,6 +89,11 @@ def get_token_base64_path() -> str:
 def get_token_json_path(token_path: str) -> Path:
     """Return the JSON file used by garminconnect for a token-store path."""
     store = Path(resolve_token_path(token_path))
+    # Mirrors garminconnect 0.3.2's Client.dump()/load() resolution
+    # (case-sensitive ".json" suffix). garminconnect 0.3.7 extracts this as
+    # garminconnect.client.token_file_path() and makes the suffix test
+    # case-insensitive. Align this predicate when the pin moves; importing that
+    # helper directly would couple this package to an internal module.
     if store.is_dir() or not store.name.endswith(".json"):
         return store / "garmin_tokens.json"
     return store
