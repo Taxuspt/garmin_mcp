@@ -25,7 +25,7 @@ COPY src/ ./src/
 RUN uv sync --locked --no-dev
 
 # Copy the dependency-free Docker smoke test used by CI
-COPY tests/ ./tests/
+COPY tests/docker/ ./tests/docker/
 
 # Create directory for Garmin tokens
 RUN mkdir -p /root/.garminconnect && \
