@@ -13,16 +13,15 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    UV_SYSTEM_PYTHON=1
+    PATH="/app/.venv/bin:$PATH"
 
-# Copy dependency files and README first for better layer caching
-COPY pyproject.toml README.md ./
+# Install locked runtime dependencies before the source for better layer caching
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --locked --no-dev --no-install-project
 
-# Copy the application source code (needed for editable install)
+# Copy and install the application
 COPY src/ ./src/
-
-# Install dependencies using uv
-RUN uv pip install -e .
+RUN uv sync --locked --no-dev
 
 # Copy test files (optional, for testing in container)
 COPY tests/ ./tests/

@@ -417,17 +417,20 @@ uv sync
 
 ### Configuration
 
-Your Garmin Connect credentials are read from environment variables:
+Authentication and token storage can be configured with environment variables:
 
 - `GARMIN_EMAIL`: Your Garmin Connect email address
 - `GARMIN_EMAIL_FILE`: Path to a file containing your Garmin Connect email address
 - `GARMIN_PASSWORD`: Your Garmin Connect password
 - `GARMIN_PASSWORD_FILE`: Path to a file containing your Garmin Connect password
+- `GARMINTOKENS`: Writable token directory or explicit `.json` path (default: `~/.garminconnect`)
+- `GARMIN_TOKENS_FILE`: Path to a raw `garmin_tokens.json` deployment secret used to initialize an empty writable token store
+- `GARMIN_TOKENS_JSON`: Inline raw token JSON for platforms that cannot mount secrets
 - `GARMIN_IS_CN`: Set to `true` to use Garmin Connect China (garmin.cn) instead of the international version (default: `false`)
 - `GARMIN_FIT_DOWNLOAD_DIR`: Default directory for downloaded activity files. When set, skips the first-run setup prompt in `download_activity_file`.
 - `GARMIN_FIT_CONFIG`: Path to the persisted download-directory config file (default: `~/.garminconnect_fit_config.json`).
 
-File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
+File-based secrets are useful in container environments. Set only one of `GARMIN_TOKENS_FILE` and `GARMIN_TOKENS_JSON`; the file option is safer and recommended. An existing token file is never overwritten by bootstrap input, allowing refreshed tokens in the writable store to survive restarts. Similarly, do not set both the direct and `_FILE` forms of the email or password.
 
 ### Transport
 
@@ -685,9 +688,47 @@ docker run -it \
   garmin-mcp
 ```
 
-#### Using File-Based Secrets (More Secure)
+#### Bootstrapping from an OAuth Token Secret
 
-For enhanced security, especially in production environments, use file-based secrets instead of environment variables:
+For unattended containers, authenticate once on a trusted machine and inject the resulting OAuth token file instead of storing your Garmin email and password:
+
+1. Generate and verify tokens:
+
+```bash
+garmin-mcp-auth
+```
+
+The raw token document is saved at `~/.garminconnect/garmin_tokens.json` by default.
+
+2. Make that file available to Docker as a secret and retain a writable token volume:
+
+```yaml
+services:
+  garmin-mcp:
+    environment:
+      - GARMIN_TOKENS_FILE=/run/secrets/garmin_tokens
+    secrets:
+      - garmin_tokens
+    volumes:
+      - garmin-tokens:/root/.garminconnect
+
+secrets:
+  garmin_tokens:
+    file: ./secrets/garmin_tokens.json
+
+volumes:
+  garmin-tokens:
+```
+
+On the first start, the server validates the secret structure and atomically installs it as `/root/.garminconnect/garmin_tokens.json` with owner-only permissions. Later starts use the writable volume copy, so token refreshes are not replaced by an older bootstrap secret.
+
+To rotate the bootstrap secret, stop the service, update the secret source, and clear the token volume before starting it again. Clearing the volume removes the current persisted login.
+
+Platforms that cannot mount files may set `GARMIN_TOKENS_JSON` to the raw JSON document instead. Environment variables can be exposed through container metadata and process inspection, so do not put this value in a committed `.env` file and prefer `GARMIN_TOKENS_FILE` whenever possible.
+
+#### Using Credential Files
+
+Credential files can be used for first-time authentication when an OAuth token secret is not available:
 
 1. Create a secrets directory and add your credentials:
 

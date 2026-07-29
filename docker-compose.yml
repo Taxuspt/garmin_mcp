@@ -11,7 +11,14 @@ services:
       - GARMIN_PASSWORD=${GARMIN_PASSWORD}
       # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
 
-    # Option 2: Use file-based secrets (uncomment to use)
+    # Option 2: Bootstrap from a pre-authenticated OAuth token secret.
+    # Remove GARMIN_EMAIL/GARMIN_PASSWORD above when using this option.
+    # environment:
+    #   - GARMIN_TOKENS_FILE=/run/secrets/garmin_tokens
+    # secrets:
+    #   - garmin_tokens
+
+    # Option 3: Use file-based credentials for first-time authentication
     # environment:
     #   - GARMIN_EMAIL_FILE=/run/secrets/garmin_email
     #   - GARMIN_PASSWORD_FILE=/run/secrets/garmin_password
@@ -36,6 +43,8 @@ volumes:
 
 # Uncomment if using file-based secrets
 # secrets:
+#   garmin_tokens:
+#     file: ./secrets/garmin_tokens.json
 #   garmin_email:
 #     file: ./secrets/garmin_email.txt
 #   garmin_password:

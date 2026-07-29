@@ -1,10 +1,19 @@
 """Token management utilities for Garmin MCP authentication."""
 
+import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Tuple
 
 from garminconnect import Garmin, GarminConnectConnectionError
+
+
+class TokenBootstrapError(ValueError):
+    """Raised when configured bootstrap tokens cannot be installed safely."""
+
+
+_REQUIRED_TOKEN_FIELDS = ("di_token", "di_refresh_token", "di_client_id")
 
 
 def resolve_token_path(path: str) -> str:
@@ -56,6 +65,156 @@ def get_token_base64_path() -> str:
     return resolve_token_path(
         os.getenv("GARMINTOKENS_BASE64") or "~/.garminconnect_base64"
     )
+
+
+def get_token_json_path(token_path: str) -> Path:
+    """Return the JSON file used by garminconnect for a token-store path."""
+    store = Path(resolve_token_path(token_path))
+    if store.is_dir() or not store.name.endswith(".json"):
+        return store / "garmin_tokens.json"
+    return store
+
+
+def _parse_bootstrap_tokens(raw_tokens: str) -> dict:
+    """Validate bootstrap JSON without making a Garmin network request."""
+    if not raw_tokens.strip():
+        raise TokenBootstrapError("the configured token value is empty")
+
+    try:
+        tokens = json.loads(raw_tokens)
+    except json.JSONDecodeError as exc:
+        raise TokenBootstrapError(
+            f"the configured token value is not valid JSON ({exc.msg})"
+        ) from None
+
+    if not isinstance(tokens, dict):
+        raise TokenBootstrapError("the configured token value must be a JSON object")
+
+    missing = [
+        field
+        for field in _REQUIRED_TOKEN_FIELDS
+        if not isinstance(tokens.get(field), str) or not tokens[field].strip()
+    ]
+    if missing:
+        raise TokenBootstrapError(
+            "the configured token value is missing non-empty field(s): "
+            + ", ".join(missing)
+        )
+
+    return tokens
+
+
+def _write_tokens_atomically(
+    target: Path, tokens: dict, directory_store: bool
+) -> bool:
+    """Install validated tokens atomically without replacing another writer."""
+    parent_existed = target.parent.exists()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if directory_store or not parent_existed:
+            os.chmod(target.parent, 0o700)
+    except OSError as exc:
+        raise TokenBootstrapError(
+            f"cannot prepare token directory '{target.parent}': {exc.strerror or exc}"
+        ) from None
+
+    fd = None
+    temp_path = None
+    try:
+        fd, temp_name = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+        )
+        temp_path = Path(temp_name)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as token_file:
+            fd = None
+            json.dump(tokens, token_file, separators=(",", ":"))
+            token_file.write("\n")
+            token_file.flush()
+            os.fsync(token_file.fileno())
+        try:
+            # The hard link is an atomic create-if-absent because the temporary
+            # file lives in the destination directory. Concurrent replicas can
+            # bootstrap the same shared volume without overwriting each other.
+            os.link(temp_path, target)
+        except FileExistsError:
+            if target.is_file():
+                return False
+            raise
+        return True
+    except OSError as exc:
+        raise TokenBootstrapError(
+            f"cannot write token file '{target}': {exc.strerror or exc}"
+        ) from None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def bootstrap_tokens(token_path: str = None) -> Path | None:
+    """Initialize an empty writable token store from a deployment secret.
+
+    ``GARMIN_TOKENS_FILE`` points to a JSON secret file and is the recommended
+    input. ``GARMIN_TOKENS_JSON`` accepts the same document inline for platforms
+    that cannot mount secrets. Exactly one may be configured.
+
+    Existing ``garmin_tokens.json`` files are never overwritten. This lets
+    garminconnect persist refreshed tokens in the writable token store rather
+    than replacing them with stale bootstrap credentials on every restart.
+
+    Returns:
+        The installed token file path, or ``None`` when no bootstrap was needed.
+    """
+    source_file = os.getenv("GARMIN_TOKENS_FILE")
+    inline_tokens = os.getenv("GARMIN_TOKENS_JSON")
+
+    if source_file is None and inline_tokens is None:
+        return None
+    if source_file is not None and inline_tokens is not None:
+        raise TokenBootstrapError(
+            "set only one of GARMIN_TOKENS_FILE and GARMIN_TOKENS_JSON"
+        )
+
+    if token_path is None:
+        token_path = get_token_path()
+    store = Path(resolve_token_path(token_path))
+    directory_store = store.is_dir() or not store.name.endswith(".json")
+    target = get_token_json_path(token_path)
+
+    # A writable store may contain tokens refreshed after the bootstrap secret
+    # was created. It is therefore the source of truth once initialized.
+    if target.is_file():
+        return None
+    if target.exists():
+        raise TokenBootstrapError(
+            f"token destination '{target}' exists but is not a regular file"
+        )
+
+    if source_file is not None:
+        if not source_file.strip():
+            raise TokenBootstrapError("GARMIN_TOKENS_FILE is empty")
+        source = Path(resolve_token_path(source_file))
+        try:
+            raw_tokens = source.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise TokenBootstrapError(
+                f"cannot read token secret '{source}': {exc.strerror or exc}"
+            ) from None
+    else:
+        raw_tokens = inline_tokens
+
+    tokens = _parse_bootstrap_tokens(raw_tokens)
+    installed = _write_tokens_atomically(target, tokens, directory_store)
+    return target if installed else None
 
 
 def token_exists(token_path: str = None) -> bool:

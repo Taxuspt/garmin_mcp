@@ -12,6 +12,7 @@ build/
 # Virtual environments
 .env
 .venv/
+secrets/
 *.log
 .DS_Store
 .claude.md

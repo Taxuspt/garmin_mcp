@@ -375,6 +375,17 @@ def main():
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
 
+    try:
+        bootstrapped_path = token_utils.bootstrap_tokens(tokenstore)
+    except token_utils.TokenBootstrapError as exc:
+        print(f"ERROR: Garmin token bootstrap failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if bootstrapped_path is not None:
+        print(
+            f"Garmin OAuth tokens bootstrapped into '{bootstrapped_path}'.",
+            file=sys.stderr,
+        )
+
     # --- Transport configuration --------------------------------------------
     # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
     # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.

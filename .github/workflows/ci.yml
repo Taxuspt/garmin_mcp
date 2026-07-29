@@ -42,3 +42,26 @@ jobs:
         else
           echo "❌ Some tests failed"
         fi
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build image
+      run: docker build --tag garmin-mcp:test .
+
+    - name: Smoke test token bootstrap
+      run: |
+        mkdir -p "$RUNNER_TEMP/garmin-token-secret"
+        printf '%s\n' '{"di_token":"test-di-token","di_refresh_token":"test-refresh-token","di_client_id":"test-client-id"}' > "$RUNNER_TEMP/garmin-token-secret/garmin_tokens.json"
+        docker run --rm \
+          --entrypoint python \
+          --env GARMINTOKENS=/var/lib/garmin-tokens \
+          --env GARMIN_TOKENS_FILE=/run/secrets/garmin_tokens.json \
+          --mount "type=bind,source=$RUNNER_TEMP/garmin-token-secret/garmin_tokens.json,target=/run/secrets/garmin_tokens.json,readonly" \
+          garmin-mcp:test \
+          -c "import json, os, stat; from pathlib import Path; from garmin_mcp.token_utils import bootstrap_tokens; installed = bootstrap_tokens(); assert installed == Path('/var/lib/garmin-tokens/garmin_tokens.json'); assert json.loads(installed.read_text())['di_client_id'] == 'test-client-id'; assert stat.S_IMODE(installed.stat().st_mode) == 0o600; os.environ.pop('GARMIN_TOKENS_FILE'); os.environ['GARMIN_TOKENS_JSON'] = 'invalid'; assert bootstrap_tokens() is None"
