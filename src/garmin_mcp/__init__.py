@@ -492,7 +492,7 @@ def main():
         asgi_app = fastmcp.streamable_http_app()
 
         async def guarded_app(scope, receive, send):
-            if scope["type"] == "http" and scope["path"] != "/healthz":
+            if scope["type"] == "http" and scope["path"].startswith("/mcp"):
                 headers = dict(scope.get("headers", []))
                 auth_header = headers.get(b"authorization", b"").decode()
                 query_string = scope.get("query_string", b"").decode()
