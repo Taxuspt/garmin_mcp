@@ -496,13 +496,17 @@ def main():
                 sleep_scores, readiness_scores, hrv = [], [], []
                 d = start
                 while d <= today:
-                    iso = d.isoformat()
-                    s = health_wellness.get_sleep_data(iso)
-                    r = health_wellness.get_training_readiness(iso)
-                    sleep_scores.append(s.get("sleep_score"))
-                    hrv.append(s.get("avg_overnight_hrv"))
-                    readiness_scores.append(r[0]["score"] if r else None)
-                    d += timedelta(days=1)
+    iso = d.isoformat()
+
+    raw_sleep = garmin_client.get_sleep_data(iso)
+    daily = (raw_sleep or {}).get("dailySleepDTO", {})
+    sleep_scores.append(daily.get("sleepScores", {}).get("overall", {}).get("value"))
+    hrv.append(raw_sleep.get("avgOvernightHrv") if raw_sleep else None)
+
+    readiness_raw = garmin_client.get_training_readiness(iso)
+    readiness_scores.append(readiness_raw[0]["score"] if readiness_raw else None)
+
+    d += timedelta(days=1)
 
                 payload = {
                     "dates": [(start + timedelta(days=i)).isoformat() for i in range(11)],
