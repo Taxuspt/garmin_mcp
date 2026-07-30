@@ -526,37 +526,35 @@ def main():
         # Simple shared-secret check in front of the whole app. /healthz stays
         # open so Render's health checks keep working; everything else needs
         # a matching "Authorization: Bearer <token>" header.
-        import uvicorn
+import uvicorn
         expected_token = os.environ.get("GARMIN_MCP_AUTH_TOKEN")
-
         asgi_app = fastmcp.streamable_http_app()
 
         async def guarded_app(scope, receive, send):
-    if scope["type"] == "http" and (scope["path"].startswith("/mcp") or scope["path"].startswith("/api/")):
-        if scope["method"] == "OPTIONS":
+            if scope["type"] == "http" and (scope["path"].startswith("/mcp") or scope["path"].startswith("/api/")):
+                if scope["method"] == "OPTIONS":
+                    await asgi_app(scope, receive, send)
+                    return
+                headers = dict(scope.get("headers", []))
+                auth_header = headers.get(b"authorization", b"").decode()
+                query_string = scope.get("query_string", b"").decode()
+                query_token = None
+                for pair in query_string.split("&"):
+                    if pair.startswith("token="):
+                        query_token = pair.split("=", 1)[1]
+                token_ok = (
+                    auth_header == f"Bearer {expected_token}"
+                    or query_token == expected_token
+                )
+                if not expected_token or not token_ok:
+                    from starlette.responses import PlainTextResponse as _PTR
+                    response = _PTR("Unauthorized", status_code=401)
+                    await response(scope, receive, send)
+                    return
             await asgi_app(scope, receive, send)
-            return
-        headers = dict(scope.get("headers", []))
-        auth_header = headers.get(b"authorization", b"").decode()
-        query_string = scope.get("query_string", b"").decode()
-        query_token = None
-        for pair in query_string.split("&"):
-            if pair.startswith("token="):
-                query_token = pair.split("=", 1)[1]
-        token_ok = (
-            auth_header == f"Bearer {expected_token}"
-            or query_token == expected_token
-        )
-        if not expected_token or not token_ok:
-            from starlette.responses import PlainTextResponse as _PTR
-            response = _PTR("Unauthorized", status_code=401)
-            await response(scope, receive, send)
-            return
-    await asgi_app(scope, receive, send)
 
         uvicorn.run(guarded_app, host=http_host, port=http_port)
         return
-
     # Run the MCP server (stdio only reaches here)
     app.run(transport=transport)
 
