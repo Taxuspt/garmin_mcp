@@ -497,8 +497,8 @@ def main():
                 d = start
                 while d <= today:
                     iso = d.isoformat()
-                    s = health_wellness.get_sleep_summary(iso)
-                    r = training.get_training_readiness(iso)
+                    s = health_wellness.get_sleep_data(iso)
+                    r = health_wellness.get_training_readiness(iso)
                     sleep_scores.append(s.get("sleep_score"))
                     hrv.append(s.get("avg_overnight_hrv"))
                     readiness_scores.append(r[0]["score"] if r else None)
