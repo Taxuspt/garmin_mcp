@@ -1,6 +1,7 @@
 """Regression tests for the Desktop Extension manifest."""
 
 import json
+import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -8,6 +9,7 @@ from zipfile import ZipFile
 REPO_ROOT = Path(__file__).parents[2]
 MANIFEST_PATH = REPO_ROOT / "dxt" / "manifest.json"
 BUNDLE_PATH = REPO_ROOT / "garmin-mcp.dxt"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
 
 def _read_manifest():
@@ -26,6 +28,17 @@ def test_user_config_defaults_do_not_contain_template_variables():
         default = config.get("default")
         values = default if isinstance(default, list) else [default]
         assert all("${" not in value for value in values if isinstance(value, str))
+
+
+def test_python_runtime_matches_project_requirement():
+    manifest = _read_manifest()
+    with PYPROJECT_PATH.open("rb") as pyproject_file:
+        pyproject = tomllib.load(pyproject_file)
+
+    assert (
+        manifest["compatibility"]["runtimes"]["python"]
+        == pyproject["project"]["requires-python"]
+    )
 
 
 def test_bundled_manifest_matches_source_manifest():
