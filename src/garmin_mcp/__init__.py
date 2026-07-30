@@ -503,13 +503,29 @@ def main():
                     readiness_raw = garmin_client.get_training_readiness(iso)
                     readiness_scores.append(readiness_raw[0]["score"] if readiness_raw else None)
                     d += timedelta(days=1)
+                raw_hill = garmin_client.get_hill_score(start.isoformat(), today.isoformat())
+                hill_daily = (raw_hill or {}).get("hillScoreDTOList", [])
+                latest_hill = hill_daily[0] if hill_daily else {}
+
+                raw_endurance = garmin_client.get_endurance_score(start.isoformat(), today.isoformat())
+                endurance_dto = (raw_endurance or {}).get("enduranceScoreDTO", {})
+
+                classification_labels = {
+                    1: "recreational", 2: "intermediate", 3: "trained",
+                    4: "well_trained", 5: "expert", 6: "superior", 7: "elite",
+                }
+                classification_id = endurance_dto.get("classification")
+
                 payload = {
                     "dates": [(start + timedelta(days=i)).isoformat() for i in range(11)],
                     "sleep_scores": sleep_scores,
                     "readiness": readiness_scores,
                     "hrv": hrv,
-                    "endurance_score": training.get_endurance_score(start.isoformat(), today.isoformat()),
-                    "hill_overall": training.get_hill_score(start.isoformat(), today.isoformat()),
+                    "endurance_score": endurance_dto.get("overallScore"),
+                    "endurance_classification": classification_labels.get(classification_id),
+                    "hill_overall": latest_hill.get("overallScore"),
+                    "hill_strength": latest_hill.get("strengthScore"),
+                    "hill_endurance": latest_hill.get("enduranceScore"),
                     "as_of": today.isoformat(),
                 }
                 return JSONResponse(payload, headers=CORS_HEADERS)
