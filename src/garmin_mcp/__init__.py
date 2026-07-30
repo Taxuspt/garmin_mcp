@@ -470,10 +470,10 @@ def main():
 
     # When serving over HTTP, expose a plain health endpoint for k8s probes.
     # The MCP endpoint itself requires a handshake and isn't probe-friendly.
+    if transport != "stdio":    
         from starlette.requests import Request
         from starlette.responses import PlainTextResponse, JSONResponse
         from datetime import date, timedelta
-        from garmin_mcp import health_wellness, training
 
         @fastmcp.custom_route("/healthz", methods=["GET"])
         async def healthz(_request: "Request") -> "PlainTextResponse":
