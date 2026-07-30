@@ -472,11 +472,51 @@ def main():
     # The MCP endpoint itself requires a handshake and isn't probe-friendly.
     if transport != "stdio":
         from starlette.requests import Request
-        from starlette.responses import PlainTextResponse
+        from starlette.responses import PlainTextResponse, JSONResponse
+        from datetime import date, timedelta
+        from garmin_mcp import health_wellness, training
 
         @fastmcp.custom_route("/healthz", methods=["GET"])
         async def healthz(_request: "Request") -> "PlainTextResponse":
             return PlainTextResponse("ok")
+
+        CORS_HEADERS = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Authorization",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+        }
+
+        @fastmcp.custom_route("/api/dashboard-data", methods=["GET", "OPTIONS"])
+        async def dashboard_data(request: "Request"):
+            if request.method == "OPTIONS":
+                return JSONResponse({}, headers=CORS_HEADERS)
+            try:
+                today = date.today()
+                start = today - timedelta(days=10)
+
+                sleep_scores, readiness_scores, hrv = [], [], []
+                d = start
+                while d <= today:
+                    iso = d.isoformat()
+                    s = health_wellness.get_sleep_summary(iso)
+                    r = training.get_training_readiness(iso)
+                    sleep_scores.append(s.get("sleep_score"))
+                    hrv.append(s.get("avg_overnight_hrv"))
+                    readiness_scores.append(r[0]["score"] if r else None)
+                    d += timedelta(days=1)
+
+                payload = {
+                    "dates": [(start + timedelta(days=i)).isoformat() for i in range(11)],
+                    "sleep_scores": sleep_scores,
+                    "readiness": readiness_scores,
+                    "hrv": hrv,
+                    "endurance_score": training.get_endurance_score(start.isoformat(), today.isoformat()),
+                    "hill_overall": training.get_hill_score(start.isoformat(), today.isoformat()),
+                    "as_of": today.isoformat(),
+                }
+                return JSONResponse(payload, headers=CORS_HEADERS)
+            except Exception as exc:
+                return JSONResponse({"error": str(exc)}, status_code=500, headers=CORS_HEADERS)
 
         print(
             f"Serving MCP over {transport} on {http_host}:{http_port}",
@@ -492,24 +532,27 @@ def main():
         asgi_app = fastmcp.streamable_http_app()
 
         async def guarded_app(scope, receive, send):
-            if scope["type"] == "http" and scope["path"].startswith("/mcp"):
-                headers = dict(scope.get("headers", []))
-                auth_header = headers.get(b"authorization", b"").decode()
-                query_string = scope.get("query_string", b"").decode()
-                query_token = None
-                for pair in query_string.split("&"):
-                    if pair.startswith("token="):
-                        query_token = pair.split("=", 1)[1]
-                token_ok = (
-                    auth_header == f"Bearer {expected_token}"
-                    or query_token == expected_token
-                )
-                if not expected_token or not token_ok:
-                    from starlette.responses import PlainTextResponse as _PTR
-                    response = _PTR("Unauthorized", status_code=401)
-                    await response(scope, receive, send)
-                    return
+    if scope["type"] == "http" and (scope["path"].startswith("/mcp") or scope["path"].startswith("/api/")):
+        if scope["method"] == "OPTIONS":
             await asgi_app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers", []))
+        auth_header = headers.get(b"authorization", b"").decode()
+        query_string = scope.get("query_string", b"").decode()
+        query_token = None
+        for pair in query_string.split("&"):
+            if pair.startswith("token="):
+                query_token = pair.split("=", 1)[1]
+        token_ok = (
+            auth_header == f"Bearer {expected_token}"
+            or query_token == expected_token
+        )
+        if not expected_token or not token_ok:
+            from starlette.responses import PlainTextResponse as _PTR
+            response = _PTR("Unauthorized", status_code=401)
+            await response(scope, receive, send)
+            return
+    await asgi_app(scope, receive, send)
 
         uvicorn.run(guarded_app, host=http_host, port=http_port)
         return
