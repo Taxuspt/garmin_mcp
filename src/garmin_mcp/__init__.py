@@ -528,6 +528,7 @@ def main():
         # a matching "Authorization: Bearer <token>" header.
         import uvicorn
         expected_token = os.environ.get("GARMIN_MCP_AUTH_TOKEN")
+
         asgi_app = fastmcp.streamable_http_app()
 
         async def guarded_app(scope, receive, send):
@@ -555,6 +556,7 @@ def main():
 
         uvicorn.run(guarded_app, host=http_host, port=http_port)
         return
+
     # Run the MCP server (stdio only reaches here)
     app.run(transport=transport)
 
