@@ -526,7 +526,7 @@ def main():
         # Simple shared-secret check in front of the whole app. /healthz stays
         # open so Render's health checks keep working; everything else needs
         # a matching "Authorization: Bearer <token>" header.
-import uvicorn
+        import uvicorn
         expected_token = os.environ.get("GARMIN_MCP_AUTH_TOKEN")
         asgi_app = fastmcp.streamable_http_app()
 
