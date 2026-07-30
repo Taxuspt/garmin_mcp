@@ -25,7 +25,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.8):
 
 - ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
@@ -162,6 +162,14 @@ categories — anything else, including `OTHER` and `UNASSIGNED`, is rejected wi
 ```
 
 Returns: `{"status": "success", "workout_id": 1234567890, ...}`
+
+### `get_exercise_types`
+
+Lists Garmin's strength-exercise catalog (~1500 exercises across 47 categories) so you can build strength steps with valid `category` / `exerciseName` keys. Call with no argument for the category list, then pass a `category` (e.g. `"BENCH_PRESS"`) to get its exercises with display names.
+
+### `update_workout`
+
+Edits an existing workout in-place, keeping the same workout ID so any calendar schedules stay valid. Full-replace semantics: pass the complete workout structure (same shape as `upload_workout`). Typical flow: `get_workout_by_id` → edit the JSON → `update_workout`.
 
 ### `schedule_week`
 
