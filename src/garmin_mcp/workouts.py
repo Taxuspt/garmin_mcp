@@ -554,6 +554,9 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
         "scheduled_workout_id": scheduled.get('scheduledWorkoutId'),
         "workout_uuid": scheduled.get('workoutUuid'),
         "workout_id": scheduled.get('workoutId'),
+        "training_plan_id": scheduled.get('trainingPlanId'),
+        "fbt_adaptive_plan_id": scheduled.get('fbtAdaptivePlanId'),
+        "tp_type": scheduled.get('tpType'),
         "name": scheduled.get('workoutName'),
         "sport": scheduled.get('workoutType'),
         "completed": is_completed,
@@ -645,6 +648,7 @@ def _get_garmin_coach_workouts(calendar_date: str) -> str:
 
     all_workouts = []
     plan_names = []
+    plans = []
     valid_plan_count = 0
     for plan in training_plans:
         if not isinstance(plan, dict):
@@ -654,6 +658,22 @@ def _get_garmin_coach_workouts(calendar_date: str) -> str:
         plan_name = plan.get("planName")
         if plan_name and plan_name not in plan_names:
             plan_names.append(plan_name)
+
+        plan_details = plan.get("trainingPlanDetailsDTO")
+        if not isinstance(plan_details, dict):
+            plan_details = {}
+        plan_summary = {
+            "name": plan_name,
+            "training_plan_id": plan.get("trainingPlanId"),
+            "classification": plan.get("trainingPlanClassification"),
+            "training_type": plan_details.get("trainingType"),
+        }
+        plan_summary = {
+            key: value for key, value in plan_summary.items()
+            if value is not None
+        }
+        if plan_summary:
+            plans.append(plan_summary)
 
         workout_summaries = plan.get("workoutScheduleSummaries") or []
         if not isinstance(workout_summaries, list):
@@ -670,6 +690,7 @@ def _get_garmin_coach_workouts(calendar_date: str) -> str:
     curated = {
         "date": calendar_date,
         "training_plans": plan_names if plan_names else None,
+        "plans": plans if plans else None,
         "count": len(all_workouts),
         "workouts": all_workouts,
     }
@@ -711,9 +732,12 @@ def register_tools(app):
         Returns workout details including segments and step structure.
 
         Accepts either:
-        - Numeric workout ID (from get_workouts or get_scheduled_workouts)
-        - Workout UUID (from get_garmin_coach_workouts or
-          get_training_plan_workouts for Garmin Coach workouts)
+        - Numeric workout ID (from get_workouts, get_scheduled_workouts, or
+          training-plan families that expose workout_id)
+        - Workout UUID (from adaptive Garmin Coach/training-plan workouts)
+
+        Rest-day UUIDs can resolve to a minimal record without a workout name
+        or segments.
 
         Args:
             workout_id: Workout ID (numeric) or UUID (for training plan workouts)
@@ -1074,10 +1098,12 @@ def register_tools(app):
     async def get_garmin_coach_workouts(calendar_date: str) -> str:
         """Get Garmin Coach workouts around the given date
 
-        Returns workouts from the active adaptive Garmin Coach plan, including
-        workout UUIDs, dates, sport, duration, completion status, rest days,
-        race days, and workout intent when Garmin provides them. The API
-        typically returns approximately seven days anchored around the date.
+        Returns workouts from the active Garmin Coach/training plan, including
+        plan metadata, workout identifiers, dates, sport, duration, completion
+        status, rest days, race days, and workout intent when Garmin provides
+        them. Adaptive plans expose only Garmin's currently generated window,
+        typically the current week; future dates may return no workouts even
+        while a plan is active. The count includes rest-day entries.
 
         Garmin's device-generated Daily Suggested Workouts are computed on a
         compatible watch and are not available through the Garmin Connect API
@@ -1087,8 +1113,10 @@ def register_tools(app):
         This is the preferred tool for Garmin Coach requests. The legacy
         get_training_plan_workouts tool returns the same data; do not call both.
 
-        Coach workouts have workout_uuid (not workout_id). Use the workout_uuid
-        with get_workout_by_id to retrieve detailed steps and targets.
+        Adaptive Coach plans typically expose workout_uuid; other plan families
+        may expose numeric workout_id. Pass whichever identifier is present to
+        get_workout_by_id. Rest-day UUIDs may return minimal detail without
+        workout segments.
 
         Args:
             calendar_date: Reference date in YYYY-MM-DD format (returns week's workouts)
@@ -1104,11 +1132,13 @@ def register_tools(app):
 
         Prefer get_garmin_coach_workouts for new requests. This legacy tool
         returns the same Garmin Coach/training-plan data; do not call both for
-        one request. The API typically returns approximately seven days of
-        workouts anchored around the specified date.
+        one request. Adaptive plans expose only Garmin's currently generated
+        window, typically the current week; future dates may return no workouts
+        even while a plan is active.
 
-        Training plan workouts have workout_uuid (not workout_id). Use the
-        workout_uuid with get_workout_by_id to get detailed step information.
+        Adaptive training plans typically expose workout_uuid; other plan
+        families may expose numeric workout_id. Pass whichever identifier is
+        present to get_workout_by_id. The returned count includes rest days.
 
         Args:
             calendar_date: Reference date in YYYY-MM-DD format (returns week's workouts)
