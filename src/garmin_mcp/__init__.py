@@ -479,6 +479,8 @@ def main():
         async def healthz(_request: "Request") -> "PlainTextResponse":
             return PlainTextResponse("ok")
 
+        expected_token = os.environ.get("GARMIN_MCP_AUTH_TOKEN")
+
         CORS_HEADERS = {
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Headers": "Authorization",
@@ -548,7 +550,6 @@ def main():
         # open so Render's health checks keep working; everything else needs
         # a matching "Authorization: Bearer <token>" header.
         import uvicorn
-        expected_token = os.environ.get("GARMIN_MCP_AUTH_TOKEN")
 
         asgi_app = fastmcp.streamable_http_app()
 
