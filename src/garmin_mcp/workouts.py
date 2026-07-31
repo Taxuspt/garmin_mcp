@@ -1105,10 +1105,12 @@ def register_tools(app):
         typically the current week; future dates may return no workouts even
         while a plan is active. The count includes rest-day entries.
 
-        Garmin's device-generated Daily Suggested Workouts are computed on a
-        compatible watch and are not available through the Garmin Connect API
-        this server uses; they exist only on the watch. This tool returns Garmin
-        Coach/training-plan workouts and does not guess watch-only suggestions.
+        Garmin's standalone Daily Suggested Workouts are generated on compatible
+        devices. As of July 31, 2026, no supported or known Garmin Connect
+        web/API endpoint, including those exposed by this project's
+        python-garminconnect dependency, returns the device's upcoming DSW
+        schedule. This tool returns Garmin Coach/training-plan workouts and does
+        not synthesize device-generated suggestions.
 
         This is the preferred tool for Garmin Coach requests. The legacy
         get_training_plan_workouts tool returns the same data; do not call both.
