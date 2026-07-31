@@ -331,7 +331,11 @@
     loadData();
   });
 
-  loadData();
+  if (!window._apiUrl) {
+  window._apiUrl = '/api/dashboard-data';
+  window._apiToken = '__AUTH_TOKEN__';
+}
+loadData();
 </script>
 </body>
 </html>
