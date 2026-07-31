@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Marathon du Médoc — Training Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg: #2a0f1a;
+    --surface: #3a1626;
+    --surface-2: #451a2c;
+    --gold: #c9a24b;
+    --gold-soft: #e0c789;
+    --vine: #7a8a5a;
+    --rose: #c97a7a;
+    --text: #f2e6d8;
+    --text-muted: #b89486;
+    --rule: rgba(201,162,75,0.25);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',sans-serif;
+    background-image:
+      radial-gradient(circle at 15% 10%, rgba(201,162,75,0.06), transparent 40%),
+      radial-gradient(circle at 85% 90%, rgba(122,138,90,0.07), transparent 45%);
+  }
+  .wrap{max-width:920px; margin:0 auto; padding:32px 20px 80px;}
+
+  .label{
+    border:1px solid var(--gold); padding:28px 24px; text-align:center;
+    position:relative; margin-bottom:28px;
+  }
+  .label::before,.label::after{
+    content:""; position:absolute; left:10px; right:10px; height:1px; background:var(--rule);
+  }
+  .label::before{top:8px;} .label::after{bottom:8px;}
+  .eyebrow{
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:3px;
+    color:var(--gold-soft); text-transform:uppercase;
+  }
+  h1{
+    font-family:'Fraunces',serif; font-weight:700; font-size:clamp(28px,5vw,44px);
+    margin:10px 0 6px; letter-spacing:0.5px;
+  }
+  .appellation{color:var(--text-muted); font-size:14px; font-style:italic;}
+  .countdown{
+    margin-top:16px; display:inline-flex; gap:10px; align-items:baseline;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .countdown .num{font-size:34px; color:var(--gold); font-weight:700;}
+  .countdown .lbl{font-size:12px; color:var(--text-muted); letter-spacing:2px; text-transform:uppercase;}
+
+  .status-bar{
+    display:flex; justify-content:space-between; align-items:center;
+    font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-muted);
+    margin-bottom:36px; flex-wrap:wrap; gap:10px;
+  }
+  .status-dot{display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:6px; vertical-align:middle;}
+  .status-dot.live{background:var(--vine); box-shadow:0 0 6px var(--vine);}
+  .status-dot.stale{background:var(--rose);}
+  .status-dot.loading{background:var(--gold); animation:pulse 1s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.3;}}
+  #refresh-btn{
+    background:transparent; border:1px solid var(--gold); color:var(--gold-soft);
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:1px;
+    text-transform:uppercase; padding:6px 14px; cursor:pointer;
+  }
+  #refresh-btn:hover{background:var(--surface-2);}
+  #refresh-btn:disabled{opacity:0.5; cursor:default;}
+
+  section{margin-bottom:44px;}
+  .section-title{
+    font-family:'Fraunces',serif; font-size:20px; font-weight:600;
+    border-bottom:1px solid var(--rule); padding-bottom:8px; margin-bottom:18px;
+    display:flex; justify-content:space-between; align-items:baseline;
+  }
+  .section-title span.note{font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-muted); font-weight:400;}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px;}
+  .card{
+    background:var(--surface); border:1px solid var(--rule); padding:16px 14px;
+  }
+  .card .label-sm{font-size:11px; letter-spacing:1.5px; text-transform:uppercase; color:var(--text-muted); font-family:'JetBrains Mono',monospace;}
+  .card .value{font-family:'JetBrains Mono',monospace; font-size:30px; font-weight:700; margin-top:6px; color:var(--gold-soft);}
+  .card .sub{font-size:12px; color:var(--text-muted); margin-top:4px;}
+
+  .chart-box{background:var(--surface); border:1px solid var(--rule); padding:18px; margin-bottom:16px; position:relative;}
+  .chart-box h3{margin:0 0 12px; font-family:'Inter'; font-size:13px; letter-spacing:1px; text-transform:uppercase; color:var(--text-muted); font-weight:600;}
+  canvas{max-height:220px;}
+
+  table{width:100%; border-collapse:collapse; font-size:14px;}
+  th{
+    text-align:left; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:1px;
+    color:var(--text-muted); text-transform:uppercase; padding:8px 10px; border-bottom:1px solid var(--gold);
+  }
+  td{padding:10px; border-bottom:1px solid var(--rule); vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  .wk{font-family:'JetBrains Mono',monospace; color:var(--gold-soft); font-weight:700;}
+  .tag{
+    display:inline-block; font-size:10px; letter-spacing:1px; text-transform:uppercase;
+    padding:2px 8px; border:1px solid var(--vine); color:var(--vine); margin-left:6px;
+  }
+  .tag.taper{border-color:var(--rose); color:var(--rose);}
+  .tag.race{border-color:var(--gold); color:var(--gold);}
+
+  .callout{
+    background:var(--surface-2); border-left:3px solid var(--gold); padding:14px 16px;
+    font-size:13.5px; line-height:1.6; color:var(--text);
+  }
+  .callout b{color:var(--gold-soft);}
+  .callout.warn{border-left-color:var(--rose);}
+
+  #config-panel{
+    background:var(--surface-2); border:1px dashed var(--rule); padding:16px; margin-bottom:36px;
+    font-size:13px; display:none;
+  }
+  #config-panel.show{display:block;}
+  #config-panel label{display:block; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--text-muted); margin:10px 0 4px; text-transform:uppercase; letter-spacing:1px;}
+  #config-panel input{
+    width:100%; background:var(--bg); border:1px solid var(--rule); color:var(--text);
+    padding:8px 10px; font-family:'JetBrains Mono',monospace; font-size:12px;
+  }
+  #config-panel button{
+    margin-top:12px; background:var(--gold); border:none; color:var(--bg);
+    font-family:'JetBrains Mono',monospace; font-weight:700; font-size:11px;
+    letter-spacing:1px; text-transform:uppercase; padding:8px 16px; cursor:pointer;
+  }
+
+  footer{text-align:center; color:var(--text-muted); font-size:11px; font-family:'JetBrains Mono',monospace; margin-top:40px;}
+  footer button{
+    background:none; border:none; color:var(--text-muted); text-decoration:underline;
+    font-family:'JetBrains Mono',monospace; font-size:11px; cursor:pointer; padding:0;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="label">
+    <div class="eyebrow">Training Log · Pauillac, Gironde</div>
+    <h1>Marathon du Médoc</h1>
+    <div class="appellation">42.2 km through the vineyards — September 5, 2026</div>
+    <div class="countdown">
+      <span class="num" id="days-to-race">—</span>
+      <span class="lbl">days to race</span>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div><span class="status-dot loading" id="status-dot"></span><span id="status-text">Connecting…</span></div>
+    <div style="display:flex; gap:10px; align-items:center;">
+      <span id="last-updated"></span>
+      <button id="refresh-btn">Refresh</button>
+    </div>
+  </div>
+
+  <div id="config-panel">
+    <div class="callout">No live endpoint configured yet. Enter your Render dashboard-data URL and bearer token below — they're kept only in this browser tab's memory, never sent anywhere else.</div>
+    <label for="api-url">Endpoint URL</label>
+    <input id="api-url" type="text" placeholder="https://your-app.onrender.com/api/dashboard-data">
+    <label for="api-token">Bearer token</label>
+    <input id="api-token" type="password" placeholder="your token">
+    <button id="save-config-btn">Connect</button>
+  </div>
+
+  <section>
+    <div class="section-title">Today's Snapshot <span class="note" id="snapshot-date">—</span></div>
+    <div class="cards" id="snapshot-cards">
+      <div class="card"><div class="label-sm">Sleep Score</div><div class="value">—</div><div class="sub">—</div></div>
+      <div class="card"><div class="label-sm">Training Readiness</div><div class="value">—</div><div class="sub">—</div></div>
+      <div class="card"><div class="label-sm">Overnight HRV</div><div class="value">—</div><div class="sub">ms avg</div></div>
+      <div class="card"><div class="label-sm">Endurance Score</div><div class="value">—</div><div class="sub">—</div></div>
+      <div class="card"><div class="label-sm">Hill Score</div><div class="value">—</div><div class="sub">—</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-title">10-Day Trends <span class="note" id="trend-range">—</span></div>
+    <div class="chart-box">
+      <h3>Sleep Score & Training Readiness</h3>
+      <canvas id="sleepReadinessChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Overnight HRV (ms)</h3>
+      <canvas id="hrvChart"></canvas>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-title">Road to Pauillac <span class="note">5 weeks out</span></div>
+    <div class="callout" style="margin-bottom:18px;">
+      <b>Honest read on the base:</b> your longest run in the last two months has been 10 km, and the race is 42.2 km in 5 weeks. That's not enough time to build a conventional marathon base safely. Since your goal is finishing while enjoying it (not a time), the plan below leans on a <b>run/walk strategy</b> — which also happens to be exactly how most people do this race, given the 20+ wine and oyster stops along the course. Treat the long-run distances below as the ceiling, not a requirement — dial back if readiness or sleep scores are trending down.
+    </div>
+    <table>
+      <thead><tr><th>Week of</th><th>Long run</th><th>Supporting runs</th><th>Focus</th></tr></thead>
+      <tbody>
+        <tr><td class="wk">Aug 3</td><td>13–14 km, run/walk 8:2</td><td>2× 5–6 km easy</td><td>Build tolerance to time on feet<span class="tag">build</span></td></tr>
+        <tr><td class="wk">Aug 10</td><td>16 km, run/walk 8:2</td><td>2× 6 km easy + strides</td><td>Extend duration, practice fueling<span class="tag">build</span></td></tr>
+        <tr><td class="wk">Aug 17</td><td>19–20 km, run/walk 8:2</td><td>1× 6 km, 1× short hills</td><td>Peak long run — this is your ceiling<span class="tag">peak</span></td></tr>
+        <tr><td class="wk">Aug 24</td><td>12 km easy</td><td>2× 4–5 km easy</td><td>Taper begins, protect sleep/HRV<span class="tag taper">taper</span></td></tr>
+        <tr><td class="wk">Aug 31</td><td>Rest / 20 min shakeout</td><td>1× 20–30 min easy</td><td>Race week — arrive rested<span class="tag taper">taper</span></td></tr>
+        <tr><td class="wk">Sep 5</td><td colspan="2">Marathon du Médoc — run/walk, enjoy the châteaux</td><td><span class="tag race">race day</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    Sleep, readiness, HRV, endurance & hill score sourced from Garmin ·
+    <button id="config-toggle-btn">configure live connection</button>
+  </footer>
+</div>
+
+<script>
+  // ---- Race countdown (static, no API needed) ----
+  const raceDate = new Date('2026-09-05T00:00:00');
+  const today = new Date();
+  const daysLeft = Math.max(0, Math.round((raceDate - today) / 86400000));
+  document.getElementById('days-to-race').textContent = daysLeft;
+
+  // ---- Fallback snapshot (last known-good pull, 30 Jul 2026) ----
+  const FALLBACK = {
+    dates: ['2026-07-21','2026-07-22','2026-07-23','2026-07-24','2026-07-25','2026-07-26','2026-07-27','2026-07-28','2026-07-29','2026-07-30'],
+    sleep_scores: [79,99,48,98,42,79,87,90,96,81],
+    readiness: [56,96,62,69,26,33,44,72,81,74],
+    hrv: [99,98,66,98,42,65,96,84,95,100],
+    endurance_score: 6644,
+    endurance_classification: 'Well trained',
+    hill_overall: 27, hill_strength: 8, hill_endurance: 9,
+    sleep_qualifier: 'Good · 6h40m',
+    readiness_level: 'Moderate · recovered',
+    as_of: '2026-07-30 (cached snapshot, not live)'
+  };
+
+  let charts = {};
+
+  function setStatus(state, text){
+    const dot = document.getElementById('status-dot');
+    dot.className = 'status-dot ' + state;
+    document.getElementById('status-text').textContent = text;
+  }
+
+  function renderData(d, isLive){
+    document.getElementById('snapshot-date').textContent = isLive ? 'live' : d.as_of;
+    document.getElementById('trend-range').textContent = d.dates[0].slice(5) + ' – ' + d.dates[d.dates.length-1].slice(5);
+
+    const cards = document.querySelectorAll('#snapshot-cards .card');
+    const lastIdx = d.sleep_scores.length - 1;
+    cards[0].querySelector('.value').textContent = d.sleep_scores[lastIdx] ?? '—';
+    cards[0].querySelector('.sub').textContent = d.sleep_qualifier || '';
+    cards[1].querySelector('.value').textContent = d.readiness[lastIdx] ?? '—';
+    cards[1].querySelector('.sub').textContent = d.readiness_level || '';
+    cards[2].querySelector('.value').textContent = d.hrv[lastIdx] ?? '—';
+    cards[3].querySelector('.value').textContent = d.endurance_score ?? '—';
+    cards[3].querySelector('.sub').textContent = d.endurance_classification || '';
+    cards[4].querySelector('.value').textContent = d.hill_overall ?? '—';
+    cards[4].querySelector('.sub').textContent = `Str ${d.hill_strength ?? '—'} · End ${d.hill_endurance ?? '—'}`;
+
+    const labels = d.dates.map(x => new Date(x).toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+    const goldSoft = '#e0c789', rose = '#c97a7a', vine = '#7a8a5a', gridColor = 'rgba(242,230,216,0.08)';
+    Chart.defaults.font.family = "'JetBrains Mono', monospace";
+    Chart.defaults.color = '#b89486';
+
+    if(charts.sr) charts.sr.destroy();
+    if(charts.hrv) charts.hrv.destroy();
+
+    charts.sr = new Chart(document.getElementById('sleepReadinessChart'), {
+      type:'line',
+      data:{ labels, datasets:[
+        {label:'Sleep Score', data:d.sleep_scores, borderColor:goldSoft, backgroundColor:'transparent', tension:0.3, pointRadius:3},
+        {label:'Readiness', data:d.readiness, borderColor:rose, backgroundColor:'transparent', tension:0.3, pointRadius:3}
+      ]},
+      options:{ responsive:true, plugins:{legend:{labels:{boxWidth:12,font:{size:11}}}},
+        scales:{ y:{min:0,max:100,grid:{color:gridColor}}, x:{grid:{display:false}} } }
+    });
+
+    charts.hrv = new Chart(document.getElementById('hrvChart'), {
+      type:'line',
+      data:{ labels, datasets:[{label:'Overnight HRV (ms)', data:d.hrv, borderColor:vine, backgroundColor:'rgba(122,138,90,0.15)', fill:true, tension:0.3, pointRadius:3}] },
+      options:{ responsive:true, plugins:{legend:{display:false}}, scales:{ y:{grid:{color:gridColor}}, x:{grid:{display:false}} } }
+    });
+  }
+
+  function getConfig(){
+    return {
+      url: localStorage.getItem ? (window._apiUrl || '') : '',
+      token: window._apiToken || ''
+    };
+  }
+
+  async function loadData(){
+    const btn = document.getElementById('refresh-btn');
+    btn.disabled = true;
+    setStatus('loading', 'Fetching…');
+    const cfg = { url: window._apiUrl, token: window._apiToken };
+
+    if(!cfg.url){
+      renderData(FALLBACK, false);
+      setStatus('stale', 'Not connected — showing cached snapshot');
+      document.getElementById('last-updated').textContent = '';
+      document.getElementById('config-panel').classList.add('show');
+      btn.disabled = false;
+      return;
+    }
+
+    try{
+      const res = await fetch(cfg.url, { headers: { 'Authorization': 'Bearer ' + cfg.token } });
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      renderData(data, true);
+      setStatus('live', 'Live');
+      document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    }catch(err){
+      renderData(FALLBACK, false);
+      setStatus('stale', 'Connection failed (' + err.message + ') — showing cached snapshot');
+      document.getElementById('config-panel').classList.add('show');
+    }
+    btn.disabled = false;
+  }
+
+  document.getElementById('refresh-btn').addEventListener('click', loadData);
+  document.getElementById('config-toggle-btn').addEventListener('click', () => {
+    document.getElementById('config-panel').classList.toggle('show');
+  });
+  document.getElementById('save-config-btn').addEventListener('click', () => {
+    window._apiUrl = document.getElementById('api-url').value.trim();
+    window._apiToken = document.getElementById('api-token').value.trim();
+    loadData();
+  });
+
+  loadData();
+</script>
+</body>
+</html>
