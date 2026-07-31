@@ -489,7 +489,8 @@ def main():
         import pathlib
         from starlette.responses import HTMLResponse
 
-        DASHBOARD_HTML = (pathlib.Path(__file__).parent / "static" / "dashboard.html").read_text()
+        _dashboard_template = (pathlib.Path(__file__).parent / "static" / "dashboard.html").read_text()
+        DASHBOARD_HTML = _dashboard_template.replace("__AUTH_TOKEN__", expected_token or "")
 
         @fastmcp.custom_route("/dashboard", methods=["GET"])
         async def dashboard(_request: "Request") -> "HTMLResponse":
