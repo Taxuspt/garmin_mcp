@@ -135,11 +135,40 @@ class _GarminProxy:
         ),
     }
 
-    def __init__(self, client):
-        self._client = client
+    _user_clients: dict = {}
+
+    def __init__(self, client=None):
+        self._client = client  # used only in single-user (stdio/local) mode
+
+    def _resolve_client(self):
+        if self._client is not None:
+            return self._client  # single-user mode unchanged
+
+        from garmin_mcp import user_store
+        from garmin_mcp.user_context import current_user_token
+
+        token = current_user_token.get()
+        if token is None:
+            raise RuntimeError("No authenticated user for this request")
+        if token in self._user_clients:
+            return self._user_clients[token]
+
+        garmin_token_json = user_store.load_user_tokens(token)
+        if garmin_token_json is None:
+            raise RuntimeError("Unknown user")
+
+        import tempfile
+        tmp_dir = tempfile.mkdtemp()
+        with open(f"{tmp_dir}/garmin_tokens.json", "w") as f:
+            f.write(garmin_token_json)
+
+        garmin = Garmin(is_cn=is_cn)
+        garmin.login(tmp_dir)
+        self._user_clients[token] = garmin
+        return garmin
 
     def __getattr__(self, name):
-        attr = getattr(self._client, name)
+        attr = getattr(self._resolve_client(), name)
         if not callable(attr):
             return attr
 
@@ -554,27 +583,30 @@ def main():
 
         asgi_app = fastmcp.streamable_http_app()
 
+        from garmin_mcp import user_store
+        from garmin_mcp.user_context import current_user_token
+
         async def guarded_app(scope, receive, send):
-            if scope["type"] == "http" and (scope["path"].startswith("/mcp") or scope["path"].startswith("/api/")):
-                if scope["method"] == "OPTIONS":
-                    await asgi_app(scope, receive, send)
-                    return
-                headers = dict(scope.get("headers", []))
-                auth_header = headers.get(b"authorization", b"").decode()
+            if scope["type"] == "http" and scope["path"].startswith("/mcp"):
                 query_string = scope.get("query_string", b"").decode()
                 query_token = None
                 for pair in query_string.split("&"):
                     if pair.startswith("token="):
                         query_token = pair.split("=", 1)[1]
-                token_ok = (
-                    auth_header == f"Bearer {expected_token}"
-                    or query_token == expected_token
-                )
-                if not expected_token or not token_ok:
+
+                headers = dict(scope.get("headers", []))
+                auth_header = headers.get(b"authorization", b"").decode()
+                header_token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+
+                token = query_token or header_token
+
+                if not token or not user_store.user_exists(token):
                     from starlette.responses import PlainTextResponse as _PTR
-                    response = _PTR("Unauthorized", status_code=401)
-                    await response(scope, receive, send)
+                    await _PTR("Unauthorized", status_code=401)(scope, receive, send)
                     return
+
+                current_user_token.set(token)
+
             await asgi_app(scope, receive, send)
 
         uvicorn.run(guarded_app, host=http_host, port=http_port)
