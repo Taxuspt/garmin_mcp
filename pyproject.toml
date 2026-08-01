@@ -14,6 +14,8 @@ dependencies = [
     "requests==2.33.0",
     "mcp>=1.28.1,<2",
     "fitparse>=1.2.0",
+    "upstash-redis",
+    "cryptography",
 ]
 
 [project.scripts]
