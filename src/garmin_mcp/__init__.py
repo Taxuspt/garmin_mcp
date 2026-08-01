@@ -513,6 +513,17 @@ def main():
         async def healthz(_request: "Request") -> "PlainTextResponse":
             return PlainTextResponse("ok")
 
+        if multi_user:
+            from garmin_mcp.signup import register_signup_routes
+            register_signup_routes(fastmcp, is_cn)
+            print("Signup routes registered at /signup/start and /signup/verify.", file=sys.stderr)
+
+        print(
+            f"Serving MCP over {transport} on {http_host}:{http_port}",
+            file=sys.stderr,
+        )
+        
+
         expected_token = os.environ.get("GARMIN_MCP_AUTH_TOKEN")
 
         CORS_HEADERS = {
