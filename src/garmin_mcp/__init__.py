@@ -432,16 +432,21 @@ def main():
         print(str(exc), file=sys.stderr)
         sys.exit(1)
 
-    # Initialize Garmin client
-    garmin_client = init_api(email, password)
-    if not garmin_client:
-        print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
-        return
+    multi_user = os.getenv("GARMIN_MCP_MULTI_USER", "false").lower() in ("true", "1", "yes")
 
-    print("Garmin Connect client initialized successfully.", file=sys.stderr)
-
-    # Wrap client so runtime auth/rate-limit errors surface as clear messages
-    garmin_client = _GarminProxy(garmin_client)
+    if multi_user and transport != "stdio":
+        # Multi-user HTTP mode: don't log in as anyone at startup. Each
+        # request resolves its own Garmin client based on its auth token.
+        print("Multi-user mode enabled: Garmin client resolved per-request.", file=sys.stderr)
+        garmin_client = _GarminProxy(client=None)
+    else:
+        # Original single-user behaviour (local Claude Desktop, stdio) — unchanged.
+        garmin_client = init_api(email, password)
+        if not garmin_client:
+            print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
+            return
+        print("Garmin Connect client initialized successfully.", file=sys.stderr)
+        garmin_client = _GarminProxy(garmin_client)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)
