@@ -13,12 +13,16 @@ dependencies = [
     "garminconnect==0.3.2",
     "requests==2.33.0",
     "mcp>=1.28.1",
+    "fastmcp>=2",
     "fitparse>=1.2.0",
 ]
 
 [project.scripts]
 garmin-mcp = "garmin_mcp:main"
 garmin-mcp-auth = "garmin_mcp.auth_cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/garmin_mcp"]
 
 [tool.uv]
 dev-dependencies = [
