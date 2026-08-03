@@ -1,0 +1,24 @@
+{
+  "categories": {
+    "CRUNCH": {
+      "exercises": {
+        "REVERSE_CRUNCH": {"primaryMuscles": ["ABS"], "secondaryMuscles": []},
+        "SEATED_LEG_U": {}
+      }
+    },
+    "HIP_STABILITY": {"exercises": {"DEAD_BUG": {}}},
+    "PULL_UP": {
+      "exercises": {
+        "PULL_UP": {"primaryMuscles": ["LATS"]},
+        "CHIN_UP": {"primaryMuscles": ["LATS"], "secondaryMuscles": ["BICEPS"]}
+      }
+    },
+    "BENCH_PRESS": {"exercises": {"DUMBBELL_BENCH_PRESS": {}}},
+    "LEG_RAISE": {
+      "exercises": {
+        "HANGING_LEG_RAISE": {},
+        "LYING_LEG_RAISE": {}
+      }
+    }
+  }
+}

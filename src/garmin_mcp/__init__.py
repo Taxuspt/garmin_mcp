@@ -29,6 +29,7 @@ from garmin_mcp import nutrition
 from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
+from garmin_mcp import exercise_catalog
 
 
 def is_interactive_terminal() -> bool:
@@ -389,31 +390,33 @@ def main():
 
     # Initialize Garmin client
     garmin_client = init_api(email, password)
-    if not garmin_client:
-        print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
-        return
+    if garmin_client:
+        print("Garmin Connect client initialized successfully.", file=sys.stderr)
 
-    print("Garmin Connect client initialized successfully.", file=sys.stderr)
+        # Wrap client so runtime auth/rate-limit errors surface as clear messages
+        garmin_client = _GarminProxy(garmin_client)
 
-    # Wrap client so runtime auth/rate-limit errors surface as clear messages
-    garmin_client = _GarminProxy(garmin_client)
-
-    # Configure all modules with the Garmin client
-    activity_management.configure(garmin_client)
-    health_wellness.configure(garmin_client)
-    user_profile.configure(garmin_client)
-    devices.configure(garmin_client)
-    gear_management.configure(garmin_client)
-    weight_management.configure(garmin_client)
-    challenges.configure(garmin_client)
-    training.configure(garmin_client)
-    workouts.configure(garmin_client)
-    data_management.configure(garmin_client)
-    womens_health.configure(garmin_client)
-    nutrition.configure(garmin_client)
-    workout_builders.configure(garmin_client)
-    courses.configure(garmin_client)
-    activity_analysis.configure(garmin_client)
+        # Configure modules that use the authenticated Garmin client.
+        activity_management.configure(garmin_client)
+        health_wellness.configure(garmin_client)
+        user_profile.configure(garmin_client)
+        devices.configure(garmin_client)
+        gear_management.configure(garmin_client)
+        weight_management.configure(garmin_client)
+        challenges.configure(garmin_client)
+        training.configure(garmin_client)
+        workouts.configure(garmin_client)
+        data_management.configure(garmin_client)
+        womens_health.configure(garmin_client)
+        nutrition.configure(garmin_client)
+        workout_builders.configure(garmin_client)
+        courses.configure(garmin_client)
+        activity_analysis.configure(garmin_client)
+    else:
+        print(
+            "Garmin authentication unavailable; exposing public catalog tools only.",
+            file=sys.stderr,
+        )
 
     # Create the MCP app, wrapped so the env-var filter can drop tools.
     # host/port only matter for the HTTP transports; stdio ignores them.
@@ -425,24 +428,27 @@ def main():
         print(f"Tool filter: denylist of {len(disabled_tools)} tool(s).", file=sys.stderr)
 
     # Register tools from all modules
-    app = activity_management.register_tools(app)
-    app = health_wellness.register_tools(app)
-    app = user_profile.register_tools(app)
-    app = devices.register_tools(app)
-    app = gear_management.register_tools(app)
-    app = weight_management.register_tools(app)
-    app = challenges.register_tools(app)
-    app = training.register_tools(app)
-    app = workouts.register_tools(app)
-    app = data_management.register_tools(app)
-    app = womens_health.register_tools(app)
-    app = nutrition.register_tools(app)
-    app = workout_builders.register_tools(app)
-    app = courses.register_tools(app)
-    app = activity_analysis.register_tools(app)
+    app = exercise_catalog.register_tools(app)
+    if garmin_client:
+        app = activity_management.register_tools(app)
+        app = health_wellness.register_tools(app)
+        app = user_profile.register_tools(app)
+        app = devices.register_tools(app)
+        app = gear_management.register_tools(app)
+        app = weight_management.register_tools(app)
+        app = challenges.register_tools(app)
+        app = training.register_tools(app)
+        app = workouts.register_tools(app)
+        app = data_management.register_tools(app)
+        app = womens_health.register_tools(app)
+        app = nutrition.register_tools(app)
+        app = workout_builders.register_tools(app)
+        app = courses.register_tools(app)
+        app = activity_analysis.register_tools(app)
 
     # Register resources (workout templates)
-    app = workout_templates.register_resources(app)
+    if garmin_client:
+        app = workout_templates.register_resources(app)
 
     # Warn about filter entries that matched no tool (most likely typos)
     unknown = app.unknown_filter_names()
