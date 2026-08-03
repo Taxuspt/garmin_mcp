@@ -25,7 +25,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+This MCP server implements **113+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2), plus Garmin's public exercise catalog:
 
 - ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
@@ -42,6 +42,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Courses (3 tools) - list / upload GPX as course / delete course
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
+- ✅ Exercise Catalog (3 tools) - browse, match, and batch-resolve public Garmin strength-exercise identifiers without account authentication
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
 
@@ -78,7 +79,7 @@ If you need any of these endpoints, please [open an issue](https://github.com/Ta
 
 ## Tool Filtering
 
-This server registers 110+ tools by default, which can be a lot of context for
+This server registers 113+ tools by default, which can be a lot of context for
 an LLM to carry in every session. You can expose only the tools you need with
 two optional environment variables:
 
@@ -98,6 +99,78 @@ Example — expose only sleep, stress, and recent activities:
   "GARMIN_ENABLED_TOOLS": "get_sleep_data,get_stress_summary,get_activities"
 }
 ```
+
+## Exercise catalog tools
+
+The read-only `list_strength_exercises`, `match_strength_exercise`, and
+`resolve_strength_exercises` tools use
+Garmin's public [exercise catalog](https://connect.garmin.com/web-data/exercises/Exercises.json)
+as the canonical source of valid `category` + `exercise_name` pairs. Human-readable
+labels come from Garmin's public
+[`exercise_types.properties`](https://connect.garmin.com/web-translations/exercise_types/exercise_types.properties)
+translation file. These tools do not access an authenticated Garmin account and
+never create temporary workouts.
+
+Browse a category, search labels or identifiers, and paginate the results:
+
+```json
+{
+  "category": "CRUNCH",
+  "search": "reverse",
+  "limit": 20
+}
+```
+
+Match a human-friendly description and receive exact identifiers plus alternatives
+when the result is uncertain:
+
+```json
+{
+  "query": "Reverse Crunch"
+}
+```
+
+The fields to use when creating a workout are the Garmin identifiers, not the
+display label:
+
+```json
+{
+  "category": "CRUNCH",
+  "exercise_name": "REVERSE_CRUNCH"
+}
+```
+
+Resolve a complete create-ready batch while preserving sets, reps, rest, and any
+other caller metadata:
+
+```json
+{
+  "exercises": [
+    {"name": "Reverse Crunch", "sets": 3, "reps": 12, "rest_seconds": 60},
+    {"category": "CARRY", "exercise_name": "FARMERS_CARRY", "sets": 4, "reps": 1}
+  ],
+  "limit": 5
+}
+```
+
+The batch status is `ready` only when every exercise is exact or confidently
+matched. Ambiguous, unknown, conflicting, or invalid inputs return `needs_review`
+with per-item alternatives. This resolver never requires Garmin authentication.
+
+Catalog files are cached in memory and under
+`~/.cache/garmin_mcp/exercise_catalog/` for seven days by default. A structurally
+valid expired cache remains available as a stale fallback during network outages.
+The cache directory, TTL, and both source URLs can be overridden with
+`GARMIN_EXERCISE_CACHE_DIR`, `GARMIN_EXERCISE_CACHE_TTL_SECONDS`,
+`GARMIN_EXERCISES_URL`, and `GARMIN_EXERCISE_LABELS_URL`.
+
+A display label such as `Reverse Crunch` is intended for people and search;
+`CRUNCH` / `REVERSE_CRUNCH` is the exact Garmin pair. A small conservative alias
+table improves searches such as `abdominal invertido`, but aliases are not part
+of Garmin's official catalog. Approximate semantic matching cannot guarantee that
+two differently named movements are equivalent. When Garmin has no exact entry,
+use the scored alternatives to make that decision rather than treating a weak
+match as exact.
 
 ## High-level workout tools
 
@@ -143,7 +216,7 @@ name kept in the step description. The name is also sent as `exerciseName`, but 
 retains that when it matches one of its own exercise keys (e.g. `FARMERS_CARRY`) — any other
 value is accepted and then stored empty.
 
-`category` is optional and passed straight through. Omit it and the key is left out of the
+By default, `category` is optional and passed straight through. Omit it and the key is left out of the
 payload entirely, which Garmin accepts. Supply it and it must be one of Garmin's exercise
 categories — anything else, including `OTHER` and `UNASSIGNED`, is rejected with
 `400 - Invalid category`. The full list is published at
@@ -152,6 +225,7 @@ categories — anything else, including `OTHER` and `UNASSIGNED`, is rejected wi
 ```json
 {
   "name": "Full Body A",
+  "resolve_exercises": true,
   "exercises": [
     {"name": "Sentadillas", "sets": 3, "reps": 12, "rest_seconds": 90},
     {"name": "Flexiones",   "sets": 3, "reps": 15, "rest_seconds": 60},
@@ -160,6 +234,14 @@ categories — anything else, including `OTHER` and `UNASSIGNED`, is rejected wi
   ]
 }
 ```
+
+With `resolve_exercises: true`, the whole batch is checked before JSON construction.
+Every item must resolve before anything is uploaded; failures return all unresolved
+items and alternatives. A valid supplied `category` + `exercise_name` pair is used
+as-is while `name` remains the readable description. If the public catalog and its
+cache are both unavailable, creation uses the legacy inputs and the success response
+contains an explicit warning. Leaving the flag false keeps the previous behavior and
+does not load the catalog.
 
 Returns: `{"status": "success", "workout_id": 1234567890, ...}`
 

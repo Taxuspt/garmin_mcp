@@ -174,6 +174,23 @@ def test_strength_passes_through_supplied_category():
     assert "category" not in second
 
 
+def test_strength_prefers_identifier_and_preserves_description():
+    result = build_strength_json(
+        name="Resolved",
+        exercises=[{"name": "My carry", "exercise_name": "FARMERS_CARRY", "category": "CARRY"}],
+    )
+    step = _work_steps(result)[0]
+    assert step["exerciseName"] == "FARMERS_CARRY"
+    assert step["description"].startswith("My carry:")
+
+
+def test_strength_humanizes_identifier_only_input():
+    result = build_strength_json(
+        name="Resolved", exercises=[{"exercise_name": "REVERSE_CRUNCH", "category": "CRUNCH"}]
+    )
+    assert _work_steps(result)[0]["description"].startswith("Reverse Crunch:")
+
+
 def test_strength_rejects_empty_category():
     for bad in ("", "   ", 5):
         with pytest.raises(ValueError):

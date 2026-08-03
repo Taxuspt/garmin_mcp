@@ -358,7 +358,7 @@ dev = [
 requires-dist = [
     { name = "fitparse", specifier = ">=1.2.0" },
     { name = "garminconnect", specifier = "==0.3.2" },
-    { name = "mcp", specifier = ">=1.28.1" },
+    { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "python-dotenv", specifier = "==1.2.2" },
     { name = "requests", specifier = "==2.33.0" },
 ]
