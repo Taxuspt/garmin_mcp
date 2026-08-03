@@ -7,7 +7,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from unittest.mock import MagicMock
 
-from garmin_mcp import workouts, workout_builders
+from garmin_mcp import exercise_catalog, workouts, workout_builders
 
 
 @pytest.fixture
@@ -216,3 +216,68 @@ async def test_create_run_workout_exception(app_with_builders, mock_garmin_clien
     assert result is not None
     assert "Error" in result[0][0].text
     assert "Upload failed" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_strength_resolution_uploads_canonical_pair(
+    app_with_builders, mock_garmin_client, monkeypatch
+):
+    monkeypatch.setattr(exercise_catalog, "resolve_strength_exercises", lambda exercises: {
+        "status": "ready",
+        "resolved_exercises": [{**exercises[0], "category": "CRUNCH", "exercise_name": "REVERSE_CRUNCH"}],
+    })
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 42, "workoutName": "Core"}
+    result = await app_with_builders.call_tool("create_strength_workout", {
+        "name": "Core", "resolve_exercises": True,
+        "exercises": [{"name": "Reverse Crunch", "sets": 3, "reps": 10}],
+    })
+    assert json.loads(result[0][0].text)["status"] == "success"
+    step = mock_garmin_client.upload_workout.call_args.args[0]["workoutSegments"][0]["workoutSteps"][0]
+    assert (step["category"], step["exerciseName"]) == ("CRUNCH", "REVERSE_CRUNCH")
+    assert step["description"].startswith("Reverse Crunch:")
+
+
+@pytest.mark.asyncio
+async def test_create_strength_resolution_blocks_entire_upload(
+    app_with_builders, mock_garmin_client, monkeypatch
+):
+    monkeypatch.setattr(exercise_catalog, "resolve_strength_exercises", lambda exercises: {
+        "status": "needs_review", "resolved_exercises": [],
+        "unresolved_items": [{"index": 0, "status": "ambiguous", "alternatives": []}],
+    })
+    result = await app_with_builders.call_tool("create_strength_workout", {
+        "name": "Core", "resolve_exercises": True, "exercises": [{"name": "raise"}],
+    })
+    assert json.loads(result[0][0].text)["status"] == "needs_review"
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_strength_catalog_outage_uses_legacy_upload(
+    app_with_builders, mock_garmin_client, monkeypatch
+):
+    monkeypatch.setattr(exercise_catalog, "resolve_strength_exercises", lambda exercises: {
+        "status": "catalog_unavailable", "resolved_exercises": [],
+    })
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 43, "workoutName": "Legacy"}
+    result = await app_with_builders.call_tool("create_strength_workout", {
+        "name": "Legacy", "resolve_exercises": True,
+        "exercises": [{"name": "Custom movement", "sets": 1, "reps": 2}],
+    })
+    payload = json.loads(result[0][0].text)
+    assert payload["status"] == "success" and "catalog unavailable" in payload["warning"].lower()
+    mock_garmin_client.upload_workout.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_strength_default_does_not_resolve(
+    app_with_builders, mock_garmin_client, monkeypatch
+):
+    resolve = MagicMock(side_effect=AssertionError("catalog should not load"))
+    monkeypatch.setattr(exercise_catalog, "resolve_strength_exercises", resolve)
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 44, "workoutName": "Legacy"}
+    await app_with_builders.call_tool("create_strength_workout", {
+        "name": "Legacy", "exercises": [{"name": "Custom", "sets": 1, "reps": 2}],
+    })
+    resolve.assert_not_called()
+    mock_garmin_client.upload_workout.assert_called_once()

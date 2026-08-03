@@ -7,6 +7,8 @@ to the existing upload_workout / schedule_workout endpoints.
 import json
 from typing import Any, Dict, List, Optional
 
+from garmin_mcp.exercise_catalog import humanize
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -277,7 +279,12 @@ def build_strength_json(
     step_order = 1
 
     for ex in exercises:
-        ex_name = ex.get("name", "Exercise")
+        identifier = ex.get("exercise_name")
+        if identifier is not None and (not isinstance(identifier, str) or not identifier.strip()):
+            raise ValueError("exercise_name must be a non-empty string")
+        ex_name = ex.get("name")
+        if ex_name is None:
+            ex_name = humanize(identifier.strip().upper()) if identifier else "Exercise"
         sets = int(ex.get("sets", 1))
         reps = int(ex.get("reps", 1))
         rest_seconds = int(ex.get("rest_seconds", 60))
@@ -291,7 +298,7 @@ def build_strength_json(
             "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
             "endConditionValue": float(reps),
             "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
-            "exerciseName": ex_name,
+            "exerciseName": identifier.strip().upper() if identifier else ex_name,
         }
 
         # Only set when the caller asked for it: Garmin rejects values outside its own
@@ -484,6 +491,7 @@ def register_tools(app):
     async def create_strength_workout(
         name: str,
         exercises: List[Dict[str, Any]],
+        resolve_exercises: bool = False,
     ) -> str:
         """Create a strength workout and upload it to Garmin Connect.
 
@@ -500,9 +508,26 @@ def register_tools(app):
                 anything else, including "UNASSIGNED" and "OTHER", is rejected with
                 400 Invalid category. Full list:
                 https://connect.garmin.com/web-data/exercises/Exercises.json
+            resolve_exercises: Resolve the whole batch against Garmin's public
+                catalog before upload. Defaults to false for legacy behavior.
         """
         try:
-            workout_json = build_strength_json(name=name, exercises=exercises)
+            catalog_warning = None
+            upload_exercises = exercises
+            if resolve_exercises:
+                from garmin_mcp.exercise_catalog import resolve_strength_exercises
+
+                resolution = resolve_strength_exercises(exercises)
+                if resolution["status"] == "catalog_unavailable":
+                    catalog_warning = (
+                        "Garmin exercise catalog unavailable; uploaded using legacy "
+                        "exercise inputs without catalog validation."
+                    )
+                elif resolution["status"] != "ready":
+                    return json.dumps(resolution, indent=2, ensure_ascii=False)
+                else:
+                    upload_exercises = resolution["resolved_exercises"]
+            workout_json = build_strength_json(name=name, exercises=upload_exercises)
             result = garmin_client.upload_workout(workout_json)
 
             if isinstance(result, dict):
@@ -512,6 +537,8 @@ def register_tools(app):
                     "name": result.get("workoutName"),
                     "message": "Workout uploaded successfully",
                 }
+                if catalog_warning:
+                    curated["warning"] = catalog_warning
                 curated = {k: v for k, v in curated.items() if v is not None}
                 return json.dumps(curated, indent=2)
             return json.dumps(result, indent=2)
