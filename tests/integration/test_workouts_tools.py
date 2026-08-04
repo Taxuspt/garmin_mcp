@@ -109,6 +109,7 @@ async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
     # Verify - tool converts to int for numeric IDs
     assert result is not None
     mock_garmin_client.get_workout_by_id.assert_called_once_with(123456)
+    mock_garmin_client.connectapi.assert_not_called()
 
     # Parse the result and verify curation includes steps
     result_data = json_module.loads(result[0][0].text)
@@ -266,6 +267,7 @@ async def test_get_workout_by_uuid_tool(app_with_workouts, mock_garmin_client):
     mock_garmin_client.connectapi.assert_called_once_with(
         f"workout-service/fbt-adaptive/{workout_uuid}"
     )
+    mock_garmin_client.get_workout_by_id.assert_not_called()
 
     # Parse the result and verify training plan workout fields
     result_data = json_module.loads(result[0][0].text)
@@ -1208,8 +1210,74 @@ async def test_get_scheduled_workouts_tool(app_with_workouts, mock_garmin_client
 
 
 @pytest.mark.asyncio
-async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_client):
-    """Test get_training_plan_workouts tool - uses GraphQL query"""
+async def test_get_scheduled_workouts_preserves_manual_shape_and_adds_plan_ids(
+    app_with_workouts,
+    mock_garmin_client,
+):
+    """Shared curation enriches plan entries without changing manual entries."""
+    import json as json_module
+
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "workoutScheduleSummariesScalar": [
+                {
+                    "scheduledWorkoutId": 1001,
+                    "workoutUuid": None,
+                    "workoutId": 2001,
+                    "workoutName": "Manual Ride",
+                    "workoutType": "cycling",
+                    "scheduleDate": "2024-01-15",
+                    "associatedActivityId": None,
+                    "trainingPlanId": None,
+                    "fbtAdaptivePlanId": None,
+                    "tpType": None,
+                },
+                {
+                    "scheduledWorkoutId": None,
+                    "workoutUuid": "abc-123-def",
+                    "workoutId": None,
+                    "workoutName": "Coach Ride",
+                    "workoutType": "cycling",
+                    "scheduleDate": "2024-01-16",
+                    "associatedActivityId": None,
+                    "trainingPlanId": 3001,
+                    "fbtAdaptivePlanId": 3001,
+                    "tpType": None,
+                },
+            ]
+        }
+    }
+
+    result = await app_with_workouts.call_tool(
+        "get_scheduled_workouts",
+        {"start_date": "2024-01-15", "end_date": "2024-01-16"},
+    )
+
+    scheduled = json_module.loads(result[0][0].text)["scheduled_workouts"]
+    assert scheduled[0] == {
+        "date": "2024-01-15",
+        "scheduled_workout_id": 1001,
+        "workout_id": 2001,
+        "name": "Manual Ride",
+        "sport": "cycling",
+        "completed": False,
+    }
+    assert scheduled[1]["training_plan_id"] == 3001
+    assert scheduled[1]["fbt_adaptive_plan_id"] == 3001
+    assert "tp_type" not in scheduled[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name",
+    ["get_garmin_coach_workouts", "get_training_plan_workouts"],
+)
+async def test_get_garmin_coach_workout_tools(
+    app_with_workouts,
+    mock_garmin_client,
+    tool_name,
+):
+    """Both the explicit Coach tool and legacy training-plan tool use GraphQL."""
     import json as json_module
 
     # Setup mock for GraphQL query - matches actual API response structure
@@ -1218,10 +1286,13 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
             "trainingPlanScalar": {
                 "trainingPlanWorkoutScheduleDTOS": [
                     {
+                        "trainingPlanId": 12345,
                         "planName": "5K Training Plan",
+                        "trainingPlanClassification": "FBT_ADAPTIVE",
                         "trainingPlanDetailsDTO": {
                             "athletePlanId": 12345,
-                            "workoutsPerWeek": 4
+                            "workoutsPerWeek": 4,
+                            "trainingType": "RUNNING",
                         },
                         "workoutScheduleSummaries": [
                             {
@@ -1232,7 +1303,10 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
                                 "scheduleDate": "2024-01-15",
                                 "tpPlanName": "5K Training Plan",
                                 "associatedActivityId": None,
-                                "estimatedDurationInSecs": 1800
+                                "estimatedDurationInSecs": 1800,
+                                "trainingPlanId": 12345,
+                                "fbtAdaptivePlanId": 12345,
+                                "tpType": None,
                             },
                             {
                                 "workoutUuid": "xyz-456-ghi",
@@ -1242,7 +1316,10 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
                                 "scheduleDate": "2024-01-15",
                                 "tpPlanName": "5K Training Plan",
                                 "associatedActivityId": 987654,
-                                "estimatedDurationInSecs": 1200
+                                "estimatedDurationInSecs": 1200,
+                                "trainingPlanId": 12345,
+                                "fbtAdaptivePlanId": 12345,
+                                "tpType": None,
                             }
                         ]
                     }
@@ -1254,7 +1331,7 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
 
     # Call tool
     result = await app_with_workouts.call_tool(
-        "get_training_plan_workouts",
+        tool_name,
         {"calendar_date": "2024-01-15"}
     )
 
@@ -1266,6 +1343,14 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
     result_data = json_module.loads(result[0][0].text)
     assert result_data["date"] == "2024-01-15"
     assert result_data["training_plans"] == ["5K Training Plan"]
+    assert result_data["plans"] == [
+        {
+            "name": "5K Training Plan",
+            "training_plan_id": 12345,
+            "classification": "FBT_ADAPTIVE",
+            "training_type": "RUNNING",
+        }
+    ]
     assert result_data["count"] == 2
 
     # Verify workouts are curated correctly
@@ -1273,11 +1358,247 @@ async def test_get_training_plan_workouts_tool(app_with_workouts, mock_garmin_cl
     assert workouts[0]["name"] == "Base Run"
     assert workouts[0]["sport"] == "running"
     assert workouts[0]["completed"] is False
+    assert workouts[0]["training_plan_id"] == 12345
+    assert workouts[0]["fbt_adaptive_plan_id"] == 12345
+    assert "tp_type" not in workouts[0]
 
-    # Verify completed workout has activity_id
+    # Supplemental strength remains owned by the adaptive running plan.
     assert workouts[1]["name"] == "Strength"
+    assert workouts[1]["sport"] == "strength_training"
+    assert workouts[1]["training_plan_id"] == 12345
+    assert workouts[1]["fbt_adaptive_plan_id"] == 12345
     assert workouts[1]["completed"] is True
     assert workouts[1]["activity_id"] == 987654
+
+
+@pytest.mark.asyncio
+async def test_get_garmin_coach_workouts_stp_numeric_ids(
+    app_with_workouts,
+    mock_garmin_client,
+):
+    """Strength-plan entries preserve numeric IDs and their STP type."""
+    import json as json_module
+
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "trainingPlanScalar": {
+                "trainingPlanWorkoutScheduleDTOS": [
+                    {
+                        "trainingPlanId": 67890,
+                        "planName": "Push, Pull, Legs",
+                        "trainingPlanClassification": "STP",
+                        "trainingPlanDetailsDTO": {
+                            "athletePlanId": 67890,
+                            "trainingType": "STRENGTH",
+                        },
+                        "workoutScheduleSummaries": [
+                            {
+                                "scheduledWorkoutId": 111,
+                                "workoutUuid": None,
+                                "workoutId": 222,
+                                "workoutName": "Leg Day",
+                                "workoutType": "strength_training",
+                                "scheduleDate": "2024-01-15",
+                                "tpPlanName": "Push, Pull, Legs",
+                                "associatedActivityId": None,
+                                "trainingPlanId": 67890,
+                                "fbtAdaptivePlanId": None,
+                                "tpType": "STP",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    }
+
+    result = await app_with_workouts.call_tool(
+        "get_garmin_coach_workouts",
+        {"calendar_date": "2024-01-15"},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["training_plans"] == ["Push, Pull, Legs"]
+    assert result_data["plans"] == [
+        {
+            "name": "Push, Pull, Legs",
+            "training_plan_id": 67890,
+            "classification": "STP",
+            "training_type": "STRENGTH",
+        }
+    ]
+    workout = result_data["workouts"][0]
+    assert workout["workout_id"] == 222
+    assert "workout_uuid" not in workout
+    assert workout["training_plan_id"] == 67890
+    assert workout["tp_type"] == "STP"
+    assert "fbt_adaptive_plan_id" not in workout
+
+
+@pytest.mark.asyncio
+async def test_get_garmin_coach_workouts_includes_rest_days(
+    app_with_workouts,
+    mock_garmin_client,
+):
+    """Rest days remain counted even when Garmin omits name and sport."""
+    import json as json_module
+
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "trainingPlanScalar": {
+                "trainingPlanWorkoutScheduleDTOS": [
+                    {
+                        "trainingPlanId": 12345,
+                        "planName": "Adaptive Plan",
+                        "trainingPlanClassification": "FBT_ADAPTIVE",
+                        "trainingPlanDetailsDTO": {"trainingType": "CYCLING"},
+                        "workoutScheduleSummaries": [
+                            {
+                                "workoutUuid": "rest-123",
+                                "workoutId": None,
+                                "workoutName": None,
+                                "workoutType": None,
+                                "scheduleDate": "2024-01-15",
+                                "associatedActivityId": None,
+                                "trainingPlanId": 12345,
+                                "fbtAdaptivePlanId": 12345,
+                                "tpType": None,
+                                "isRestDay": True,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+    }
+
+    result = await app_with_workouts.call_tool(
+        "get_garmin_coach_workouts",
+        {"calendar_date": "2024-01-15"},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["count"] == 1
+    rest_day = result_data["workouts"][0]
+    assert rest_day["workout_uuid"] == "rest-123"
+    assert rest_day["is_rest_day"] is True
+    assert rest_day["training_plan_id"] == 12345
+    assert rest_day["fbt_adaptive_plan_id"] == 12345
+    assert "name" not in rest_day
+    assert "sport" not in rest_day
+
+
+@pytest.mark.asyncio
+async def test_get_garmin_coach_workouts_handles_malformed_plan_entries(
+    app_with_workouts,
+    mock_garmin_client,
+):
+    """Unexpected nullable/scalar plan entries do not break the whole result."""
+    import json as json_module
+
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "trainingPlanScalar": {
+                "trainingPlanWorkoutScheduleDTOS": [
+                    None,
+                    {
+                        "planName": "Adaptive Plan",
+                        "trainingPlanDetailsDTO": [],
+                        "workoutScheduleSummaries": [
+                            None,
+                            {
+                                "workoutUuid": "abc-123",
+                                "workoutName": "Base Run",
+                                "workoutType": "running",
+                                "scheduleDate": "2024-01-15",
+                                "associatedActivityId": None,
+                            },
+                        ],
+                    },
+                ]
+            }
+        }
+    }
+
+    result = await app_with_workouts.call_tool(
+        "get_garmin_coach_workouts",
+        {"calendar_date": "2024-01-15"},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["training_plans"] == ["Adaptive Plan"]
+    assert result_data["count"] == 1
+    assert result_data["workouts"][0]["workout_uuid"] == "abc-123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (None, "No training plan data found or error querying data."),
+        (
+            {"data": None},
+            "No training plan data found or error querying data.",
+        ),
+        (
+            {"data": {"trainingPlanScalar": None}},
+            "No training plan workouts scheduled for 2024-01-15.",
+        ),
+        (
+            {
+                "data": {
+                    "trainingPlanScalar": {
+                        "trainingPlanWorkoutScheduleDTOS": [],
+                    }
+                }
+            },
+            "No training plan workouts scheduled for 2024-01-15.",
+        ),
+        (
+            {
+                "data": {
+                    "trainingPlanScalar": {
+                        "trainingPlanWorkoutScheduleDTOS": [None],
+                    }
+                }
+            },
+            "No training plan workouts scheduled for 2024-01-15.",
+        ),
+    ],
+)
+async def test_get_garmin_coach_workouts_handles_missing_plan_data(
+    app_with_workouts,
+    mock_garmin_client,
+    response,
+    expected,
+):
+    """Missing, null, empty, or wholly malformed plan data is handled."""
+    mock_garmin_client.query_garmin_graphql.return_value = response
+
+    result = await app_with_workouts.call_tool(
+        "get_garmin_coach_workouts",
+        {"calendar_date": "2024-01-15"},
+    )
+
+    assert result[0][0].text == expected
+
+
+@pytest.mark.asyncio
+async def test_get_garmin_coach_workouts_rejects_invalid_date(
+    app_with_workouts,
+    mock_garmin_client,
+):
+    """Invalid dates are rejected before a GraphQL request is made."""
+    result = await app_with_workouts.call_tool(
+        "get_garmin_coach_workouts",
+        {"calendar_date": "2024-01-15-invalid"},
+    )
+
+    assert result[0][0].text == (
+        "Error retrieving Garmin Coach workouts: Invalid calendar_date "
+        "'2024-01-15-invalid': expected YYYY-MM-DD"
+    )
+    mock_garmin_client.query_garmin_graphql.assert_not_called()
 
 
 # Delete workout tests
