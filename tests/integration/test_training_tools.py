@@ -263,6 +263,350 @@ async def test_get_training_status_tool(app_with_training, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_vo2max_trend_falls_back_to_profile(
+    app_with_training, mock_garmin_client
+):
+    """Test current profile estimate is separate from unavailable history"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_training_status.return_value = {}
+    mock_garmin_client.get_user_profile.return_value = {
+        "userData": {"vo2MaxRunning": 28.0}
+    }
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["data_points"] == 0
+    assert data["first_vo2_max"] is None
+    assert data["latest_vo2_max"] is None
+    assert data["change"] is None
+    assert data["trend"] == []
+    assert data["current_vo2_max_estimate"] == {
+        "vo2_max": 28.0,
+        "sport": "running",
+        "source": "get_user_profile",
+    }
+    assert "Historical VO2 max values were not available" in data["note"]
+    assert mock_garmin_client.get_training_status.call_count == 2
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/metrics-service/metrics/maxmet/daily/2024-01-14/2024-01-15"
+    )
+    mock_garmin_client.get_max_metrics.assert_not_called()
+    mock_garmin_client.get_fitnessage_data.assert_not_called()
+    mock_garmin_client.get_user_profile.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_uses_daily_metrics(
+    app_with_training, mock_garmin_client
+):
+    """Test range metrics take precedence without daily training-status calls"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentVO2Max": {"generic": {"vo2MaxValue": 99.0}}
+    }
+    mock_garmin_client.connectapi.return_value = [
+        {
+            "generic": {
+                "calendarDate": "2024-01-14",
+                "vo2MaxValue": 27.5,
+            }
+        },
+        {
+            "generic": {
+                "calendarDate": "2024-01-15",
+                "vo2MaxValue": 28.0,
+            }
+        },
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["latest_vo2_max"] == 28.0
+    assert data["change"] == 0.5
+    assert data["sport"] == "running"
+    assert data["trend"] == [
+        {
+            "date": "2024-01-14",
+            "vo2_max": 27.5,
+            "source": "get_max_metrics",
+        },
+        {
+            "date": "2024-01-15",
+            "vo2_max": 28.0,
+            "source": "get_max_metrics",
+        },
+    ]
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/metrics-service/metrics/maxmet/daily/2024-01-14/2024-01-15"
+    )
+    mock_garmin_client.get_training_status.assert_not_called()
+    mock_garmin_client.get_max_metrics.assert_not_called()
+    mock_garmin_client.get_fitnessage_data.assert_not_called()
+    mock_garmin_client.get_user_profile.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_prefers_training_status(
+    app_with_training, mock_garmin_client
+):
+    """Test common historical data avoids extra fallback requests"""
+    mock_garmin_client.get_training_status.side_effect = [
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.0}}},
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.5}}},
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["latest_vo2_max"] == 48.5
+    assert data["sport"] == "running"
+    assert all(point["source"] == "get_training_status" for point in data["trend"])
+    assert mock_garmin_client.get_training_status.call_count == 2
+    mock_garmin_client.get_max_metrics.assert_not_called()
+    mock_garmin_client.get_fitnessage_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_preserves_selected_cycling_from_mixed_payloads(
+    app_with_training, mock_garmin_client
+):
+    """Test mixed payloads do not hide cycling after it becomes available first"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_training_status.side_effect = [
+        {"mostRecentVO2Max": {"cycling": {"vo2MaxValue": 55.0}}},
+        {
+            "mostRecentVO2Max": {
+                "generic": {"vo2MaxValue": 48.0},
+                "cycling": {"vo2MaxValue": 56.0},
+            }
+        },
+        {
+            "mostRecentVO2Max": {
+                "generic": {"vo2MaxValue": 48.5},
+                "cycling": {"vo2MaxValue": 57.0},
+            }
+        },
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "cycling"
+    assert data["change"] == 2.0
+    assert data["trend"] == [
+        {
+            "date": "2024-01-13",
+            "vo2_max": 55.0,
+            "source": "get_training_status",
+        },
+        {
+            "date": "2024-01-14",
+            "vo2_max": 56.0,
+            "source": "get_training_status",
+        },
+        {
+            "date": "2024-01-15",
+            "vo2_max": 57.0,
+            "source": "get_training_status",
+        },
+    ]
+    mock_garmin_client.get_max_metrics.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_selects_sport_with_most_history(
+    app_with_training, mock_garmin_client
+):
+    """Test an isolated oldest point does not decide the sport for the interval"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_training_status.side_effect = [
+        {"mostRecentVO2Max": {"cycling": {"vo2MaxValue": 55.0}}},
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.0}}},
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.5}}},
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "running"
+    assert data["data_points"] == 2
+    assert [point["vo2_max"] for point in data["trend"]] == [48.0, 48.5]
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_uses_cycling_range_metrics(
+    app_with_training, mock_garmin_client
+):
+    """Test cycling-only max metrics retain their sport and date"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.connectapi.return_value = [
+        {
+            "cycling": {
+                "calendarDate": "2024-01-15",
+                "vo2MaxValue": 55.1,
+            }
+        }
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-15", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "cycling"
+    assert data["trend"] == [
+        {
+            "date": "2024-01-15",
+            "vo2_max": 55.1,
+            "source": "get_max_metrics",
+        }
+    ]
+    mock_garmin_client.get_training_status.assert_not_called()
+    mock_garmin_client.get_max_metrics.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_range_failure_does_not_retry_max_metrics_daily(
+    app_with_training, mock_garmin_client
+):
+    """Test a failed range request falls back without amplifying that failure"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.connectapi.side_effect = RuntimeError("API unavailable")
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.0}}
+    }
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "running"
+    assert mock_garmin_client.get_training_status.call_count == 2
+    mock_garmin_client.get_max_metrics.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_uses_daily_max_metrics_for_older_clients(
+    app_with_training, mock_garmin_client
+):
+    """Test clients without the range API keep the compatible daily fallback"""
+    mock_garmin_client.garmin_connect_metrics_url = None
+    mock_garmin_client.get_training_status.return_value = {}
+    mock_garmin_client.get_max_metrics.return_value = [
+        {"generic": {"vo2MaxValue": 48.0}}
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-15", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["latest_vo2_max"] == 48.0
+    mock_garmin_client.connectapi.assert_not_called()
+    mock_garmin_client.get_max_metrics.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_prefers_running_when_sport_coverage_is_tied(
+    app_with_training, mock_garmin_client
+):
+    """Test equal sport coverage has a stable running-first tie break"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentVO2Max": {
+            "generic": {"vo2MaxValue": 48.0},
+            "cycling": {"vo2MaxValue": 55.0},
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-15", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "running"
+    assert data["latest_vo2_max"] == 48.0
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_no_history_avoids_daily_max_metrics_requests(
+    app_with_training, mock_garmin_client
+):
+    """Test the 90-day no-history case uses one range max-metrics request"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_training_status.return_value = {}
+    mock_garmin_client.get_user_profile.return_value = {
+        "userData": {"vo2MaxRunning": 48.0}
+    }
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-01", "end_date": "2024-03-30"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["data_points"] == 0
+    assert mock_garmin_client.get_training_status.call_count == 90
+    assert mock_garmin_client.connectapi.call_count == 1
+    mock_garmin_client.get_max_metrics.assert_not_called()
+    mock_garmin_client.get_user_profile.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_get_vo2max_trend_handles_endpoint_exception_and_missing_method(
+    app_with_training, mock_garmin_client
+):
+    """Test daily errors and an unavailable max-metrics method reach the profile"""
+    mock_garmin_client.garmin_connect_metrics_url = None
+    mock_garmin_client.get_training_status.side_effect = RuntimeError("API unavailable")
+    mock_garmin_client.get_max_metrics = None
+    mock_garmin_client.get_user_profile.return_value = {
+        "userData": {"vo2MaxCycling": 55.0}
+    }
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-14", "end_date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["current_vo2_max_estimate"]["sport"] == "cycling"
+    assert mock_garmin_client.get_training_status.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_get_lactate_threshold_tool_latest(app_with_training, mock_garmin_client):
     """Test get_lactate_threshold tool returns latest lactate threshold data"""
     # Setup mock with latest=True response format
