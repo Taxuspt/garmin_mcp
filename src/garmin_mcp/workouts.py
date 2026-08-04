@@ -554,6 +554,9 @@ def _curate_scheduled_workout(scheduled: dict) -> dict:
         "scheduled_workout_id": scheduled.get('scheduledWorkoutId'),
         "workout_uuid": scheduled.get('workoutUuid'),
         "workout_id": scheduled.get('workoutId'),
+        "training_plan_id": scheduled.get('trainingPlanId'),
+        "fbt_adaptive_plan_id": scheduled.get('fbtAdaptivePlanId'),
+        "tp_type": scheduled.get('tpType'),
         "name": scheduled.get('workoutName'),
         "sport": scheduled.get('workoutType'),
         "completed": is_completed,
@@ -621,6 +624,82 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
     return False
 
 
+def _get_garmin_coach_workouts(calendar_date: str) -> str:
+    """Return curated workouts from the active Garmin Coach/training plan."""
+    _validate_date(calendar_date, "calendar_date")
+    query = {
+        "query": (
+            f'query{{trainingPlanScalar(calendarDate:"{calendar_date}", '
+            f'lang:"en-US", firstDayOfWeek:"monday")}}'
+        )
+    }
+    result = garmin_client.query_garmin_graphql(query)
+
+    if not isinstance(result, dict) or not isinstance(result.get("data"), dict):
+        return "No training plan data found or error querying data."
+
+    plan_data = result["data"].get("trainingPlanScalar") or {}
+    if not isinstance(plan_data, dict):
+        return "No training plan data found or error querying data."
+
+    training_plans = plan_data.get("trainingPlanWorkoutScheduleDTOS") or []
+    if not isinstance(training_plans, list) or not training_plans:
+        return f"No training plan workouts scheduled for {calendar_date}."
+
+    all_workouts = []
+    plan_names = []
+    plans = []
+    valid_plan_count = 0
+    for plan in training_plans:
+        if not isinstance(plan, dict):
+            continue
+        valid_plan_count += 1
+
+        plan_name = plan.get("planName")
+        if plan_name and plan_name not in plan_names:
+            plan_names.append(plan_name)
+
+        plan_details = plan.get("trainingPlanDetailsDTO")
+        if not isinstance(plan_details, dict):
+            plan_details = {}
+        plan_summary = {
+            "name": plan_name,
+            "training_plan_id": plan.get("trainingPlanId"),
+            "classification": plan.get("trainingPlanClassification"),
+            "training_type": plan_details.get("trainingType"),
+        }
+        plan_summary = {
+            key: value for key, value in plan_summary.items()
+            if value is not None
+        }
+        if plan_summary:
+            plans.append(plan_summary)
+
+        workout_summaries = plan.get("workoutScheduleSummaries") or []
+        if not isinstance(workout_summaries, list):
+            continue
+        all_workouts.extend(
+            _curate_scheduled_workout(workout)
+            for workout in workout_summaries
+            if isinstance(workout, dict)
+        )
+
+    if valid_plan_count == 0:
+        return f"No training plan workouts scheduled for {calendar_date}."
+
+    curated = {
+        "date": calendar_date,
+        "training_plans": plan_names if plan_names else None,
+        "plans": plans if plans else None,
+        "count": len(all_workouts),
+        "workouts": all_workouts,
+    }
+    return json.dumps(
+        {key: value for key, value in curated.items() if value is not None},
+        indent=2,
+    )
+
+
 def register_tools(app):
     """Register all workout-related tools with the MCP server app"""
 
@@ -653,8 +732,12 @@ def register_tools(app):
         Returns workout details including segments and step structure.
 
         Accepts either:
-        - Numeric workout ID (from get_workouts or get_scheduled_workouts)
-        - Workout UUID (from get_training_plan_workouts for Garmin Coach workouts)
+        - Numeric workout ID (from get_workouts, get_scheduled_workouts, or
+          training-plan families that expose workout_id)
+        - Workout UUID (from adaptive Garmin Coach/training-plan workouts)
+
+        Rest-day UUIDs can resolve to a minimal record without a workout name
+        or segments.
 
         Args:
             workout_id: Workout ID (numeric) or UUID (for training plan workouts)
@@ -1012,63 +1095,58 @@ def register_tools(app):
             return f"Error retrieving scheduled workouts: {str(e)}"
 
     @app.tool()
-    async def get_training_plan_workouts(calendar_date: str) -> str:
-        """Get training plan workouts for the week containing the given date
+    async def get_garmin_coach_workouts(calendar_date: str) -> str:
+        """Get Garmin Coach workouts around the given date
 
-        Returns workouts from your active training plan for the week containing
-        the specified date. The API returns approximately 7 days of scheduled
-        workouts anchored around the given date.
+        Returns workouts from the active Garmin Coach/training plan, including
+        plan metadata, workout identifiers, dates, sport, duration, completion
+        status, rest days, race days, and workout intent when Garmin provides
+        them. Adaptive plans expose only Garmin's currently generated window,
+        typically the current week; future dates may return no workouts even
+        while a plan is active. The count includes rest-day entries.
 
-        Training plan workouts have workout_uuid (not workout_id). Use the
-        workout_uuid with get_workout_by_id to get detailed step information.
+        Garmin's standalone Daily Suggested Workouts are generated on compatible
+        devices. As of July 31, 2026, no supported or known Garmin Connect
+        web/API endpoint, including those exposed by this project's
+        python-garminconnect dependency, returns the device's upcoming DSW
+        schedule. This tool returns Garmin Coach/training-plan workouts and does
+        not synthesize device-generated suggestions.
+
+        This is the preferred tool for Garmin Coach requests. The legacy
+        get_training_plan_workouts tool returns the same data; do not call both.
+
+        Adaptive Coach plans typically expose workout_uuid; other plan families
+        may expose numeric workout_id. Pass whichever identifier is present to
+        get_workout_by_id. Rest-day UUIDs may return minimal detail without
+        workout segments.
 
         Args:
             calendar_date: Reference date in YYYY-MM-DD format (returns week's workouts)
         """
         try:
-            _validate_date(calendar_date, "calendar_date")
-            # Query for training plan workouts using GraphQL
-            query = {
-                "query": f'query{{trainingPlanScalar(calendarDate:"{calendar_date}", lang:"en-US", firstDayOfWeek:"monday")}}'
-            }
-            result = garmin_client.query_garmin_graphql(query)
+            return _get_garmin_coach_workouts(calendar_date)
+        except Exception as e:
+            return f"Error retrieving Garmin Coach workouts: {str(e)}"
 
-            if not result or "data" not in result:
-                return "No training plan data found or error querying data."
+    @app.tool()
+    async def get_training_plan_workouts(calendar_date: str) -> str:
+        """Compatibility alias for get_garmin_coach_workouts
 
-            plan_data = result.get("data", {}).get("trainingPlanScalar", {})
-            training_plans = plan_data.get("trainingPlanWorkoutScheduleDTOS", [])
+        Prefer get_garmin_coach_workouts for new requests. This legacy tool
+        returns the same Garmin Coach/training-plan data; do not call both for
+        one request. Adaptive plans expose only Garmin's currently generated
+        window, typically the current week; future dates may return no workouts
+        even while a plan is active.
 
-            if not training_plans:
-                return f"No training plan workouts scheduled for {calendar_date}."
+        Adaptive training plans typically expose workout_uuid; other plan
+        families may expose numeric workout_id. Pass whichever identifier is
+        present to get_workout_by_id. The returned count includes rest days.
 
-            # Collect all workouts from all training plans
-            all_workouts = []
-            plan_names = []
-
-            for plan in training_plans:
-                plan_name = plan.get('planName')
-                if plan_name and plan_name not in plan_names:
-                    plan_names.append(plan_name)
-
-                # workoutScheduleSummaries has same structure as scheduled workouts
-                workout_summaries = plan.get('workoutScheduleSummaries', [])
-                for workout in workout_summaries:
-                    # Reuse the scheduled workout curation since structure is identical
-                    all_workouts.append(_curate_scheduled_workout(workout))
-
-            # Curate training plan data
-            curated = {
-                "date": calendar_date,
-                "training_plans": plan_names if plan_names else None,
-                "count": len(all_workouts),
-                "workouts": all_workouts
-            }
-
-            # Remove None values from top level
-            curated = {k: v for k, v in curated.items() if v is not None}
-
-            return json.dumps(curated, indent=2)
+        Args:
+            calendar_date: Reference date in YYYY-MM-DD format (returns week's workouts)
+        """
+        try:
+            return _get_garmin_coach_workouts(calendar_date)
         except Exception as e:
             return f"Error retrieving training plan workouts: {str(e)}"
 
