@@ -11,7 +11,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from mcp.server.fastmcp import FastMCP
 
-from garmin_mcp import activity_analysis
+from garmin_mcp import activity_analysis, file_serving
 from garmin_mcp.activity_analysis import (
     _compute_power_duration_curve,
     _detect_climbs,
@@ -33,6 +33,13 @@ def app_with_activity_analysis(mock_garmin_client):
     app = FastMCP("Test Activity Analysis")
     app = activity_analysis.register_tools(app)
     return app
+
+
+@pytest.fixture(autouse=True)
+def _clear_file_tokens():
+    file_serving._TOKENS.clear()
+    yield
+    file_serving._TOKENS.clear()
 
 
 def _make_mock_fit_message(name, fields: dict):
@@ -1117,4 +1124,62 @@ async def test_download_activity_file_fit_extraction_failure(
 
     assert "error" in data
     assert "first_16_bytes_hex" in data["debug"]
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_stdio_default_has_no_url(
+    app_with_activity_analysis, mock_garmin_client, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
+    fit_bytes = b"\x0e\x10FITDATA"
+    mock_garmin_client.download_activity.return_value = fit_bytes
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "format": "gpx", "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "url" not in data
+    assert data["file_path"] == os.path.abspath(str(tmp_path / f"{ACTIVITY_ID}.gpx"))
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_http_without_base_url_explains_setup(
+    app_with_activity_analysis, mock_garmin_client, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GARMIN_MCP_TRANSPORT", "streamable-http")
+    monkeypatch.delenv("GARMIN_MCP_PUBLIC_BASE_URL", raising=False)
+    fit_bytes = b"\x0e\x10FITDATA"
+    mock_garmin_client.download_activity.return_value = fit_bytes
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "format": "gpx", "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "url" not in data
+    assert "GARMIN_MCP_PUBLIC_BASE_URL" in data["message"]
+    # The file is still saved even though no URL can be returned.
+    assert (tmp_path / f"{ACTIVITY_ID}.gpx").read_bytes() == fit_bytes
+
+
+@pytest.mark.asyncio
+async def test_download_activity_file_http_with_base_url_returns_token_url(
+    app_with_activity_analysis, mock_garmin_client, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GARMIN_MCP_TRANSPORT", "streamable-http")
+    monkeypatch.setenv("GARMIN_MCP_PUBLIC_BASE_URL", "https://garmin-mcp.example.com")
+    fit_bytes = b"\x0e\x10FITDATA"
+    mock_garmin_client.download_activity.return_value = fit_bytes
+
+    result = await app_with_activity_analysis.call_tool(
+        "download_activity_file",
+        {"activity_id": ACTIVITY_ID, "format": "gpx", "output_dir": str(tmp_path)},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["url"].startswith("https://garmin-mcp.example.com/files/")
+    assert data["expires_in_seconds"] == 900
     assert not (tmp_path / f"{ACTIVITY_ID}.fit").exists()
