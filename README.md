@@ -2,6 +2,8 @@
 
 # Garmin MCP Server
 
+[![MCP Toplist](https://mcptoplist.com/badge/mcp.so%2Fgarmin_mcp%2FTaxuspt.svg)](https://mcptoplist.com/server/mcp.so%2Fgarmin_mcp%2FTaxuspt)
+
 This Model Context Protocol (MCP) server connects to Garmin Connect and exposes your fitness and health data to Claude and other MCP-compatible clients.
 
 Garmin's API is accessed via the awesome [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library.
