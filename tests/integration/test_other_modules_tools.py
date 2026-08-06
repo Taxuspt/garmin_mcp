@@ -467,3 +467,57 @@ async def test_get_menstrual_calendar_data_chunking(app_with_womens_health, mock
 
     data = json.loads(result[0][0].text)
     assert data == [MOCK_MENSTRUAL_DATA, second_chunk]
+
+
+@pytest.mark.asyncio
+async def test_get_device_solar_data_reads_real_payload(app_with_devices, mock_garmin_client):
+    """Solar data must be summarised from the fields Garmin actually returns.
+
+    The daily DTO carries localConnectDate, totalActivityTimeGainedMs and a
+    solarInputReadings series. Reading calendarDate / solarIntensityAvg /
+    solarIntensityMax / batteryCharged / batteryUsed / batteryNet found
+    nothing, and after the None-stripping every day collapsed to {} — so a
+    solar watch with a full day of readings reported no data.
+    """
+    mock_garmin_client.get_device_solar_data.return_value = {
+        "solarDailyDataDTOs": [
+            {
+                "localConnectDate": "2026-08-04",
+                "deviceId": 3493127157,
+                "totalActivityTimeGainedMs": 5250000,
+                "solarInputReadings": [
+                    {"solarUtilization": 0.0, "charging": False},
+                    {"solarUtilization": 50.0, "charging": True},
+                    {"solarUtilization": 100.0, "charging": True},
+                ],
+            }
+        ]
+    }
+
+    result = await app_with_devices.call_tool(
+        "get_device_solar_data", {"device_id": 3493127157, "date": "2026-08-04"}
+    )
+    payload = json.loads(result[0][0].text)
+    day = payload["solar_data"][0]
+
+    assert day != {}, "day collapsed to empty — fields read do not exist in the payload"
+    assert day["date"] == "2026-08-04"
+    assert day["solar_utilization_avg_pct"] == 50.0
+    assert day["solar_utilization_max_pct"] == 100.0
+    assert day["readings_count"] == 3
+    assert day["minutes_charging"] == 2
+    assert day["activity_time_gained_minutes"] == 87.5
+
+
+@pytest.mark.asyncio
+async def test_get_device_solar_data_accepts_numeric_device_id(app_with_devices, mock_garmin_client):
+    """get_devices() returns deviceId as an int, so the schema must accept one."""
+    mock_garmin_client.get_device_solar_data.return_value = {
+        "solarDailyDataDTOs": [
+            {"localConnectDate": "2026-08-04", "solarInputReadings": []}
+        ]
+    }
+    result = await app_with_devices.call_tool(
+        "get_device_solar_data", {"device_id": 3493127157, "date": "2026-08-04"}
+    )
+    assert "Error" not in result[0][0].text

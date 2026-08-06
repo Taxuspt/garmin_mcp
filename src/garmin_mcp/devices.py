@@ -226,14 +226,14 @@ def register_tools(app):
             return f"Error retrieving primary training device: {str(e)}"
 
     @app.tool()
-    async def get_device_solar_data(device_id: str, date: str) -> str:
+    async def get_device_solar_data(device_id: Union[int, str], date: str) -> str:
         """Get solar data for a specific device
 
         Returns solar charging data for devices with solar panels (e.g., Instinct Solar,
         Fenix Solar). Only applicable to solar-capable devices.
 
         Args:
-            device_id: Device ID (can be obtained from get_devices)
+            device_id: Device ID (can be obtained from get_devices; numeric or string)
             date: Date in YYYY-MM-DD format
         """
         try:
@@ -246,16 +246,41 @@ def register_tools(app):
             if not daily_data:
                 return f"No solar data available for device ID {device_id} on {date}. This device may not have solar capabilities."
 
-            # Curate solar data from the daily DTOs
+            # Curate solar data from the daily DTOs.
+            #
+            # The daily DTO carries localConnectDate, totalActivityTimeGainedMs
+            # and solarInputReadings — a minute-by-minute series (~1250-1440
+            # entries per day) of solarUtilization percentages. Summarise it
+            # rather than returning the series, which would be tens of KB per
+            # day.
             curated_days = []
             for day_data in daily_data:
+                readings = day_data.get("solarInputReadings") or []
+                utilization = [
+                    r.get("solarUtilization")
+                    for r in readings
+                    if isinstance(r, dict) and r.get("solarUtilization") is not None
+                ]
+                charging_readings = sum(
+                    1 for r in readings if isinstance(r, dict) and r.get("charging")
+                )
+                gained_ms = day_data.get("totalActivityTimeGainedMs")
+
                 curated_day = {
-                    "date": day_data.get("calendarDate"),
-                    "solar_intensity_avg": day_data.get("solarIntensityAvg"),
-                    "solar_intensity_max": day_data.get("solarIntensityMax"),
-                    "battery_charged_percent": day_data.get("batteryCharged"),
-                    "battery_used_percent": day_data.get("batteryUsed"),
-                    "battery_net_percent": day_data.get("batteryNet"),
+                    "date": day_data.get("localConnectDate"),
+                    "solar_utilization_avg_pct": (
+                        round(sum(utilization) / len(utilization), 2)
+                        if utilization else None
+                    ),
+                    "solar_utilization_max_pct": (
+                        round(max(utilization), 2) if utilization else None
+                    ),
+                    "readings_count": len(readings) or None,
+                    "minutes_charging": charging_readings or None,
+                    "activity_time_gained_minutes": (
+                        round(gained_ms / 60000.0, 1)
+                        if isinstance(gained_ms, (int, float)) else None
+                    ),
                 }
                 # Remove None values
                 curated_day = {k: v for k, v in curated_day.items() if v is not None}
