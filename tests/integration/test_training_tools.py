@@ -742,3 +742,26 @@ async def test_get_training_status_no_cycling_vo2_when_absent(app_with_training,
         assert "cycling_vo2_max_precise" not in data
     except (json.JSONDecodeError, AttributeError):
         assert "cycling_vo2_max" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_endurance_score_handles_null_dto(app_with_training, mock_garmin_client):
+    """A null enduranceScoreDTO must not crash the tool.
+
+    Garmin returns an explicit null for sections the user has no data in.
+    `.get("enduranceScoreDTO", {})` returns None in that case — the default
+    only applies when the key is absent — so the following .get raised
+    "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_endurance_score.return_value = {
+        "enduranceScoreDTO": None,
+        "avg": None,
+    }
+
+    result = await app_with_training.call_tool(
+        "get_endurance_score",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
