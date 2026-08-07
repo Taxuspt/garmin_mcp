@@ -26,7 +26,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.4):
+This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2 on Python 3.10/3.11; v0.3.4 on Python 3.12+):
 
 - ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
@@ -341,7 +341,8 @@ The easiest way to use this MCP server with Claude Desktop, [Codex](https://open
 
 #### Prerequisites
 
-- Python 3.12+
+- Python 3.10+ for international accounts
+- Python 3.12+ for Garmin Connect China accounts
 - Garmin Connect account
 - MFA may be required if enabled on your account
 

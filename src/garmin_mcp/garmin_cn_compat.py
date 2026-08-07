@@ -13,6 +13,7 @@ upstream serializer currently persists only DI tokens.
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 
 from garminconnect import client as garmin_client
@@ -28,6 +29,11 @@ def configure_garmin_region(is_cn: bool) -> None:
     every call also makes tests and command-line verification deterministic if
     they switch between international and China clients in one interpreter.
     """
+
+    if is_cn and sys.version_info < (3, 12):
+        raise RuntimeError(
+            "Garmin Connect China authentication requires Python 3.12 or newer"
+        )
 
     domain = "garmin.cn" if is_cn else "garmin.com"
     garmin_client.IOS_SERVICE_URL = f"https://mobile.integration.{domain}/gcm/ios"

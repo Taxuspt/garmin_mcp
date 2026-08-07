@@ -448,6 +448,9 @@ class TestMain:
 class TestAuthenticateIsCn:
     """Tests for is_cn parameter in authenticate function."""
 
+    @pytest.mark.skipif(
+        sys.version_info < (3, 12), reason="China auth needs Python 3.12"
+    )
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
