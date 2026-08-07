@@ -15,7 +15,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - View body composition data
 - Track training status and readiness
 - Access cycling FTP and lactate threshold metrics
-- Manage gear and equipment
+- Manage gear and equipment, including free-text notes returned by `get_gear`
 - Access workouts and training plans
 - Inspect detailed workout step structures, including repeat groups and swim pace targets
 - Weekly health aggregates (steps, stress, intensity minutes)
@@ -44,6 +44,12 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+
+### Gear Notes
+
+Each item in the `gear` array returned by `get_gear` includes a `notes` field
+containing the free-text Notes value shown in Garmin Connect. Gear without a
+Notes value returns `null`; all existing gear fields remain unchanged.
 
 ### Activity File Downloads
 

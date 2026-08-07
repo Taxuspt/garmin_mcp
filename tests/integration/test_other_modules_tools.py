@@ -34,6 +34,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_USER_PROFILE,
     MOCK_UNIT_SYSTEM,
     MOCK_GEAR,
+    MOCK_GEAR_V2,
     MOCK_GEAR_DEFAULTS,
     MOCK_GEAR_STATS,
     MOCK_MENSTRUAL_DATA,
@@ -344,6 +345,7 @@ async def test_get_gear_tool(app_with_gear, mock_garmin_client):
     # Setup mocks for all internal API calls
     mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
     mock_garmin_client.get_gear.return_value = MOCK_GEAR
+    mock_garmin_client.connectapi.return_value = MOCK_GEAR_V2
     mock_garmin_client.get_gear_defaults.return_value = MOCK_GEAR_DEFAULTS
     mock_garmin_client.get_gear_stats.return_value = MOCK_GEAR_STATS
 
@@ -351,9 +353,19 @@ async def test_get_gear_tool(app_with_gear, mock_garmin_client):
     result = await app_with_gear.call_tool("get_gear", {})
 
     assert result is not None
+    payload = json.loads(result[0][0].text)
+    gear_by_uuid = {item["uuid"]: item for item in payload["gear"]}
+    assert (
+        gear_by_uuid["8abfc40d71fb4860bce19072b6c79644"]["notes"]
+        == "Rotation shoe; blue laces."
+    )
+    assert gear_by_uuid["6f27ed27397749ac9f6f450e039c2424"]["notes"] is None
     # Verify the chain of API calls
     mock_garmin_client.get_device_last_used.assert_called_once()
     mock_garmin_client.get_gear.assert_called_once_with(80653452)  # from MOCK_DEVICE_LAST_USED
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/gear-service/gear/v2/list"
+    )
     mock_garmin_client.get_gear_defaults.assert_called_once_with(80653452)
 
 
@@ -362,12 +374,15 @@ async def test_get_gear_tool_without_stats(app_with_gear, mock_garmin_client):
     """Test get_gear tool with include_stats=False"""
     mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
     mock_garmin_client.get_gear.return_value = MOCK_GEAR
+    mock_garmin_client.connectapi.side_effect = RuntimeError("v2 unavailable")
     mock_garmin_client.get_gear_defaults.return_value = MOCK_GEAR_DEFAULTS
 
     # Call with include_stats=False
     result = await app_with_gear.call_tool("get_gear", {"include_stats": False})
 
     assert result is not None
+    payload = json.loads(result[0][0].text)
+    assert all(item["notes"] is None for item in payload["gear"])
     # Stats should not be fetched
     mock_garmin_client.get_gear_stats.assert_not_called()
 

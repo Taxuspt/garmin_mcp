@@ -21,12 +21,21 @@ ACTIVITY_TYPE_MAPPING = {
     8: "Other",
 }
 
+GEAR_V2_LIST_ENDPOINT = "/gear-service/gear/v2/list"
+
 
 def _parse_iso_date(iso_string: str) -> str:
     """Extract date from ISO datetime string"""
     if not iso_string:
         return None
     return iso_string.split("T")[0] if "T" in iso_string else iso_string
+
+
+def _normalize_gear_uuid(uuid: Optional[str]) -> Optional[str]:
+    """Normalize UUIDs returned in hyphenated and unhyphenated forms."""
+    if not isinstance(uuid, str):
+        return None
+    return uuid.replace("-", "").lower()
 
 
 def configure(client):
@@ -42,8 +51,9 @@ def register_tools(app):
     async def get_gear(include_stats: bool = True) -> str:
         """Get all gear registered with the user account
 
-        Returns complete gear inventory including usage statistics and default
-        activity associations. No parameters required - user profile is fetched automatically.
+        Returns complete gear inventory including free-text notes, usage statistics,
+        and default activity associations. The notes field is null when unavailable.
+        No parameters required - user profile is fetched automatically.
 
         Args:
             include_stats: Include usage statistics for each gear item (default True).
@@ -60,6 +70,18 @@ def register_tools(app):
             gear_list = garmin_client.get_gear(user_profile_id)
             if not gear_list:
                 return "No gear found."
+
+            # Notes are only exposed by Garmin's v2 gear endpoint. Its UUIDs are
+            # hyphenated, unlike the legacy endpoint used for the existing fields.
+            notes_by_uuid = {}
+            try:
+                gear_v2_list = garmin_client.connectapi(GEAR_V2_LIST_ENDPOINT) or []
+                for gear_v2 in gear_v2_list:
+                    normalized_uuid = _normalize_gear_uuid(gear_v2.get("uuid"))
+                    if normalized_uuid:
+                        notes_by_uuid[normalized_uuid] = gear_v2.get("notes")
+            except Exception:
+                pass  # Keep the legacy gear inventory available if v2 is unavailable
 
             # 3. Get defaults to map gear -> activity types
             defaults_list = garmin_client.get_gear_defaults(user_profile_id) or []
@@ -96,6 +118,9 @@ def register_tools(app):
                     "status": status,
                     "date_begin": _parse_iso_date(g.get("dateBegin")),
                     "date_end": _parse_iso_date(g.get("dateEnd")),
+                    "notes": notes_by_uuid.get(
+                        _normalize_gear_uuid(uuid), g.get("notes")
+                    ),
                 }
 
                 # Add max distance in km if set
