@@ -3,10 +3,12 @@ Gear management functions for Garmin Connect MCP Server
 """
 
 import json
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 # The garmin_client will be set by the main file
 garmin_client = None
+logger = logging.getLogger(__name__)
 
 # Activity type mappings for gear defaults
 # This is extrapolated from data and might not be complete or 100% accurate
@@ -77,6 +79,10 @@ def register_tools(app):
             try:
                 gear_v2_list = garmin_client.connectapi(GEAR_V2_LIST_ENDPOINT) or []
                 if not isinstance(gear_v2_list, list):
+                    logger.debug(
+                        "Unexpected Garmin v2 gear response type: %s",
+                        type(gear_v2_list).__name__,
+                    )
                     gear_v2_list = []
                 for gear_v2 in gear_v2_list:
                     if not isinstance(gear_v2, dict):
@@ -84,8 +90,10 @@ def register_tools(app):
                     normalized_v2_uuid = _normalize_gear_uuid(gear_v2.get("uuid"))
                     if normalized_v2_uuid:
                         notes_by_uuid[normalized_v2_uuid] = gear_v2.get("notes")
-            except Exception:
-                pass  # Keep the legacy gear inventory available if v2 is unavailable
+            except Exception as exc:
+                logger.debug(
+                    "Garmin v2 gear list unavailable: %s", exc, exc_info=True
+                )
 
             # 3. Get defaults to map gear -> activity types
             defaults_list = garmin_client.get_gear_defaults(user_profile_id) or []

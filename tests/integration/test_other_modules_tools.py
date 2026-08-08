@@ -12,6 +12,7 @@ Tests tools from:
 Total: 25 tools
 """
 import json
+import logging
 
 import pytest
 from unittest.mock import Mock
@@ -389,7 +390,9 @@ async def test_get_gear_tool_preserves_empty_and_null_notes(
 
 
 @pytest.mark.asyncio
-async def test_get_gear_tool_without_stats(app_with_gear, mock_garmin_client):
+async def test_get_gear_tool_without_stats(
+    app_with_gear, mock_garmin_client, caplog
+):
     """Test get_gear tool with include_stats=False"""
     mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
     mock_garmin_client.get_gear.return_value = MOCK_GEAR
@@ -397,12 +400,14 @@ async def test_get_gear_tool_without_stats(app_with_gear, mock_garmin_client):
     mock_garmin_client.get_gear_defaults.return_value = MOCK_GEAR_DEFAULTS
 
     # Call with include_stats=False
-    result = await app_with_gear.call_tool("get_gear", {"include_stats": False})
+    with caplog.at_level(logging.DEBUG, logger=gear_management.__name__):
+        result = await app_with_gear.call_tool("get_gear", {"include_stats": False})
 
     assert result is not None
     payload = json.loads(result[0][0].text)
     assert payload["gear_count"] == len(MOCK_GEAR)
     assert all(item["notes"] is None for item in payload["gear"])
+    assert "Garmin v2 gear list unavailable: v2 unavailable" in caplog.text
     # Stats should not be fetched
     mock_garmin_client.get_gear_stats.assert_not_called()
 
