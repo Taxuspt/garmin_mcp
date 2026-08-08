@@ -24,8 +24,8 @@ ACTIVITY_TYPE_MAPPING = {
 GEAR_V2_LIST_ENDPOINT = "/gear-service/gear/v2/list"
 
 
-def _parse_iso_date(iso_string: str) -> str:
-    """Extract date from ISO datetime string"""
+def _parse_iso_date(iso_string: Optional[str]) -> Optional[str]:
+    """Extract a date from an optional ISO datetime string."""
     if not iso_string:
         return None
     return iso_string.split("T")[0] if "T" in iso_string else iso_string
@@ -73,13 +73,17 @@ def register_tools(app):
 
             # Notes are only exposed by Garmin's v2 gear endpoint. Its UUIDs are
             # hyphenated, unlike the legacy endpoint used for the existing fields.
-            notes_by_uuid = {}
+            notes_by_uuid: Dict[str, Optional[str]] = {}
             try:
                 gear_v2_list = garmin_client.connectapi(GEAR_V2_LIST_ENDPOINT) or []
+                if not isinstance(gear_v2_list, list):
+                    gear_v2_list = []
                 for gear_v2 in gear_v2_list:
-                    normalized_uuid = _normalize_gear_uuid(gear_v2.get("uuid"))
-                    if normalized_uuid:
-                        notes_by_uuid[normalized_uuid] = gear_v2.get("notes")
+                    if not isinstance(gear_v2, dict):
+                        continue
+                    normalized_v2_uuid = _normalize_gear_uuid(gear_v2.get("uuid"))
+                    if normalized_v2_uuid:
+                        notes_by_uuid[normalized_v2_uuid] = gear_v2.get("notes")
             except Exception:
                 pass  # Keep the legacy gear inventory available if v2 is unavailable
 

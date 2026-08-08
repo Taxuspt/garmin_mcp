@@ -369,6 +369,25 @@ async def test_get_gear_tool(app_with_gear, mock_garmin_client):
     mock_garmin_client.get_gear_defaults.assert_called_once_with(80653452)
 
 
+@pytest.mark.parametrize("notes_value", ["", None], ids=["empty", "null"])
+@pytest.mark.asyncio
+async def test_get_gear_tool_preserves_empty_and_null_notes(
+    app_with_gear, mock_garmin_client, notes_value
+):
+    """Explicit empty and null notes retain their distinct JSON values."""
+    mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
+    mock_garmin_client.get_gear.return_value = [MOCK_GEAR[0]]
+    mock_garmin_client.connectapi.return_value = [
+        {**MOCK_GEAR_V2[0], "notes": notes_value}
+    ]
+    mock_garmin_client.get_gear_defaults.return_value = []
+
+    result = await app_with_gear.call_tool("get_gear", {"include_stats": False})
+
+    payload = json.loads(result[0][0].text)
+    assert payload["gear"][0]["notes"] == notes_value
+
+
 @pytest.mark.asyncio
 async def test_get_gear_tool_without_stats(app_with_gear, mock_garmin_client):
     """Test get_gear tool with include_stats=False"""
@@ -382,6 +401,7 @@ async def test_get_gear_tool_without_stats(app_with_gear, mock_garmin_client):
 
     assert result is not None
     payload = json.loads(result[0][0].text)
+    assert payload["gear_count"] == len(MOCK_GEAR)
     assert all(item["notes"] is None for item in payload["gear"])
     # Stats should not be fetched
     mock_garmin_client.get_gear_stats.assert_not_called()
