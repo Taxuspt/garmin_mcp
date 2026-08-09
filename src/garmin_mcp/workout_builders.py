@@ -255,23 +255,70 @@ def build_z2_walk_json(
     }
 
 
+def resolve_exercise(ex_name: str, category: str | None = None) -> tuple[str | None, str | None]:
+    """Resolve a human-readable exercise name against the FIT exercise catalog.
+
+    Returns Garmin's ("CATEGORY", "EXERCISE_NAME") pair in uppercase when the
+    name is found (e.g. "romanian deadlift" -> ("DEADLIFT", "ROMANIAN_DEADLIFT")),
+    or (None, None) when it is not. Garmin Connect only links an exercise to its
+    catalog entry (with animation, muscle groups etc.) when both fields match
+    its enum; anything else is stored as a free-text step.
+
+    Lookup order:
+      1. inside the caller-supplied category, if any — this disambiguates names
+         that occur in several categories (e.g. "lunge" is in both the lunge
+         and the sandbag category)
+      2. as a category name that doubles as an exercise name — "plank" means
+         the plank category's plank, not the banded or suspension variant
+      3. across all categories, in sorted order for determinism
+    """
+    from garmin_mcp.exercise_catalog_data import CATALOG
+
+    key = (ex_name or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+    if category:
+        cat = category.strip().lower()
+        if cat in CATALOG and key in CATALOG[cat]:
+            return cat.upper(), key.upper()
+
+    if key in CATALOG and key in CATALOG[key]:
+        return key.upper(), key.upper()
+
+    for cat in sorted(CATALOG):
+        if key in CATALOG[cat]:
+            return cat.upper(), key.upper()
+
+    if key in CATALOG:
+        return key.upper(), key.upper()
+
+    return None, None
+
+
 def build_strength_json(
     name: str,
     exercises: List[Dict[str, Any]],
 ) -> dict:
     """Build the Garmin Connect JSON for a strength workout.
 
-    Each exercise becomes a reps-based work step. The name is preserved in the step
-    "description", which is what survives the round trip. It is also sent as
-    "exerciseName", but Garmin only retains that when it matches one of its own
-    exercise keys (e.g. "FARMERS_CARRY"); any other value is accepted and then
-    stored as an empty string.
+    Exercise names are resolved against the bundled FIT exercise catalog (see
+    resolve_exercise). Recognised names are sent as Garmin's ("category",
+    "exerciseName") enum pair, so Garmin Connect links the actual catalog
+    exercise instead of storing a free-text step. Unrecognised names keep the
+    previous behaviour: "exerciseName" is sent as free text (Garmin accepts it
+    and stores an empty string), "category" is omitted — Garmin accepts an
+    absent category but rejects anything outside its enum, including
+    "UNASSIGNED" and "OTHER" — and the label survives the round trip in the
+    step "description".
 
-    "category" is optional and only emitted when the caller supplies one, uppercased
-    and otherwise passed through untouched. Garmin validates it against its own enum
-    and rejects anything outside it, including "UNASSIGNED" and "OTHER"; omitting the
-    key is accepted. Valid values come from Garmin's published catalog:
-    https://connect.garmin.com/web-data/exercises/Exercises.json
+    A caller-supplied "category" first narrows the catalog lookup (for names
+    that occur in several categories) and is otherwise validated, uppercased
+    and passed through untouched. Valid values come from Garmin's published
+    catalog: https://connect.garmin.com/web-data/exercises/Exercises.json
+
+    Each exercise ends on reps by default; "duration_seconds" or
+    "distance_meters" switch the end condition to time or distance, which is
+    what planks, carries and ergometer intervals actually need. An optional
+    "note" is appended to the step description.
     """
     steps: List[dict] = []
     step_order = 1
@@ -279,31 +326,57 @@ def build_strength_json(
     for ex in exercises:
         ex_name = ex.get("name", "Exercise")
         sets = int(ex.get("sets", 1))
-        reps = int(ex.get("reps", 1))
         rest_seconds = int(ex.get("rest_seconds", 60))
 
-        # Work step
-        step = {
-            "type": "ExecutableStepDTO",
-            "stepOrder": step_order,
-            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-            "description": f"{ex_name}: {sets} sets x {reps} reps",
-            "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
-            "endConditionValue": float(reps),
-            "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
-            "exerciseName": ex_name,
-        }
-
-        # Only set when the caller asked for it: Garmin rejects values outside its own
-        # enum, and an absent category is accepted, so an unknown one stays absent
-        # rather than being guessed into a wrong record.
         category = ex.get("category")
         if category is not None:
             if not isinstance(category, str) or not category.strip():
                 raise ValueError(
                     f"category for exercise {ex_name!r} must be a non-empty string"
                 )
-            step["category"] = category.strip().upper()
+            category = category.strip()
+
+        resolved_cat, resolved_name = resolve_exercise(ex_name, category)
+
+        # End condition: reps by default; time and distance are what planks,
+        # carries and ergometer intervals actually need.
+        if ex.get("duration_seconds"):
+            value = float(int(ex["duration_seconds"]))
+            condition = {"conditionTypeId": 2, "conditionTypeKey": "time"}
+            amount = f"{int(value)}s"
+        elif ex.get("distance_meters"):
+            value = float(int(ex["distance_meters"]))
+            condition = {"conditionTypeId": 3, "conditionTypeKey": "distance"}
+            amount = f"{int(value)}m"
+        else:
+            value = float(int(ex.get("reps", 1)))
+            condition = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
+            amount = f"{int(value)} reps"
+
+        description = f"{ex_name}: {sets} sets x {amount}"
+        note = ex.get("note")
+        if note:
+            description = f"{description} - {note}"
+
+        # Work step
+        step = {
+            "type": "ExecutableStepDTO",
+            "stepOrder": step_order,
+            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+            "description": description,
+            "endCondition": condition,
+            "endConditionValue": value,
+            "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+            "exerciseName": resolved_name if resolved_name else ex_name,
+        }
+
+        if resolved_cat is not None:
+            step["category"] = resolved_cat
+        elif category is not None:
+            # Unresolved name with an explicit category: Garmin validates the
+            # value against its own enum, so pass it through untouched rather
+            # than guessing. An absent category is accepted for unknown names.
+            step["category"] = category.upper()
 
         steps.append(step)
         step_order += 1
@@ -487,19 +560,31 @@ def register_tools(app):
     ) -> str:
         """Create a strength workout and upload it to Garmin Connect.
 
-        Each exercise becomes a reps-based step. The name is kept in the step
-        description; it is also sent as exerciseName, which Garmin only retains when
-        it matches one of its own exercise keys (e.g. "FARMERS_CARRY").
+        Exercise names are resolved against the bundled FIT exercise catalog
+        (51 categories, 1846 exercises — browse it with
+        list_exercise_categories / list_exercises), so recognised exercises are
+        linked to Garmin's catalog entry. Names outside the catalog become
+        free-text steps whose label is kept in the step description, instead of
+        failing the upload.
 
         Args:
             name: Workout name
-            exercises: List of dicts with keys: name, sets, reps, rest_seconds and an
-                optional category. Category is omitted from the payload when not
-                given; Garmin accepts that. When given it must be one of Garmin's
-                exercise categories (e.g. SQUAT, DEADLIFT, PUSH_UP, CARRY, SLED) —
-                anything else, including "UNASSIGNED" and "OTHER", is rejected with
-                400 Invalid category. Full list:
-                https://connect.garmin.com/web-data/exercises/Exercises.json
+            exercises: List of dicts. Keys per exercise:
+                name           - catalog name (e.g. "romanian_deadlift") or free text
+                sets           - number of sets
+                rest_seconds   - rest after the step (default 60)
+                category       - optional; disambiguates names that occur in
+                                 several categories (e.g. "lunge"). For names
+                                 outside the catalog it is passed through and must
+                                 be one of Garmin's exercise categories — anything
+                                 else, including "UNASSIGNED" and "OTHER", is
+                                 rejected with 400 Invalid category. Full list:
+                                 https://connect.garmin.com/web-data/exercises/Exercises.json
+                note           - optional hint appended to the step description
+              plus at most one end condition:
+                reps             - repetitions (default, 1 if nothing is given)
+                duration_seconds - time-based step (ergometer intervals, planks)
+                distance_meters  - distance-based step (carries, sled)
         """
         try:
             workout_json = build_strength_json(name=name, exercises=exercises)

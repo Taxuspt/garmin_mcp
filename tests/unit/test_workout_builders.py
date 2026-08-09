@@ -132,11 +132,13 @@ def test_build_strength_json_structure():
 
 
 # ---------------------------------------------------------------------------
-# Strength step categories
+# Strength step categories and exercise resolution
 #
 # Garmin validates "category" against its own enum. A value outside it — the
 # previously hardcoded "UNASSIGNED" — fails every upload with `400 - Invalid
-# category`, while omitting the key is accepted.
+# category`, while omitting the key is accepted. Names found in the FIT
+# exercise catalog are resolved to Garmin's (category, exerciseName) pair so
+# Garmin Connect links the actual catalog exercise.
 # ---------------------------------------------------------------------------
 
 
@@ -146,32 +148,69 @@ def _work_steps(result):
     return [s for s in steps if s["stepType"]["stepTypeKey"] == "interval"]
 
 
-def test_strength_omits_category_when_not_supplied():
+def test_strength_omits_category_for_unknown_names():
     result = build_strength_json(
         name="No categories",
         exercises=[
-            {"name": "Back Squat", "sets": 3, "reps": 5, "rest_seconds": 120},
+            {"name": "Ski-Erg", "sets": 3, "reps": 5, "rest_seconds": 120},
             {"name": "Zercher Whatever", "sets": 3, "reps": 8, "rest_seconds": 60},
         ],
     )
     for step in _work_steps(result):
         assert "category" not in step
     # The name survives the Garmin round trip in the description, not exerciseName.
-    assert _work_steps(result)[0]["description"].startswith("Back Squat:")
+    assert _work_steps(result)[0]["description"].startswith("Ski-Erg:")
 
 
-def test_strength_passes_through_supplied_category():
+def test_strength_resolves_catalog_names_to_category_and_key():
+    result = build_strength_json(
+        name="Hip hinge",
+        exercises=[
+            {"name": "romanian_deadlift", "sets": 3, "reps": 8, "rest_seconds": 120},
+            {"name": "barbell hip thrust on floor", "sets": 3, "reps": 10, "rest_seconds": 0},
+        ],
+    )
+    first, second = _work_steps(result)
+    assert first["category"] == "DEADLIFT"
+    assert first["exerciseName"] == "ROMANIAN_DEADLIFT"
+    assert second["category"] == "HIP_RAISE"
+    assert second["exerciseName"] == "BARBELL_HIP_THRUST_ON_FLOOR"
+
+
+def test_strength_passes_through_supplied_category_for_unknown_names():
     result = build_strength_json(
         name="Mixed",
         exercises=[
             {"name": "Farmers Carry 40m", "sets": 3, "reps": 1, "category": "carry"},
-            {"name": "Back Squat", "sets": 3, "reps": 5},
+            {"name": "Zercher Whatever", "sets": 3, "reps": 5},
         ],
     )
     first, second = _work_steps(result)
     assert first["category"] == "CARRY"
     assert first["exerciseName"] == "Farmers Carry 40m"
     assert "category" not in second
+
+
+def test_strength_category_disambiguates_shared_names():
+    """'lunge' exists in both the lunge and the sandbag category."""
+    result = build_strength_json(
+        name="Sandbag work",
+        exercises=[{"name": "lunge", "category": "sandbag", "sets": 3, "reps": 10}],
+    )
+    step = _work_steps(result)[0]
+    assert step["category"] == "SANDBAG"
+    assert step["exerciseName"] == "LUNGE"
+
+
+def test_strength_category_name_beats_sorted_sweep():
+    """'plank' occurs in several categories; the plank category's own entry wins."""
+    result = build_strength_json(
+        name="Core",
+        exercises=[{"name": "plank", "sets": 3, "duration_seconds": 60}],
+    )
+    step = _work_steps(result)[0]
+    assert step["category"] == "PLANK"
+    assert step["exerciseName"] == "PLANK"
 
 
 def test_strength_rejects_empty_category():
@@ -181,3 +220,35 @@ def test_strength_rejects_empty_category():
                 name="Bad",
                 exercises=[{"name": "Back Squat", "sets": 1, "reps": 1, "category": bad}],
             )
+
+
+def test_strength_time_based_end_condition():
+    result = build_strength_json(
+        name="Ski intervals",
+        exercises=[{"name": "Ski-Erg", "sets": 5, "duration_seconds": 180, "rest_seconds": 60}],
+    )
+    step = _work_steps(result)[0]
+    assert step["endCondition"]["conditionTypeKey"] == "time"
+    assert step["endConditionValue"] == 180.0
+    assert "180s" in step["description"]
+
+
+def test_strength_distance_based_end_condition():
+    result = build_strength_json(
+        name="Carries",
+        exercises=[{"name": "farmers_carry", "sets": 4, "distance_meters": 100, "rest_seconds": 90}],
+    )
+    step = _work_steps(result)[0]
+    assert step["endCondition"]["conditionTypeKey"] == "distance"
+    assert step["endConditionValue"] == 100.0
+    assert step["category"] == "CARRY"
+    assert step["exerciseName"] == "FARMERS_CARRY"
+
+
+def test_strength_note_lands_in_description():
+    result = build_strength_json(
+        name="Technique",
+        exercises=[{"name": "romanian_deadlift", "sets": 3, "reps": 8, "note": "light, 40-50 kg"}],
+    )
+    step = _work_steps(result)[0]
+    assert "light, 40-50 kg" in step["description"]
