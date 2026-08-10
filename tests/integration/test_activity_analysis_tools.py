@@ -9,6 +9,8 @@ import os
 import zipfile
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+from fitparse.profile import MESSAGE_TYPES
+from fitparse.records import DataMessage, FieldData
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import activity_analysis
@@ -46,7 +48,7 @@ def _make_mock_fit_message(name, fields: dict):
 def _mock_fitfile(messages):
     """Create a mock FitFile that yields the given messages."""
     mock_ff = MagicMock()
-    mock_ff.get_messages.return_value = iter(messages)
+    mock_ff.get_messages.side_effect = lambda: iter(messages)
     return mock_ff
 
 
@@ -73,6 +75,22 @@ def _make_generic_fit_message(name, fields, global_message_number=None):
         del field.raw_value
         message.fields.append(field)
     return message
+
+
+def _make_profile_fit_message(message_number, fields):
+    """Create a DataMessage with the actual fitparse profile field objects."""
+    message_type = MESSAGE_TYPES[message_number]
+    field_data = [
+        FieldData(
+            field_def=None,
+            field=message_type.fields[definition_number],
+            parent_field=None,
+            value=value,
+            raw_value=raw_value,
+        )
+        for definition_number, value, raw_value in fields
+    ]
+    return DataMessage(header=None, def_mesg=message_type, fields=field_data)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +180,52 @@ async def test_get_activity_fit_messages_preserves_all_message_types_and_fields(
 
 
 @pytest.mark.asyncio
+async def test_get_activity_fit_messages_resolves_standard_contextual_enums(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Real fitparse fields retain labels for context-dependent FIT enums."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    messages = [
+        _make_profile_fit_message(
+            225,
+            [
+                (7, "squat", 28),
+                (8, 6, 6),
+            ],
+        ),
+        _make_profile_fit_message(
+            264,
+            [
+                (0, "squat", 28),
+                (1, 6, 6),
+            ],
+        ),
+    ]
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_messages", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    fields_by_message = [
+        {field["name"]: field for field in message["fields"]}
+        for message in data["messages"]
+    ]
+    assert fields_by_message[0]["category"]["value_name"] == "squat"
+    assert (
+        fields_by_message[0]["category_subtype"]["value_name"]
+        == "barbell_back_squat"
+    )
+    assert (
+        fields_by_message[1]["exercise_name"]["value_name"]
+        == "barbell_back_squat"
+    )
+    assert fields_by_message[1]["exercise_name"]["raw_value"] == 6
+
+
+@pytest.mark.asyncio
 async def test_get_activity_fit_messages_omits_records_by_default(
     app_with_activity_analysis, mock_garmin_client
 ):
@@ -199,7 +263,10 @@ async def test_get_activity_fit_messages_paginates_records(
         for bpm in (140, 141, 142)
     ]
 
-    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp, patch(
+        "garmin_mcp.activity_analysis._serialize_fit_field",
+        wraps=activity_analysis._serialize_fit_field,
+    ) as serialize_field:
         mock_fp.FitFile.return_value = _mock_fitfile(messages)
         result = await app_with_activity_analysis.call_tool(
             "get_activity_fit_messages",
@@ -226,6 +293,7 @@ async def test_get_activity_fit_messages_paginates_records(
     }
     assert data["messages"][0]["type_index"] == 1
     assert data["messages"][0]["fields"][0]["value"] == 141
+    assert serialize_field.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -287,7 +355,10 @@ async def test_get_activity_fit_messages_omits_other_high_frequency_types_by_def
         for index in range(101)
     ]
 
-    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp, patch(
+        "garmin_mcp.activity_analysis._serialize_fit_field",
+        wraps=activity_analysis._serialize_fit_field,
+    ) as serialize_field:
         mock_fp.FitFile.return_value = _mock_fitfile(messages)
         result = await app_with_activity_analysis.call_tool(
             "get_activity_fit_messages", {"activity_id": ACTIVITY_ID}
@@ -297,6 +368,7 @@ async def test_get_activity_fit_messages_omits_other_high_frequency_types_by_def
     assert [message["type"] for message in data["messages"]] == ["session"]
     assert data["message_counts"]["unknown_233"] == 101
     assert data["omitted_high_frequency_message_types"]["unknown_233"]["count"] == 101
+    assert serialize_field.call_count == 1
 
 @pytest.mark.asyncio
 async def test_get_activity_fit_data_calls_download(app_with_activity_analysis, mock_garmin_client):

@@ -160,57 +160,136 @@ def _fit_field_definition_number(field: Any) -> Optional[int]:
     return None
 
 
-def _map_fit_profile_values(value: Any, values: Any) -> tuple[bool, Any]:
-    """Map scalar/array enum values through FIT profile labels when possible."""
+def _fit_profile_label(value: Any, raw_value: Any, values: Any) -> Any:
+    """Resolve one FIT enum label from either decoded or raw profile values."""
     if not isinstance(values, dict):
+        return None
+
+    for candidate in (raw_value, value):
+        try:
+            if candidate in values:
+                return values[candidate]
+        except TypeError:
+            continue
+
+    # fitparse renders known enum values before exposing FieldData.value. Keep
+    # that decoded label rather than requiring consumers to reverse-map it.
+    if isinstance(value, str) and value in values.values():
+        return value
+    return None
+
+
+def _map_fit_profile_values(
+    value: Any,
+    raw_value: Any,
+    values: Any,
+) -> tuple[bool, Any]:
+    """Map scalar/array FIT values through profile labels when possible."""
+    value_is_sequence = isinstance(value, (list, tuple))
+    raw_is_sequence = isinstance(raw_value, (list, tuple))
+    if not value_is_sequence and not raw_is_sequence:
+        mapped = _fit_profile_label(value, raw_value, values)
+        return mapped is not None, mapped
+
+    decoded_values = list(value) if value_is_sequence else [value]
+    raw_values = list(raw_value) if raw_is_sequence else [raw_value]
+    value_count = max(len(decoded_values), len(raw_values))
+    mapped_values = []
+    for index in range(value_count):
+        decoded_item = decoded_values[index] if index < len(decoded_values) else None
+        raw_item = raw_values[index] if index < len(raw_values) else None
+        mapped_values.append(_fit_profile_label(decoded_item, raw_item, values))
+    return any(item is not None for item in mapped_values), mapped_values
+
+
+_FIT_CONTEXTUAL_ENUM_FIELDS = {
+    # FIT stores exercise-name values as uint16 because their enum type depends
+    # on a sibling exercise category. These are standard FIT profile messages,
+    # not Garmin Connect API fields.
+    ("set", "category_subtype"): (
+        "category",
+        "exercise_category",
+        "{selector}_exercise_name",
+    ),
+    ("exercise_title", "exercise_name"): (
+        "exercise_category",
+        "exercise_category",
+        "{selector}_exercise_name",
+    ),
+}
+
+
+def _contextual_fit_value_names(field: Any, message: Any) -> tuple[bool, Any]:
+    """Resolve standard FIT enums whose type depends on a sibling field."""
+    if message is None:
         return False, None
-    if isinstance(value, (list, tuple)):
-        mapped = [values.get(item) if item is not None else None for item in value]
-        return any(item is not None for item in mapped), mapped
-    try:
-        if value in values:
-            return True, values[value]
-    except TypeError:
-        pass
-    return False, None
 
-
-def _exercise_subtype_names(field: Any, message: Any) -> tuple[bool, Any]:
-    """Resolve FIT set category_subtype values using sibling categories."""
-    if getattr(field, "name", None) != "category_subtype" or message is None:
+    message_name = str(getattr(message, "name", None) or "").lower()
+    field_name = str(getattr(field, "name", None) or "").lower()
+    context = _FIT_CONTEXTUAL_ENUM_FIELDS.get(
+        (message_name, field_name)
+    )
+    if context is None:
         return False, None
+    selector_field_name, selector_type_name, value_type_template = context
 
-    category_field = next(
+    selector_field = next(
         (
             candidate
             for candidate in getattr(message, "fields", [])
-            if getattr(candidate, "name", None) == "category"
+            if str(getattr(candidate, "name", None) or "").lower()
+            == selector_field_name
         ),
         None,
     )
-    if category_field is None:
+    if selector_field is None:
         return False, None
 
-    categories = getattr(category_field, "value", None)
+    selector_type = FIT_FIELD_TYPES.get(selector_type_name)
+    selector_values = getattr(selector_type, "values", {})
+    selectors = getattr(selector_field, "value", None)
+    raw_selectors = getattr(selector_field, "raw_value", None)
+    has_selector_names, selector_names = _map_fit_profile_values(
+        selectors,
+        raw_selectors,
+        selector_values,
+    )
+    if not has_selector_names:
+        return False, None
+
     subtypes = getattr(field, "value", None)
-    if not isinstance(categories, (list, tuple)):
-        categories = [categories]
-    if not isinstance(subtypes, (list, tuple)):
+    raw_subtypes = getattr(field, "raw_value", None)
+    subtype_is_sequence = isinstance(subtypes, (list, tuple))
+    raw_subtype_is_sequence = isinstance(raw_subtypes, (list, tuple))
+    if not isinstance(selector_names, list):
+        selector_names = [selector_names]
+    if not subtype_is_sequence:
         subtypes = [subtypes]
+    else:
+        subtypes = list(subtypes)
+    if not raw_subtype_is_sequence:
+        raw_subtypes = [raw_subtypes]
+    else:
+        raw_subtypes = list(raw_subtypes)
 
-    category_type = FIT_FIELD_TYPES.get("exercise_category")
-    category_values = getattr(category_type, "values", {})
     subtype_names: List[Optional[str]] = []
-    for index, subtype in enumerate(subtypes):
-        category = categories[index] if index < len(categories) else None
-        category_name = category_values.get(category)
-        subtype_type = FIT_FIELD_TYPES.get(f"{category_name}_exercise_name")
-        subtype_values = getattr(subtype_type, "values", {})
-        subtype_names.append(
-            subtype_values.get(subtype) if subtype is not None else None
+    value_count = max(len(subtypes), len(raw_subtypes))
+    for index in range(value_count):
+        subtype = subtypes[index] if index < len(subtypes) else None
+        raw_subtype = raw_subtypes[index] if index < len(raw_subtypes) else None
+        selector_name = (
+            selector_names[index] if index < len(selector_names) else None
         )
+        subtype_type = FIT_FIELD_TYPES.get(
+            value_type_template.format(selector=selector_name)
+        )
+        subtype_values = getattr(subtype_type, "values", {})
+        subtype_names.append(_fit_profile_label(subtype, raw_subtype, subtype_values))
 
-    return any(name is not None for name in subtype_names), subtype_names
+    has_names = any(name is not None for name in subtype_names)
+    if not subtype_is_sequence and not raw_subtype_is_sequence:
+        return has_names, subtype_names[0] if subtype_names else None
+    return has_names, subtype_names
 
 
 def _serialize_fit_field(field: Any, message: Any = None) -> Dict[str, Any]:
@@ -249,10 +328,15 @@ def _serialize_fit_field(field: Any, message: Any = None) -> Dict[str, Any]:
         serialized["field_type"] = field_type
 
     value = getattr(field, "value", None)
+    raw_value = getattr(field, "raw_value", None)
     profile_values = getattr(getattr(field, "type", None), "values", None)
-    has_value_names, value_names = _map_fit_profile_values(value, profile_values)
+    has_value_names, value_names = _map_fit_profile_values(
+        value,
+        raw_value,
+        profile_values,
+    )
     if not has_value_names:
-        has_value_names, value_names = _exercise_subtype_names(field, message)
+        has_value_names, value_names = _contextual_fit_value_names(field, message)
     if has_value_names:
         serialized[
             "value_names" if isinstance(value_names, list) else "value_name"
@@ -316,40 +400,14 @@ def _parse_fit_messages(
 
     fit_bytes = _extract_fit_bytes(raw)
     fitfile = fitparse.FitFile(io.BytesIO(fit_bytes))
-    eligible_messages: List[Dict[str, Any]] = []
     message_counts: Dict[str, int] = {}
-    record_count = 0
 
-    for message_index, message in enumerate(fitfile.get_messages()):
+    # Inventory without constructing JSON-shaped copies. FitFile caches parsed
+    # messages, so the second pass below does not decode the file again and only
+    # the requested page is serialized.
+    for message in fitfile.get_messages():
         message_type = str(getattr(message, "name", None) or "unknown")
-        normalized_type = message_type.lower()
-        type_index = message_counts.get(message_type, 0)
-        message_counts[message_type] = type_index + 1
-
-        if normalized_type == "record":
-            record_count += 1
-            if not include_records or not records_selected:
-                continue
-
-        if selected_types is not None and normalized_type not in selected_types:
-            continue
-
-        serialized_message: Dict[str, Any] = {
-            "message_index": message_index,
-            "type_index": type_index,
-            "type": message_type,
-            # A list rather than an object preserves duplicate/unknown field
-            # definitions instead of overwriting fields that share a name.
-            "fields": [
-                _serialize_fit_field(field, message)
-                for field in getattr(message, "fields", [])
-            ],
-        }
-        global_message_number = _fit_global_message_number(message)
-        if global_message_number is not None:
-            serialized_message["global_message_number"] = global_message_number
-
-        eligible_messages.append(serialized_message)
+        message_counts[message_type] = message_counts.get(message_type, 0) + 1
 
     # An unfiltered request should be useful as an inventory without returning
     # thousands of vendor-specific samples whose semantics are not yet known.
@@ -362,24 +420,70 @@ def _parse_fit_messages(
             for message_type, count in message_counts.items()
             if message_type.lower() != "record" and count > 100
         }
-        if omitted_high_frequency_types:
-            eligible_messages = [
-                message
-                for message in eligible_messages
-                if message["type"] not in omitted_high_frequency_types
-            ]
+    def message_type_is_eligible(message_type: str) -> bool:
+        normalized_type = message_type.lower()
+        if normalized_type == "record" and (
+            not include_records or not records_selected
+        ):
+            return False
+        if selected_types is not None and normalized_type not in selected_types:
+            return False
+        return message_type not in omitted_high_frequency_types
 
-    total_eligible_count = len(eligible_messages)
-    messages = eligible_messages[
-        message_offset:message_offset + message_limit
-    ]
+    total_eligible_count = sum(
+        count
+        for message_type, count in message_counts.items()
+        if message_type_is_eligible(message_type)
+    )
+    page_end = message_offset + message_limit
+    messages: List[Dict[str, Any]] = []
+    eligible_index = 0
+    seen_type_counts: Dict[str, int] = {}
+    for message_index, message in enumerate(fitfile.get_messages()):
+        message_type = str(getattr(message, "name", None) or "unknown")
+        type_index = seen_type_counts.get(message_type, 0)
+        seen_type_counts[message_type] = type_index + 1
+        if not message_type_is_eligible(message_type):
+            continue
+
+        if message_offset <= eligible_index < page_end:
+            serialized_message: Dict[str, Any] = {
+                "message_index": message_index,
+                "type_index": type_index,
+                "type": message_type,
+                # A list rather than an object preserves duplicate/unknown field
+                # definitions instead of overwriting fields that share a name.
+                "fields": [
+                    _serialize_fit_field(field, message)
+                    for field in getattr(message, "fields", [])
+                ],
+            }
+            global_message_number = _fit_global_message_number(message)
+            if global_message_number is not None:
+                serialized_message["global_message_number"] = (
+                    global_message_number
+                )
+            messages.append(serialized_message)
+        eligible_index += 1
+        if eligible_index >= page_end:
+            break
+
     returned_counts: Dict[str, int] = {}
     for message in messages:
         message_type = message["type"]
         returned_counts[message_type] = returned_counts.get(message_type, 0) + 1
 
+    record_count = sum(
+        count
+        for message_type, count in message_counts.items()
+        if message_type.lower() == "record"
+    )
     records_included = include_records and records_selected
-    returned_record_count = returned_counts.get("record", 0)
+    returned_record_count = sum(
+        count
+        for message_type, count in returned_counts.items()
+        if message_type.lower() == "record"
+    )
     record_stream: Dict[str, Any] = {
         "included": records_included,
         "total_count": record_count,
