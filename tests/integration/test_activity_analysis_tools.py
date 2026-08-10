@@ -50,9 +50,253 @@ def _mock_fitfile(messages):
     return mock_ff
 
 
+def _make_generic_fit_message(name, fields, global_message_number=None):
+    """Create a message with real FieldData-like objects for generic parsing."""
+    message = Mock()
+    message.name = name
+    message.fields = []
+    if global_message_number is not None:
+        message.mesg_num = global_message_number
+    else:
+        del message.mesg_num
+
+    for definition_number, field_name, value, units in fields:
+        field = Mock()
+        field.name = field_name
+        field.value = value
+        field.units = units
+        field.field_def = Mock(def_num=definition_number)
+        if field_name == "category":
+            field.type = activity_analysis.FIT_FIELD_TYPES["exercise_category"]
+        else:
+            del field.type
+        del field.raw_value
+        message.fields.append(field)
+    return message
+
+
 # ---------------------------------------------------------------------------
 # Basic tool behaviour
 # ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_messages_preserves_all_message_types_and_fields(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Generic FIT tool does not discard strength or unknown FIT fields."""
+    from garminconnect import Garmin
+
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    exercise_title = _make_generic_fit_message(
+        "exercise_title",
+        [
+            (254, "message_index", 0, None),
+            (0, "exercise_category", "bench_press", None),
+            (1, "exercise_name", "barbell_bench_press", None),
+        ],
+        global_message_number=264,
+    )
+    set_message = _make_generic_fit_message(
+        "set",
+        [
+            (3, "repetitions", 8, "repetitions"),
+            (4, "weight", 61.2349, "kg"),
+            (7, "category", [8, 21], None),
+            (8, "category_subtype", [0, None], None),
+            (5, "set_type", "active", None),
+            (99, "unknown_99", b"\x01\x02", None),
+        ],
+        global_message_number=225,
+    )
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([exercise_title, set_message])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_messages", {"activity_id": ACTIVITY_ID}
+        )
+
+    mock_garmin_client.download_activity.assert_called_once_with(
+        ACTIVITY_ID,
+        dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
+    )
+    data = json.loads(result[0][0].text)
+    assert data["source"] == "garmin_original_fit"
+    assert data["message_counts"] == {"exercise_title": 1, "set": 1}
+    assert [message["type"] for message in data["messages"]] == [
+        "exercise_title", "set"
+    ]
+    assert data["messages"][0]["global_message_number"] == 264
+    assert data["messages"][1]["fields"] == [
+        {
+            "name": "repetitions",
+            "value": 8,
+            "units": "repetitions",
+            "definition_number": 3,
+        },
+        {
+            "name": "weight",
+            "value": 61.2349,
+            "units": "kg",
+            "definition_number": 4,
+        },
+        {
+            "name": "category",
+            "value": [8, 21],
+            "definition_number": 7,
+            "profile_type": "exercise_category",
+            "value_names": ["deadlift", "pull_up"],
+        },
+        {
+            "name": "category_subtype",
+            "value": [0, None],
+            "definition_number": 8,
+            "value_names": ["barbell_deadlift", None],
+        },
+        {"name": "set_type", "value": "active", "definition_number": 5},
+        {
+            "name": "unknown_99",
+            "value": {"encoding": "hex", "value": "0102"},
+            "definition_number": 99,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_messages_omits_records_by_default(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Record messages are inventoried but do not inflate the default result."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    messages = [
+        _make_generic_fit_message("record", [(3, "heart_rate", 140, "bpm")]),
+        _make_generic_fit_message("set", [(3, "repetitions", 10, "repetitions")]),
+        _make_generic_fit_message("record", [(3, "heart_rate", 141, "bpm")]),
+    ]
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_messages", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["message_counts"] == {"record": 2, "set": 1}
+    assert data["returned_message_counts"] == {"set": 1}
+    assert [message["type"] for message in data["messages"]] == ["set"]
+    assert data["record_stream"]["included"] is False
+    assert data["record_stream"]["total_count"] == 2
+    assert data["record_stream"]["returned_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_messages_paginates_records(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Callers can walk a large record stream in bounded pages."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    messages = [
+        _make_generic_fit_message("record", [(3, "heart_rate", bpm, "bpm")])
+        for bpm in (140, 141, 142)
+    ]
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_messages",
+            {
+                "activity_id": ACTIVITY_ID,
+                "include_records": True,
+                "message_offset": 1,
+                "message_limit": 1,
+            },
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["record_stream"] == {
+        "included": True,
+        "total_count": 3,
+        "returned_count": 1,
+    }
+    assert data["pagination"] == {
+        "total_eligible_count": 3,
+        "returned_count": 1,
+        "offset": 1,
+        "limit": 1,
+        "next_offset": 2,
+    }
+    assert data["messages"][0]["type_index"] == 1
+    assert data["messages"][0]["fields"][0]["value"] == 141
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_messages_filters_returned_types_but_keeps_inventory(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """message_types narrows output without hiding what the FIT file contains."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    messages = [
+        _make_generic_fit_message("session", [(5, "sport", "training", None)]),
+        _make_generic_fit_message("set", [(3, "repetitions", 5, "repetitions")]),
+    ]
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_messages",
+            {"activity_id": ACTIVITY_ID, "message_types": ["SET"]},
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["message_counts"] == {"session": 1, "set": 1}
+    assert data["returned_message_counts"] == {"set": 1}
+    assert [message["type"] for message in data["messages"]] == ["set"]
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_messages_rejects_unbounded_message_limit(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Message pages have a hard maximum to protect MCP response size."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_messages",
+            {
+                "activity_id": ACTIVITY_ID,
+                "include_records": True,
+                "message_limit": 5001,
+            },
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["error"] == "message_limit must be between 1 and 5000"
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_messages_omits_other_high_frequency_types_by_default(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Unknown vendor sample streams cannot inflate an unfiltered response."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    messages = [
+        _make_generic_fit_message("session", [(5, "sport", "training", None)])
+    ] + [
+        _make_generic_fit_message("unknown_233", [(0, "unknown_0", index, None)])
+        for index in range(101)
+    ]
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_messages", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert [message["type"] for message in data["messages"]] == ["session"]
+    assert data["message_counts"]["unknown_233"] == 101
+    assert data["omitted_high_frequency_message_types"]["unknown_233"]["count"] == 101
 
 @pytest.mark.asyncio
 async def test_get_activity_fit_data_calls_download(app_with_activity_analysis, mock_garmin_client):
