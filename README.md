@@ -40,10 +40,13 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ User Profile (3 tools)
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (3 tools) - list / upload GPX as course / delete course
-- ✅ Activity Analysis (3 tools) - general FIT parsing, cycling analysis, and Power Duration Curve
+- ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
+- ✅ General FIT Data (1 tool) - lossless, paginated parsing for every activity type
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
-> **Note:** The cycling-specific analysis requires a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. General FIT parsing works for any activity type. The `fitparse` dependency is installed automatically.
+> **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+
+> **General FIT Data** works for any activity type and has no power-meter or electronic-shifting requirement.
 
 ### General FIT Data
 

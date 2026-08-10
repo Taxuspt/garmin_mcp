@@ -48,7 +48,7 @@ def _make_mock_fit_message(name, fields: dict):
 def _mock_fitfile(messages):
     """Create a mock FitFile that yields the given messages."""
     mock_ff = MagicMock()
-    mock_ff.get_messages.side_effect = lambda: iter(messages)
+    mock_ff.get_messages.return_value = iter(messages)
     return mock_ff
 
 

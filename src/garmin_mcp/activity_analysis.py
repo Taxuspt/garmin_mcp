@@ -166,11 +166,13 @@ def _fit_profile_label(value: Any, raw_value: Any, values: Any) -> Any:
         return None
 
     for candidate in (raw_value, value):
-        try:
-            if candidate in values:
-                return values[candidate]
-        except TypeError:
+        # FIT profile enum keys are numeric codes. fitparse may also expose the
+        # already-decoded string label; container values are handled by the
+        # caller and must not be used as dictionary keys.
+        if not isinstance(candidate, (int, str)):
             continue
+        if candidate in values:
+            return values[candidate]
 
     # fitparse renders known enum values before exposing FieldData.value. Keep
     # that decoded label rather than requiring consumers to reverse-map it.
@@ -400,12 +402,12 @@ def _parse_fit_messages(
 
     fit_bytes = _extract_fit_bytes(raw)
     fitfile = fitparse.FitFile(io.BytesIO(fit_bytes))
+    fit_messages = list(fitfile.get_messages())
     message_counts: Dict[str, int] = {}
 
-    # Inventory without constructing JSON-shaped copies. FitFile caches parsed
-    # messages, so the second pass below does not decode the file again and only
-    # the requested page is serialized.
-    for message in fitfile.get_messages():
+    # Inventory without constructing JSON-shaped copies. Only the requested
+    # page is serialized below.
+    for message in fit_messages:
         message_type = str(getattr(message, "name", None) or "unknown")
         message_counts[message_type] = message_counts.get(message_type, 0) + 1
 
@@ -439,7 +441,7 @@ def _parse_fit_messages(
     messages: List[Dict[str, Any]] = []
     eligible_index = 0
     seen_type_counts: Dict[str, int] = {}
-    for message_index, message in enumerate(fitfile.get_messages()):
+    for message_index, message in enumerate(fit_messages):
         message_type = str(getattr(message, "name", None) or "unknown")
         type_index = seen_type_counts.get(message_type, 0)
         seen_type_counts[message_type] = type_index + 1
