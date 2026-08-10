@@ -300,7 +300,7 @@ def build_strength_json(
 ) -> dict:
     """Build the Garmin Connect JSON for a strength workout.
 
-    Exercise names are resolved against the bundled FIT exercise catalog (see
+    Exercise names are resolved against the FIT exercise catalog (see
     resolve_exercise). Recognised names are sent as Garmin's ("category",
     "exerciseName") enum pair, so Garmin Connect links the actual catalog
     exercise instead of storing a free-text step. Unrecognised names keep the
@@ -560,7 +560,7 @@ def register_tools(app):
     ) -> str:
         """Create a strength workout and upload it to Garmin Connect.
 
-        Exercise names are resolved against the bundled FIT exercise catalog
+        Exercise names are resolved against the FIT exercise catalog
         (51 categories, 1846 exercises — browse it with
         list_exercise_categories / list_exercises), so recognised exercises are
         linked to Garmin's catalog entry. Names outside the catalog become

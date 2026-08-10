@@ -16,6 +16,9 @@ dependencies = [
     # MCPServer). Cap until the server is ported to the new API.
     "mcp>=1.28.1,<2",
     "fitparse>=1.2.0",
+    # Garmin's own FIT profile; source of the strength exercise catalog
+    # (ExerciseCategory / ExerciseName) used to resolve exercise names.
+    "garmin-fit-sdk>=21.212.0",
 ]
 
 [project.scripts]

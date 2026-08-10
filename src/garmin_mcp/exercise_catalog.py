@@ -4,12 +4,12 @@ Lets the client discover which ExerciseCategory values and exercise names
 Garmin accepts BEFORE creating a strength workout, instead of guessing a
 category and risking a "400 - Invalid category" upload error.
 
-Source: FIT profile (garmin-fit-sdk), generated into exercise_catalog_data.py
-by scripts/generate_exercise_catalog.py (static data, no runtime dependency).
+Source: the FIT profile shipped with garmin-fit-sdk, read at import time by
+exercise_catalog_data.
 """
 import json
 
-from garmin_mcp.exercise_catalog_data import CATALOG
+from garmin_mcp.exercise_catalog_data import CATALOG, FIT_PROFILE_VERSION
 
 
 def register_tools(app):
@@ -25,6 +25,7 @@ def register_tools(app):
         ]
         return json.dumps(
             {
+                "fit_profile_version": FIT_PROFILE_VERSION,
                 "total_categories": len(CATALOG),
                 "total_exercises": sum(len(v) for v in CATALOG.values()),
                 "categories": data,

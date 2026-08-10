@@ -318,7 +318,7 @@ name = "exceptiongroup"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
 wheels = [
@@ -332,11 +332,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/61/ed/5637fe96c56d55dfa6317ab16745f9a83ef2690d093cee8f0b59f983675f/fitparse-1.2.0.tar.gz", hash = "sha256:2d691022452dea6dabad13cc6e017ca467fe8a3a895cd3ac67a50a7bb716b4a9", size = 65716, upload-time = "2020-09-07T03:27:21.926Z" }
 
 [[package]]
+name = "garmin-fit-sdk"
+version = "21.212.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3c/b2/ffd32e045632fb7f75ed25a86520c3e06668f46feb9ab81df0de9bbc1e99/garmin_fit_sdk-21.212.0.tar.gz", hash = "sha256:91f22f731c00a9cdf5a787a3f8345d89c588ce995b89f9f84505540a07054526", size = 198897, upload-time = "2026-08-04T17:23:35.084Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6b/6c/10331cc1e528da3de4240c85bc4cf19dd40194fa815c9b5ef21068db39b2/garmin_fit_sdk-21.212.0-py3-none-any.whl", hash = "sha256:74ecf6b403df764132faad821258dc7fe2a3ddb831cc7dcc1fb0690b1a67379b", size = 219246, upload-time = "2026-08-04T17:23:33.532Z" },
+]
+
+[[package]]
 name = "garmin-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fitparse" },
+    { name = "garmin-fit-sdk" },
     { name = "garminconnect" },
     { name = "mcp" },
     { name = "python-dotenv" },
@@ -354,6 +364,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fitparse", specifier = ">=1.2.0" },
+    { name = "garmin-fit-sdk", specifier = ">=21.212.0" },
     { name = "garminconnect", specifier = "==0.3.2" },
     { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "python-dotenv", specifier = "==1.2.2" },
