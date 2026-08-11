@@ -5,6 +5,7 @@ Modular MCP Server for Garmin Connect Data
 import os
 import sys
 import base64
+import threading
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -112,14 +113,52 @@ disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
+# Default per-call timeout (seconds). Garmin's API occasionally stalls a single
+# request indefinitely; without a bound the blocking client call hangs until the
+# MCP client's own timeout (~4 min) fires, reporting the whole server as
+# unresponsive (see issue #248). 90s sits comfortably above a normal slow call
+# yet well below that ceiling. Override with GARMIN_MCP_CALL_TIMEOUT; set 0 to
+# disable the bound entirely.
+_DEFAULT_CALL_TIMEOUT = 90.0
+
+
+def _resolve_call_timeout() -> float:
+    """Read GARMIN_MCP_CALL_TIMEOUT; fall back to the default on bad/absent input.
+
+    A value <= 0 disables the timeout (returns 0.0).
+    """
+    raw = os.getenv("GARMIN_MCP_CALL_TIMEOUT")
+    if raw is None or not raw.strip():
+        return _DEFAULT_CALL_TIMEOUT
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        print(
+            f"Invalid GARMIN_MCP_CALL_TIMEOUT {raw!r}; using default "
+            f"{_DEFAULT_CALL_TIMEOUT}s.",
+            file=sys.stderr,
+        )
+        return _DEFAULT_CALL_TIMEOUT
+    return value if value > 0 else 0.0
+
 
 class _GarminProxy:
-    """Wraps the Garmin client to translate known runtime exceptions into clear messages.
+    """Wraps the Garmin client to bound call duration and clarify runtime errors.
 
-    Without this, token expiry or rate-limiting during a tool call surfaces raw
-    library tracebacks to the MCP client. The proxy intercepts each attribute
-    access and, if the result is callable, wraps the call so that known Garmin
-    exceptions become user-friendly strings rather than server errors.
+    Two jobs:
+
+    1. Timeout: each client call runs on a daemon worker thread and is abandoned
+       if it does not return within the configured timeout (issue #248 — an
+       occasional Garmin request stalls forever and the blocking call would
+       otherwise hang the whole server until the MCP client gives up minutes
+       later). A stalled call raises a clear, retry-able error instead; the
+       abandoned daemon thread dies with the process and never blocks shutdown.
+       Such stalls are rare and transient, so a fresh thread per call is cheap
+       relative to the network round-trip it guards.
+
+    2. Error translation: token expiry or rate-limiting during a tool call would
+       otherwise surface a raw library traceback. Known Garmin exceptions become
+       user-friendly messages instead.
     """
 
     _MESSAGES = {
@@ -135,15 +174,16 @@ class _GarminProxy:
         ),
     }
 
-    def __init__(self, client):
+    def __init__(self, client, timeout=None):
         self._client = client
+        self._timeout = _resolve_call_timeout() if timeout is None else timeout
 
     def __getattr__(self, name):
         attr = getattr(self._client, name)
         if not callable(attr):
             return attr
 
-        def _call(*args, **kwargs):
+        def _invoke(*args, **kwargs):
             try:
                 return attr(*args, **kwargs)
             except tuple(self._MESSAGES) as exc:
@@ -153,6 +193,38 @@ class _GarminProxy:
                         full_msg = f"{msg} (Details: {error_details})" if error_details else msg
                         raise type(exc)(full_msg) from None
                 raise
+
+        def _call(*args, **kwargs):
+            if not self._timeout:
+                return _invoke(*args, **kwargs)
+
+            # Run on a daemon thread and join with a timeout. The worker's
+            # return value or exception is captured and replayed in the caller
+            # so translated Garmin errors propagate unchanged.
+            outcome = {}
+
+            def _worker():
+                try:
+                    outcome["value"] = _invoke(*args, **kwargs)
+                except BaseException as exc:  # noqa: BLE001 - replayed below
+                    outcome["error"] = exc
+
+            worker = threading.Thread(
+                target=_worker, name=f"garmin-call:{name}", daemon=True
+            )
+            worker.start()
+            worker.join(self._timeout)
+            if worker.is_alive():
+                raise TimeoutError(
+                    f"Garmin request '{name}' did not return within "
+                    f"{self._timeout:g}s and was abandoned. This is usually a "
+                    f"transient stall on Garmin's side — please try again. "
+                    f"(Adjust with GARMIN_MCP_CALL_TIMEOUT, or set it to 0 to "
+                    f"disable the limit.)"
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome.get("value")
 
         return _call
 
