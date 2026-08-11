@@ -742,3 +742,47 @@ async def test_get_training_status_no_cycling_vo2_when_absent(app_with_training,
         assert "cycling_vo2_max_precise" not in data
     except (json.JSONDecodeError, AttributeError):
         assert "cycling_vo2_max" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_hrv_data_handles_null_summary(app_with_training, mock_garmin_client):
+    """A null hrvSummary must not crash the tool.
+
+    Garmin returns an explicit null for sections the user has no data in.
+    `hrv_data.get("hrvSummary", {})` returns None in that case (the default
+    only applies when the key is absent), so `summary.get("baseline", {})`
+    raised "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_hrv_data.return_value = {
+        "hrvSummary": None,
+        "sleepStartTimestampLocal": None,
+    }
+
+    result = await app_with_training.call_tool(
+        "get_hrv_data",
+        {"date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_progress_summary_handles_null_stats(app_with_training, mock_garmin_client):
+    """A null `stats` block must not crash the tool.
+
+    An empty range can come back with `stats` as an explicit null;
+    `data.get("stats", {})` then returns None and `.items()` raised
+    "'NoneType' object has no attribute 'items'".
+    """
+    mock_garmin_client.get_progress_summary_between_dates.return_value = [
+        {"date": "2024-01-15", "stats": None}
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_progress_summary_between_dates",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15", "metric": "duration"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text

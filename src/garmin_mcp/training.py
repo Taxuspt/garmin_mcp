@@ -192,8 +192,10 @@ def register_tools(app):
                 "stats_by_activity_type": {},
             }
 
-            # Parse stats by activity type
-            stats = data.get("stats", {})
+            # Parse stats by activity type. `or {}` guards against an explicit
+            # null `stats` (Garmin sends null for empty sections), which would
+            # otherwise raise "'NoneType' object has no attribute 'items'".
+            stats = data.get("stats") or {}
             for activity_type, activity_stats in stats.items():
                 if metric in activity_stats:
                     metric_data = activity_stats[metric]
@@ -440,9 +442,13 @@ def register_tools(app):
             if not hrv_data:
                 return f"No HRV data found for {date}."
 
-            # Extract the summary from hrvSummary key
-            summary = hrv_data.get("hrvSummary", {})
-            baseline = summary.get("baseline", {})
+            # Extract the summary from hrvSummary key.
+            # Use `x.get(key) or {}` rather than `x.get(key, {})`: Garmin sends
+            # an explicit null for sections the user has no data in, and a
+            # default only applies when the key is absent. Same pattern as
+            # get_training_status.
+            summary = hrv_data.get("hrvSummary") or {}
+            baseline = summary.get("baseline") or {}
 
             # Curate to essential fields only
             curated = {
