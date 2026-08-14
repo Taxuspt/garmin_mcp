@@ -15,6 +15,66 @@ def configure(client):
     garmin_client = client
 
 
+def _extract_sleep_summary(sleep_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Curate a single night's raw Garmin sleep payload down to essential metrics.
+
+    Shared by get_sleep_summary (single night) and get_sleep_summary_range
+    (multi-night) so both endpoints stay in sync.
+    """
+    summary: Dict[str, Any] = {}
+
+    # Extract data from dailySleepDTO if available
+    daily_sleep = sleep_data.get('dailySleepDTO', {})
+    if daily_sleep:
+        # Sleep duration and timing
+        summary['sleep_seconds'] = daily_sleep.get('sleepTimeSeconds')
+        summary['nap_seconds'] = daily_sleep.get('napTimeSeconds')
+        summary['sleep_start'] = daily_sleep.get('sleepStartTimestampGMT')
+        summary['sleep_end'] = daily_sleep.get('sleepEndTimestampGMT')
+
+        # Sleep score and quality
+        summary['sleep_score'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('value')
+        summary['sleep_score_qualifier'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('qualifierKey')
+
+        # Sleep phases (in seconds)
+        summary['deep_sleep_seconds'] = daily_sleep.get('deepSleepSeconds')
+        summary['light_sleep_seconds'] = daily_sleep.get('lightSleepSeconds')
+        summary['rem_sleep_seconds'] = daily_sleep.get('remSleepSeconds')
+        summary['awake_seconds'] = daily_sleep.get('awakeSleepSeconds')
+
+        # Sleep disruptions
+        summary['awake_count'] = daily_sleep.get('awakeCount')
+        summary['restless_moments_count'] = daily_sleep.get('restlessMomentsCount')
+
+        # Average physiological metrics
+        summary['avg_sleep_stress'] = daily_sleep.get('avgSleepStress')
+        summary['resting_heart_rate_bpm'] = daily_sleep.get('restingHeartRate')
+
+    # Extract SpO2 summary if available
+    spo2_summary = sleep_data.get('wellnessSpO2SleepSummaryDTO', {})
+    if spo2_summary:
+        summary['avg_spo2_percent'] = spo2_summary.get('averageSpo2')
+        summary['lowest_spo2_percent'] = spo2_summary.get('lowestSpo2')
+
+    # Add HRV data if available at top level
+    if 'avgOvernightHrv' in sleep_data:
+        summary['avg_overnight_hrv'] = sleep_data.get('avgOvernightHrv')
+
+    # Calculate sleep phase percentages if total sleep time is available
+    total_sleep = summary.get('sleep_seconds', 0)
+    if total_sleep and total_sleep > 0:
+        summary['deep_sleep_percent'] = round((summary.get('deep_sleep_seconds', 0) / total_sleep) * 100, 1)
+        summary['light_sleep_percent'] = round((summary.get('light_sleep_seconds', 0) / total_sleep) * 100, 1)
+        summary['rem_sleep_percent'] = round((summary.get('rem_sleep_seconds', 0) / total_sleep) * 100, 1)
+
+    # Convert sleep duration to hours for convenience
+    if total_sleep:
+        summary['sleep_hours'] = round(total_sleep / 3600, 2)
+
+    # Remove None values
+    return {k: v for k, v in summary.items() if v is not None}
+
+
 def register_tools(app):
     """Register all health and wellness tools with the MCP server app"""
 
@@ -462,63 +522,67 @@ def register_tools(app):
             if not sleep_data:
                 return f"No sleep summary found for {date}"
 
-            # Extract only essential summary metrics
-            summary = {}
-
-            # Extract data from dailySleepDTO if available
-            daily_sleep = sleep_data.get('dailySleepDTO', {})
-            if daily_sleep:
-                # Sleep duration and timing
-                summary['sleep_seconds'] = daily_sleep.get('sleepTimeSeconds')
-                summary['nap_seconds'] = daily_sleep.get('napTimeSeconds')
-                summary['sleep_start'] = daily_sleep.get('sleepStartTimestampGMT')
-                summary['sleep_end'] = daily_sleep.get('sleepEndTimestampGMT')
-
-                # Sleep score and quality
-                summary['sleep_score'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('value')
-                summary['sleep_score_qualifier'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('qualifierKey')
-
-                # Sleep phases (in seconds)
-                summary['deep_sleep_seconds'] = daily_sleep.get('deepSleepSeconds')
-                summary['light_sleep_seconds'] = daily_sleep.get('lightSleepSeconds')
-                summary['rem_sleep_seconds'] = daily_sleep.get('remSleepSeconds')
-                summary['awake_seconds'] = daily_sleep.get('awakeSleepSeconds')
-
-                # Sleep disruptions
-                summary['awake_count'] = daily_sleep.get('awakeCount')
-                summary['restless_moments_count'] = daily_sleep.get('restlessMomentsCount')
-
-                # Average physiological metrics
-                summary['avg_sleep_stress'] = daily_sleep.get('avgSleepStress')
-                summary['resting_heart_rate_bpm'] = daily_sleep.get('restingHeartRate')
-
-            # Extract SpO2 summary if available
-            spo2_summary = sleep_data.get('wellnessSpO2SleepSummaryDTO', {})
-            if spo2_summary:
-                summary['avg_spo2_percent'] = spo2_summary.get('averageSpo2')
-                summary['lowest_spo2_percent'] = spo2_summary.get('lowestSpo2')
-
-            # Add HRV data if available at top level
-            if 'avgOvernightHrv' in sleep_data:
-                summary['avg_overnight_hrv'] = sleep_data.get('avgOvernightHrv')
-
-            # Calculate sleep phase percentages if total sleep time is available
-            total_sleep = summary.get('sleep_seconds', 0)
-            if total_sleep and total_sleep > 0:
-                summary['deep_sleep_percent'] = round((summary.get('deep_sleep_seconds', 0) / total_sleep) * 100, 1)
-                summary['light_sleep_percent'] = round((summary.get('light_sleep_seconds', 0) / total_sleep) * 100, 1)
-                summary['rem_sleep_percent'] = round((summary.get('rem_sleep_seconds', 0) / total_sleep) * 100, 1)
-
-            # Convert sleep duration to hours for convenience
-            if total_sleep:
-                summary['sleep_hours'] = round(total_sleep / 3600, 2)
-
-            # Remove None values
-            summary = {k: v for k, v in summary.items() if v is not None}
+            summary = _extract_sleep_summary(sleep_data)
 
             return json.dumps(summary, indent=2)
         except Exception as e:
             return f"Error retrieving sleep summary: {str(e)}"
+
+    @app.tool()
+    async def get_sleep_summary_range(start_date: str, end_date: str) -> str:
+        """Get lightweight sleep summaries for every night in a date range.
+
+        Returns the same curated metrics as get_sleep_summary (sleep score, duration,
+        sleep stages, HRV, resting HR, etc.) for each night between start_date and
+        end_date, inclusive. Use this instead of calling get_sleep_summary once per
+        night when analyzing sleep trends over weeks or months.
+
+        Note: Garmin Connect does not expose a native range endpoint for sleep, so
+        this makes one request per night internally. Recommended range: up to a
+        few weeks for quick checks. Maximum: 90 nights per call.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        MAX_DAYS = 90
+        try:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+        except ValueError as e:
+            return f"Invalid date format: {e}. Use YYYY-MM-DD."
+
+        days = (end - start).days + 1
+        if days > MAX_DAYS:
+            return f"Date range too large ({days} days). Maximum is {MAX_DAYS} days."
+        if days < 1:
+            return "end_date must be on or after start_date."
+
+        nights = []
+        current = start
+        while current <= end:
+            date_str = current.isoformat()
+            try:
+                sleep_data = garmin_client.get_sleep_data(date_str)
+                if sleep_data:
+                    entry = {"date": date_str}
+                    entry.update(_extract_sleep_summary(sleep_data))
+                    if len(entry) > 1:  # has more than just date
+                        nights.append(entry)
+            except Exception:
+                pass  # skip nights with no data / transient errors
+            current += datetime.timedelta(days=1)
+
+        if not nights:
+            return f"No sleep data found between {start_date} and {end_date}."
+
+        return json.dumps({
+            "start_date": start_date,
+            "end_date": end_date,
+            "nights_requested": days,
+            "nights_returned": len(nights),
+            "nights": nights,
+        }, indent=2)
 
     @app.tool()
     async def get_stress_data(date: str) -> str:
