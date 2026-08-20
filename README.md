@@ -17,6 +17,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - Access cycling FTP and lactate threshold metrics
 - Manage gear and equipment
 - Access workouts and training plans
+- List races and events on your Garmin Connect calendar
 - Inspect detailed workout step structures, including repeat groups and swim pace targets
 - Weekly health aggregates (steps, stress, intensity minutes)
 - Advanced cycling analytics: power zones, FIT file analysis, DI2 electronic shift intelligence
@@ -40,10 +41,17 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ User Profile (3 tools)
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (3 tools) - list / upload GPX as course / delete course
+- ✅ Calendar Events (1 tool) - list races and events registered on the Garmin Connect calendar
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+
+### Calendar Events
+
+**`get_calendar_events(start_date, end_date)`** lists the races and events you added or subscribed to in Garmin Connect.
+
+These entries live in Garmin's calendar feed as `itemType: "event"`, separate from workouts. `get_scheduled_workouts` queries the workout schedule and never returns them, so this is the tool to reach for when asked which races are coming up. Each event reports its target distance, the local start time when the organiser published one, and two flags: `is_race`, and `primary_event` for the goal race an active training plan targets.
 
 ### Activity File Downloads
 
