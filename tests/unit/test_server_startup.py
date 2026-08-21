@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import Mock
 
 import garmin_mcp
+import pytest
 from mcp.server.fastmcp import FastMCP
 
 
@@ -35,3 +36,22 @@ def test_main_registers_tools_and_starts_stdio(monkeypatch):
     assert run_calls[0]["tool_count"] >= 10
     assert "get_devices" in run_calls[0]["tool_names"]
     assert "get_workouts" in run_calls[0]["tool_names"]
+
+
+def test_main_rejects_malformed_allowlist_before_garmin_initialization(
+    monkeypatch, capsys
+):
+    init_api = Mock()
+    monkeypatch.setenv("GARMIN_ENABLED_TOOLS", ",,  ,")
+    monkeypatch.setattr(garmin_mcp, "init_api", init_api)
+    monkeypatch.setattr(FastMCP, "run", lambda _self, **_kwargs: None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        garmin_mcp.main()
+
+    assert exc_info.value.code == 1
+    assert (
+        "Invalid GARMIN_ENABLED_TOOLS: expected at least one tool name"
+        in capsys.readouterr().err
+    )
+    init_api.assert_not_called()

@@ -106,8 +106,16 @@ def _parse_tool_set(value):
     return {name.strip().lower() for name in value.split(",") if name.strip()}
 
 
-enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
-disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+def _resolve_tool_filters():
+    """Read and validate tool filter environment variables at server startup."""
+    enabled_value = os.getenv("GARMIN_ENABLED_TOOLS")
+    enabled_tools = _parse_tool_set(enabled_value)
+    if enabled_value and enabled_value.strip() and not enabled_tools:
+        raise ValueError(
+            "Invalid GARMIN_ENABLED_TOOLS: expected at least one tool name"
+        )
+    disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+    return enabled_tools, disabled_tools
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
@@ -382,6 +390,7 @@ def main():
     #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     try:
+        enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
