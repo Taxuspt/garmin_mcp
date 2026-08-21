@@ -15,6 +15,8 @@ def test_main_registers_tools_and_starts_stdio(monkeypatch):
     monkeypatch.delenv("GARMIN_MCP_TRANSPORT", raising=False)
     monkeypatch.delenv("GARMIN_MCP_HOST", raising=False)
     monkeypatch.delenv("GARMIN_MCP_PORT", raising=False)
+    monkeypatch.delenv("GARMIN_ENABLED_TOOLS", raising=False)
+    monkeypatch.delenv("GARMIN_DISABLED_TOOLS", raising=False)
     monkeypatch.setattr(garmin_mcp, "init_api", lambda _email, _password: Mock())
 
     def capture_run(self, **kwargs):
