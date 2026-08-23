@@ -7,10 +7,10 @@ name = "garmin-mcp"
 version = "0.1.0"
 description = "MCP server to access Garmin data"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "python-dotenv==1.2.2",
-    "garminconnect==0.3.2",
+    "garminconnect==0.3.7",
     "requests==2.33.0",
     # mcp 2.x renamed mcp.server.fastmcp -> mcp.server.mcpserver (FastMCP ->
     # MCPServer). Cap until the server is ported to the new API.
