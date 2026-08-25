@@ -681,7 +681,7 @@ docker build -t garmin-mcp .
 docker run -it \
   -e GARMIN_EMAIL="your_email@example.com" \
   -e GARMIN_PASSWORD="your_password" \
-  -v garmin-tokens:/root/.garminconnect \
+  -v ./.garminconnect:/root/.garminconnect \
   garmin-mcp
 ```
 
@@ -740,7 +740,7 @@ Garmin Connect MFA required. Please check your email/phone for the code.
 Enter MFA code: 123456
 ```
 
-3. The OAuth tokens will be saved to the Docker volume (`garmin-tokens`), so you won't need to re-authenticate on subsequent runs.
+3. The OAuth tokens will be saved to the bind-mounted `./.garminconnect/` directory, so you won't need to re-authenticate on subsequent runs.
 
 4. After MFA setup, you can run the container normally:
 
@@ -748,19 +748,17 @@ Enter MFA code: 123456
 docker compose up -d
 ```
 
-#### Docker Volume Management
+#### Token Storage
 
-The OAuth tokens are stored in a persistent Docker volume to avoid re-authentication:
+The OAuth tokens are stored on the host at `./.garminconnect/` (bind-mounted into the
+container at `/root/.garminconnect`) to avoid re-authentication:
 
 ```bash
-# List volumes
-docker volume ls
+# Inspect the stored tokens
+ls -la ./.garminconnect/
 
-# Inspect the tokens volume
-docker volume inspect garmin_mcp_garmin-tokens
-
-# Remove the volume (will require re-authentication)
-docker volume rm garmin_mcp_garmin-tokens
+# Remove them (will require re-authentication)
+rm -rf ./.garminconnect/
 ```
 
 #### Using with Claude Desktop via Docker

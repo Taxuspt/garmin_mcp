@@ -31,5 +31,14 @@ dev-dependencies = [
     "pytest-asyncio>=0.25.2",
     "pytest-mock>=3.14.0",
     "pytest-timeout>=2.3.1",
+    "pytest-xdist>=3.6.1",
+    "ruff>=0.8.0",
 ]
+
+[tool.ruff]
+line-length = 125
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 

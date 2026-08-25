@@ -23,3 +23,6 @@ playground/*
 scratch/*
 tests/fixtures/captured/*
 !tests/fixtures/captured/poc_walk_run.json
+
+# Live Garmin OAuth tokens (bind-mounted by docker-compose.yml)
+.garminconnect/
