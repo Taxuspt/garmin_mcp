@@ -16,6 +16,7 @@ build/
 *.log
 .DS_Store
 .claude.md
+.claude/
 .mcp.json
 docs/*
 .gitignore
