@@ -578,9 +578,8 @@ def register_tools(app):
                 return f"No training status data found for {date}."
 
             # Extract from nested structure
-            # Use `(x.get(key) or {})` instead of `x.get(key, {})` so that
-            # explicit null values in the API response are treated as missing
-            # rather than causing `NoneType has no attribute 'get'` errors.
+            # Use `_as_dict()` for nested Garmin sections so null or non-dict
+            # values are treated as missing instead of causing attribute errors.
             recent_status = _as_dict(status.get("mostRecentTrainingStatus"))
             latest_data = _as_dict(recent_status.get("latestTrainingStatusData"))
 
