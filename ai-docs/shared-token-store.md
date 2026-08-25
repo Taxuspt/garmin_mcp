@@ -76,23 +76,28 @@ successful call it publishes any rotation this process performed; on a
 connection error — those don't mean the client itself is bad) it invalidates
 the session before re-raising the relabeled exception.
 
-**Documented scope boundary:** several tool modules (`activity_management`,
-`courses`, `nutrition`, `workouts`, `workout_builders`) reach past `Garmin`
-into the raw `garmin.client` sub-object for HTTP verbs not exposed at the
-higher level (`garmin_client.client.put(...)`, `.post(...)`, `.delete(...)`,
-`.connectapi(...)`). `_GarminProxy` returns that raw sub-object as-is (so
-those call sites keep working unchanged), which means calls made through it
-bypass the publish-after/invalidate-on-failure wrapping described above.
-They still get the `session.acquire()` re-validation on the way in (so a
-peer's prior rotation is still adopted before the chain proceeds), and
-still get correct typed-401 classification (that's installed at the
-`Client` class level, independent of which proxy path is used) — the only
-gap is that an auth failure *inside* one of those bypass calls doesn't
-immediately drop the cached session client the way a failure through
-`_GarminProxy`'s own wrapped calls does. Closing this fully would mean
-wrapping `.client`'s own methods the same way; deferred as a documented,
-deliberate trade-off rather than built speculatively for a path used by a
-minority of tool calls.
+**The `.client` bypass is also covered — not deferred.** Several tool modules
+(`activity_management`, `courses`, `nutrition`, `workouts`,
+`workout_builders`) reach past `Garmin` into the raw `garmin.client`
+sub-object for HTTP verbs not exposed at the higher level
+(`garmin_client.client.put(...)`, `.post(...)`, `.delete(...)`,
+`.connectapi(...)`) — undocumented Garmin Connect endpoints, the same reason
+`hevy2garmin-lite`'s `push.py` does the exact same thing
+(`client.client.put("connectapi", ...)`, confirmed by reading that file
+directly). Their fix was manual: every call site wrapped by hand in
+`try/except GarminConnectAuthenticationError: reset_garmin_client()` plus a
+`finally: publish_garmin_tokens()` — `GarminSession.acquire()`'s documented
+"long-running operation" pattern, where the caller takes on the
+publish/invalidate obligation itself.
+
+That doesn't scale to garmin_mcp's ~19 bypass call sites across 5 files the
+way it does to hevy2garmin-lite's 2 in one file, so instead `_GarminProxy`
+special-cases `name == "client"` and hands back a `_ClientProxy` — a second,
+structurally identical proxy wrapping the raw `Client` object with the exact
+same `_session_protected_call()` helper `_GarminProxy` uses for Garmin's own
+methods. One place closes it for all 19 call sites automatically, rather
+than requiring each to remember the manual pattern. Covered by
+`tests/unit/test_garmin_proxy.py`'s `test_client_*` cases.
 
 ## Path / backend compatibility with the rest of the fleet
 

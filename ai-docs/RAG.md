@@ -30,9 +30,10 @@ on a claim once `garminconnect` gets bumped to `0.3.11` (branch
   until the process was restarted by hand. **Fixed**: `GarminSession` +
   `_GarminProxy` route every tool call through `session.acquire()` (adopt a
   peer's rotation) / `publish()` (propagate our own) / `invalidate()` (drop a
-  rejected client) — see `shared-token-store.md` for the documented scope
-  boundary around the handful of tool modules that bypass this via
-  `garmin_client.client.*`.
+  rejected client) — including the ~19 tool-call sites across 5 modules that
+  bypass `Garmin` for the raw `garmin_client.client.*` HTTP verbs, via a
+  second `_ClientProxy` wrapping that sub-object the same way. See
+  `shared-token-store.md`.
 - **HTTP/SSE transport has no built-in auth.** `_parse_transport_config()`
   says so explicitly in its own comment; mitigated only by defaulting
   `GARMIN_MCP_HOST` to `127.0.0.1`. **Still open** — out of scope for the

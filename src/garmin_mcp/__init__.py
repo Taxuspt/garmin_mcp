@@ -120,6 +120,72 @@ disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
 
+_GARMIN_PROXY_MESSAGES = {
+    GarminConnectAuthenticationError: (
+        "Garmin authentication expired. "
+        "Re-run 'garmin-mcp-auth' to refresh your tokens and restart the server."
+    ),
+    GarminConnectTooManyRequestsError: ("Garmin rate limit hit. Wait a few minutes before retrying."),
+    GarminConnectConnectionError: ("Garmin Connect is unreachable. Check your network connection or try again later."),
+}
+
+
+def _session_protected_call(session, attr):
+    """Wrap a Garmin/Client callable so a call publishes any rotation it
+    performed, invalidates the session on a real auth rejection, and
+    relabels known exceptions into actionable messages. Shared by
+    _GarminProxy (Garmin's own methods) and _ClientProxy (the raw
+    garminconnect Client several tool modules dot into directly) so both
+    get identical protection -- see ai-docs/shared-token-store.md.
+    """
+
+    def _call(*args, **kwargs):
+        try:
+            result = attr(*args, **kwargs)
+        except tuple(_GARMIN_PROXY_MESSAGES) as exc:
+            if isinstance(exc, GarminConnectAuthenticationError):
+                # Only a real auth rejection means the client itself is bad
+                # -- a rate limit or network blip doesn't, and dropping the
+                # cache for those would force a needless re-login (and more
+                # rate limiting) on the next call.
+                session.invalidate()
+            for exc_type, msg in _GARMIN_PROXY_MESSAGES.items():
+                if isinstance(exc, exc_type):
+                    error_details = str(exc)
+                    full_msg = f"{msg} (Details: {error_details})" if error_details else msg
+                    raise type(exc)(full_msg) from None
+            raise
+        else:
+            session.publish()
+            return result
+
+    return _call
+
+
+class _ClientProxy:
+    """Wraps ``garmin.client`` (the raw garminconnect ``Client``) with the
+    same protection ``_GarminProxy`` gives Garmin's own methods.
+
+    Several tool modules (activity_management, courses, nutrition, workouts,
+    workout_builders) reach past Garmin into this object directly for HTTP
+    verbs (``.put()``, ``.post()``, ``.delete()``, ``.connectapi()``) not
+    exposed at the higher level -- undocumented Garmin Connect endpoints, the
+    same reason hevy2garmin-lite's push.py does the same thing. Without this,
+    those calls would bypass the rotation-safety _GarminProxy gives everyone
+    else. See ai-docs/shared-token-store.md.
+    """
+
+    def __init__(self, session, client):
+        self._session = session
+        self._client = client
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if not callable(attr):
+            return attr
+        return _session_protected_call(self._session, attr)
+
+
 class _GarminProxy:
     """Wraps a GarminSession, translating known runtime exceptions into clear
     messages and keeping every tool call rotation-safe.
@@ -132,30 +198,12 @@ class _GarminProxy:
 
     Each attribute access resolves the *current* client via
     ``session.acquire()`` (re-reads the shared store, adopts a peer's
-    rotation), rather than a client captured once at startup. Non-callable
-    attributes -- including ``garmin.client``, the raw garminconnect Client
-    object several tool modules dot into directly for HTTP verbs not exposed
-    on Garmin itself -- are returned as-is, so every existing call pattern
-    (``garmin_client.client.put(...)``, plain string attributes) keeps
-    working unchanged. Calls made through that raw ``.client`` bypass this
-    class's publish/invalidate wrapping below; that's a deliberate, documented
-    scope boundary (see ai-docs/shared-token-store.md), not an oversight --
-    they still benefit from the acquire() re-validation on the way in, and
-    from garmin_session/errors.py's typed-401 detection either way.
+    rotation), rather than a client captured once at startup. ``.client``
+    (the raw garminconnect Client) gets the same protection recursively via
+    _ClientProxy. Other non-callable attributes are returned as-is.
     """
 
-    _MESSAGES = {
-        GarminConnectAuthenticationError: (
-            "Garmin authentication expired. "
-            "Re-run 'garmin-mcp-auth' to refresh your tokens and restart the server."
-        ),
-        GarminConnectTooManyRequestsError: (
-            "Garmin rate limit hit. Wait a few minutes before retrying."
-        ),
-        GarminConnectConnectionError: (
-            "Garmin Connect is unreachable. Check your network connection or try again later."
-        ),
-    }
+    _MESSAGES = _GARMIN_PROXY_MESSAGES
 
     def __init__(self, session):
         self._session = session
@@ -163,30 +211,14 @@ class _GarminProxy:
     def __getattr__(self, name):
         garmin = self._session.acquire()
         attr = getattr(garmin, name)
+
+        if name == "client":
+            return _ClientProxy(self._session, attr)
+
         if not callable(attr):
             return attr
 
-        def _call(*args, **kwargs):
-            try:
-                result = attr(*args, **kwargs)
-            except tuple(self._MESSAGES) as exc:
-                if isinstance(exc, GarminConnectAuthenticationError):
-                    # Only a real auth rejection means the client itself is
-                    # bad -- a rate limit or network blip doesn't, and
-                    # dropping the cache for those would force a needless
-                    # re-login (and more rate limiting) on the next call.
-                    self._session.invalidate()
-                for exc_type, msg in self._MESSAGES.items():
-                    if isinstance(exc, exc_type):
-                        error_details = str(exc)
-                        full_msg = f"{msg} (Details: {error_details})" if error_details else msg
-                        raise type(exc)(full_msg) from None
-                raise
-            else:
-                self._session.publish()
-                return result
-
-        return _call
+        return _session_protected_call(self._session, attr)
 
 
 def _parse_transport_config() -> tuple[str, str, int]:

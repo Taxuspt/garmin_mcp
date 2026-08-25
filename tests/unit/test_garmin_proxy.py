@@ -131,3 +131,67 @@ class TestGarminProxy:
             proxy.get_activities()
 
         session.invalidate.assert_not_called()
+
+    # ------------------------------------------------------- raw .client bypass
+    #
+    # Several tool modules reach past Garmin's own methods into the raw
+    # garminconnect Client for HTTP verbs Garmin doesn't expose
+    # (garmin_client.client.put(...), .post(...), .delete(...),
+    # .connectapi(...)). These must get the exact same protection as a
+    # top-level Garmin method call -- see ai-docs/shared-token-store.md.
+
+    def test_client_non_callable_attribute_passes_through(self):
+        garmin = Mock()
+        garmin.client.domain = "garmin.com"
+        proxy = _GarminProxy(_session(garmin))
+
+        assert proxy.client.domain == "garmin.com"
+
+    def test_client_successful_call_publishes_any_rotation(self):
+        garmin = Mock()
+        garmin.client.put.return_value = {"ok": True}
+        session = _session(garmin)
+        proxy = _GarminProxy(session)
+
+        result = proxy.client.put("connectapi", "some/path", json={})
+
+        assert result == {"ok": True}
+        garmin.client.put.assert_called_once_with("connectapi", "some/path", json={})
+        session.publish.assert_called_once()
+        session.invalidate.assert_not_called()
+
+    def test_client_auth_failure_invalidates_the_session(self):
+        garmin = Mock()
+        garmin.client.put.side_effect = GarminConnectAuthenticationError("expired")
+        session = _session(garmin)
+        proxy = _GarminProxy(session)
+
+        with pytest.raises(GarminConnectAuthenticationError) as exc:
+            proxy.client.put("connectapi", "some/path", json={})
+
+        assert "Re-run 'garmin-mcp-auth'" in str(exc.value)
+        session.invalidate.assert_called_once()
+        session.publish.assert_not_called()
+
+    def test_client_transient_failure_does_not_invalidate_the_session(self):
+        garmin = Mock()
+        garmin.client.post.side_effect = GarminConnectConnectionError("timeout")
+        session = _session(garmin)
+        proxy = _GarminProxy(session)
+
+        with pytest.raises(GarminConnectConnectionError):
+            proxy.client.post("connectapi", "some/path")
+
+        session.invalidate.assert_not_called()
+
+    def test_each_client_access_reacquires_from_the_session(self):
+        garmin = Mock()
+        garmin.client.put.return_value = None
+        garmin.client.delete.return_value = None
+        session = _session(garmin)
+        proxy = _GarminProxy(session)
+
+        proxy.client.put("connectapi", "a")
+        proxy.client.delete("connectapi", "b")
+
+        assert session.acquire.call_count == 2
