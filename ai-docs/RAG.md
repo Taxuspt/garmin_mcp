@@ -98,13 +98,72 @@ matches another's — versions differ.
 | garmin-scale-sync | 0.3.11 | `GarminSession` | **`postgres`** | fixed; the fleet's actual source of truth (checked its real `.env`, not `.env.example`) |
 | hevy2garmin-lite | 0.3.8 | `GarminSession` | `file` | fixed rotation-safety, but its own `config.py` says this "MUST match" gss and currently doesn't — pre-existing drift, not fixed by this fork |
 | fitness-dashboard | 0.3.2 | per call | n/a | `login()` every call; also has a `garmin.garth.dump` bug — not yet fixed |
-| **garmin_mcp (this repo)** | **0.3.2 → targeting 0.3.11** | `GarminSession` | **`postgres`** (this deployment's `.env`) | **fixed** on `fix/auth-hardening`, backend deliberately matched to gss (not hevy2garmin-lite) since gss is the source of truth. Verified live: real connection to the shared Neon DB, read gss's actual current token, full `garmin-mcp` startup succeeded against it end to end. Version bump to 0.3.11 still pending (`feat/garminconnect-0.3.11`) |
+| **garmin_mcp (this repo)** | **0.3.11** | `GarminSession` | **`postgres`** (this deployment's `.env`) | **fixed** on `fix/auth-hardening`, backend deliberately matched to gss (not hevy2garmin-lite) since gss is the source of truth. Verified live: real connection to the shared Neon DB, read gss's actual current token, full `garmin-mcp` startup succeeded against it end to end. Version bumped to 0.3.11 on `feat/garminconnect-0.3.11`, matching gss exactly |
 
 (Table originally mirrored from gss's own `ai-docs/RAG.md` "Fleet" section;
 `TOKEN_STORE` column added after checking each project's actual `.env`
 directly rather than trusting `.env.example` defaults — cross-checked
-against this repo's `pyproject.toml:13` pin — `garminconnect==0.3.2` —
-verified this session.)
+against this repo's `pyproject.toml:13` pin, since updated to
+`garminconnect==0.3.11`.)
+
+## `feat/garminconnect-0.3.11` — what actually changed, verified against installed source
+
+Read directly from the `garminconnect==0.3.11` package installed in the test
+image (`docker exec ... python -c "import inspect, garminconnect..."`), not
+assumed from the 0.3.2 facts above or from what gss's/hevy2garmin-lite's own
+docs say about their (also-0.3.11) copy:
+
+- **`Client._api_session` is a persistent instance attribute again**,
+  created once in `Client.__init__` — the `_fresh_api_session()` per-call
+  factory that 0.3.2 used (see the 0.3.2 facts above) is gone entirely.
+  This is the shape gss's/hevy2garmin-lite's copy of `garmin_session/errors.py`
+  always assumed; this repo's copy no longer needs to special-case it.
+  **Breaking**: `errors.py`'s `_instrument_session_factory()` referenced
+  `Client._fresh_api_session`, which raised `AttributeError` at
+  `GarminSession.__init__` time (i.e. every request), 13 of 160 unit tests
+  red for this exact reason. **Fixed**: `errors.py` now wraps
+  `Client.__init__` itself so every instance's `_api_session` is instrumented
+  the moment it's constructed — no call site needs a separate `instrument()`
+  call (unlike the sibling module's pattern), preserving
+  `GarminSession._new_client()`'s existing "no per-instance call needed"
+  assumption without changing `session.py` at all.
+- **`Client._run_request` now does its own refresh-and-retry on a 401**
+  (acquires `_token_lock`, calls `_refresh_session()`, retries once) before
+  falling through to raise `GarminConnectConnectionError("API Error 401")` —
+  0.3.2 had no such retry. The typed-error problem this fork's `errors.py`
+  exists to fix is unchanged: even after that retry, a real 401 still
+  surfaces as the generic connection error, not `GarminConnectAuthenticationError`.
+- **`Client._refresh_session()` now auto-dumps to `self._tokenstore_path`**
+  after a successful DI-token refresh (wrapped in `contextlib.suppress`) —
+  0.3.2 didn't do this. Reinforces (doesn't change) why `GarminSession` must
+  keep pointing the library at a private scratch directory rather than the
+  shared store: any internal refresh the library performs on its own now
+  writes back to wherever `_tokenstore_path` last pointed, not just writes
+  this class explicitly triggers.
+- **`Client.dump()`/`load()` hardened** (atomic `O_EXCL`+0600 write, symlink
+  refusal on read) — behavior-compatible with this repo's usage, no call site
+  changes needed. `dumps()`'s shape (`di_token`/`di_refresh_token`/
+  `di_client_id`) is unchanged.
+- **`Garmin.login()`/`Client.login()`/`Client.put`/`post`/`delete`/
+  `connectapi` signatures are unchanged** from what this repo already calls
+  them with — verified directly, not assumed compatible. `Garmin.__init__`
+  still defaults `return_on_mfa=False`; `resume_login(client_state, mfa_code)`
+  unchanged.
+- **`garminconnect==0.3.11` requires Python >=3.12** (`uv lock` failed
+  outright against this repo's then-`requires-python = ">=3.10"`, confirming
+  this rather than reading it from a changelog). **Fixed**: bumped
+  `requires-python` to `>=3.12` and trimmed `.github/workflows/ci.yml`'s
+  matrix from `['3.10','3.11','3.12','3.13']` to `['3.12','3.13']` — the
+  Docker runtime image was already `python:3.12-slim`, so this only changes
+  what pip/uvx installs and CI claim to support, not actual server behavior.
+  User-approved tradeoff (dropping 3.10/3.11 support to keep version parity
+  with gss over staying on an older garminconnect).
+- **`get_training_readiness(cdate)` signature and `self.connectapi(url)`
+  body are byte-identical** between 0.3.2 and 0.3.11 — the shape
+  `health_wellness.py:189-205` curates comes from Garmin's live API response,
+  not this library method, so nothing to fix here from the version bump
+  itself; not verifiable further without hitting the live account, which
+  `testing.md` forbids from tests.
 
 ## PR/branch landscape on upstream (`Taxuspt/garmin_mcp`)
 
@@ -122,7 +181,8 @@ verified this session.)
 - Whether `garmin_mcp` and `garmin-scale-sync`/`hevy2garmin-lite` run on the
   same host. Matters for `shared-token-store.md`'s file-store path choice —
   don't assume either way without checking the actual deployment.
-- Full `garminconnect` 0.3.2→0.3.11 changelog diff — findings.md's version
-  table is a starting point, not verified exhaustive. `feat/garminconnect-0.3.11`
-  must read the installed 0.3.11 source directly (per `testing.md`), not trust
-  this list.
+- `get_training_readiness`'s actual live-API response shape on the account
+  this repo will run against — the curated fields in `health_wellness.py`
+  were never verified against a real call (`testing.md` forbids that from
+  tests); only the library method's own shape was confirmed unchanged by the
+  version bump.

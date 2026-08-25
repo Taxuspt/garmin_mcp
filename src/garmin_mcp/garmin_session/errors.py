@@ -9,16 +9,20 @@ ai-docs/shared-token-store.md): the poisoned client stays cached and every
 later call fails identically until the process restarts.
 
 This is the same problem ``garmin-scale-sync``/``hevy2garmin-lite`` already
-fixed in their copy of this module (``/Users/mr13/workspace/hevva2/src/garmin_session/errors.py``),
-but **this file is not a straight copy** of theirs. Verified against the
-actually-installed ``garminconnect==0.3.2`` source (ai-docs/testing.md — "never
-assume"): their version instruments ``Client._api_session``, a persistent
-``requests.Session`` instance attribute that's safe to wrap once. This version
-has no such attribute — ``Client._run_request`` calls
-``self._fresh_api_session()`` to build a **brand-new** session on every single
-call. So instead of wrapping one long-lived session, this wraps the *factory*
-(``_fresh_api_session``) once, so every session it ever hands back already has
-its ``.request()`` recording the real HTTP status onto the owning ``Client``.
+fixed in their copy of this module
+(``/Users/mr13/workspace/hevva2/src/garmin_session/errors.py``), but this file
+is not a straight copy of theirs. Verified against the actually-installed
+``garminconnect==0.3.11`` source (ai-docs/testing.md -- "never assume"):
+``Client._api_session`` is a persistent ``requests.Session`` instance
+attribute, created once in ``Client.__init__`` -- the same shape the sibling
+module targets (unlike ``garminconnect==0.3.2``, which this file previously
+supported: that version had no ``_api_session`` attribute at all, building a
+brand-new session per call via a now-removed ``_fresh_api_session()`` factory
+instead). Rather than the sibling module's ``instrument(garmin)`` pattern --
+called explicitly by the caller after each client is built -- this wraps
+``Client.__init__`` itself, so every instance's session is instrumented the
+moment it exists and no call site needs to remember a separate call. See
+``GarminSession._new_client()``, which relies on that.
 
 Either way, the point is the same: key off the real HTTP status code, not a
 regex match on ``"API Error 401"`` in the exception message. That couples
@@ -41,42 +45,54 @@ _install_lock = threading.Lock()
 _installed = False
 
 
-def _instrument_session_factory() -> None:
-    """Wrap ``Client._fresh_api_session`` so every session it creates records
-    the real HTTP status of its last response onto the owning ``Client``.
+def _instrument_session(client: Client) -> None:
+    """Wrap one Client instance's persistent ``_api_session`` so its
+    ``.request()`` records the real HTTP status of its last response onto
+    the owning ``Client``.
     """
-    if getattr(Client._fresh_api_session, _INSTRUMENTED_ATTR, False):
+    session = client._api_session
+    if getattr(session, _INSTRUMENTED_ATTR, False):
         return
 
-    original_fresh_api_session = Client._fresh_api_session
+    original_request = session.request
 
-    def _fresh_api_session(self):
-        session = original_fresh_api_session(self)
-        original_request = session.request
+    def recording_request(*args, **kwargs):
+        response = original_request(*args, **kwargs)
+        setattr(client, _LAST_STATUS_ATTR, getattr(response, "status_code", None))
+        return response
 
-        def recording_request(*args, **kwargs):
-            response = original_request(*args, **kwargs)
-            setattr(self, _LAST_STATUS_ATTR, getattr(response, "status_code", None))
-            return response
+    session.request = recording_request
+    setattr(session, _INSTRUMENTED_ATTR, True)
 
-        session.request = recording_request
-        return session
 
-    setattr(_fresh_api_session, _INSTRUMENTED_ATTR, True)
-    Client._fresh_api_session = _fresh_api_session
+def _instrument_client_init() -> None:
+    """Wrap ``Client.__init__`` so every instance is instrumented as soon as
+    it's constructed, instead of requiring each caller to instrument it.
+    """
+    if getattr(Client.__init__, _INSTRUMENTED_ATTR, False):
+        return
+
+    original_init = Client.__init__
+
+    def _init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        _instrument_session(self)
+
+    setattr(_init, _INSTRUMENTED_ATTR, True)
+    Client.__init__ = _init
 
 
 def install() -> None:
-    """Patch ``Client._run_request`` to raise the auth error on a real 401.
+    """Patch ``Client`` to raise the typed auth error on a real 401.
 
-    Idempotent — safe to call from every session/client construction.
+    Idempotent -- safe to call from every session/client construction.
     """
     global _installed
     with _install_lock:
         if _installed:
             return
 
-        _instrument_session_factory()
+        _instrument_client_init()
 
         original_run_request = Client._run_request
 
