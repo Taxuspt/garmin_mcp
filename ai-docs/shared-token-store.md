@@ -99,18 +99,31 @@ methods. One place closes it for all 19 call sites automatically, rather
 than requiring each to remember the manual pattern. Covered by
 `tests/unit/test_garmin_proxy.py`'s `test_client_*` cases.
 
-## Path / backend compatibility with the rest of the fleet
+## Backend: `postgres`, matching gss's real deployment
 
-gss's `.env.example` documents the fleet default: `TOKEN_STORE=file`, path
-`$DATA_DIR/.garminconnect/garmin_tokens.json` — the same JSON shape this
-server already reads/writes at `~/.garminconnect/garmin_tokens.json`
-(`token_utils.get_token_path()`). **If this server and the other services run
-on the same host, point this server's store at the same directory the others
-use, or it just becomes a fifth independent holder of a token that goes stale
-the same way.** If they run on different hosts, `file` doesn't solve
-cross-host sharing at all — that needs `sqlite` (same-host only, unreliable
-over network filesystems) or `postgres` (works across hosts, requires
-`TOKEN_DB_URL`). This fork-hardening plan only builds the `file` backend;
-cross-host sharing is out of scope until the actual deployment topology
-(same box as gss/hevy2garmin-lite, or not) is confirmed. Don't assume same-host
-without checking.
+`gss`'s `.env.example` documents `file` as the fleet default, but its
+**actual live `.env` runs `TOKEN_STORE=postgres`** against a shared Neon
+database — checked directly, not assumed. `hevy2garmin-lite`'s live `.env`
+is still on `file` (its own `config.py` comment says this "MUST match
+garmin-scale-sync's TOKEN_STORE setting" — it currently doesn't; that's a
+pre-existing drift between those two projects, not something this branch
+caused or fixes).
+
+Given gss — the project with the actual incident history this whole design
+exists to prevent — is the one that migrated, `postgres` is the fleet's real
+current source of truth. `PostgresTokenStore` (`stores.py`) was ported
+alongside `FileTokenStore`, both selectable via `_build_token_store()`
+(`__init__.py`) reading `TOKEN_STORE` (`file` default, `postgres` requires
+`TOKEN_DB_URL`) — same env var names and selection logic as gss/hevy2garmin-
+lite's own `_build_token_store()`. `SqliteTokenStore` wasn't ported; nothing
+in this fleet uses it.
+
+This deployment's `.env` now points `TOKEN_DB_URL` at the same Neon database
+gss uses. **Verified live**, not just unit-tested: `_build_token_store()`
+correctly selects `PostgresTokenStore`, connects, and a read-only `load()`
+returned gss's actual current token (`di_token`/`di_refresh_token` both
+present). Ran the real `garmin-mcp` entrypoint end to end against it —
+`init_api()` → `session.warm()` succeeded using the stored token (no
+credential login needed), every tool module initialized, clean exit. No
+`save()` was called during verification, so nothing was written to the
+shared store outside of `GarminSession`'s own normal publish-on-rotation path.

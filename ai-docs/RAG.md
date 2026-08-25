@@ -93,16 +93,18 @@ Four services share one Garmin account (same rotation hazard described in
 `shared-token-store.md`). Do not assume one service's library behavior
 matches another's — versions differ.
 
-| Service | garminconnect | client lifetime | notes |
-|---|---|---|---|
-| garmin-scale-sync | 0.3.11 | `GarminSession` | fixed |
-| hevy2garmin-lite | 0.3.8 | `GarminSession` | fixed; shares the identical `garmin_session` module |
-| fitness-dashboard | 0.3.2 | per call | `login()` every call; also has a `garmin.garth.dump` bug — not yet fixed |
-| **garmin_mcp (this repo)** | **0.3.2 → targeting 0.3.11** | `GarminSession` (per-call `acquire()`/`publish()`/`invalidate()`) | **fixed** on `fix/auth-hardening` — not a byte-identical copy of the sibling module, adapted for 0.3.2's different `Client` internals (see above); version bump to 0.3.11 still pending (`feat/garminconnect-0.3.11`) |
+| Service | garminconnect | client lifetime | live `TOKEN_STORE` | notes |
+|---|---|---|---|---|
+| garmin-scale-sync | 0.3.11 | `GarminSession` | **`postgres`** | fixed; the fleet's actual source of truth (checked its real `.env`, not `.env.example`) |
+| hevy2garmin-lite | 0.3.8 | `GarminSession` | `file` | fixed rotation-safety, but its own `config.py` says this "MUST match" gss and currently doesn't — pre-existing drift, not fixed by this fork |
+| fitness-dashboard | 0.3.2 | per call | n/a | `login()` every call; also has a `garmin.garth.dump` bug — not yet fixed |
+| **garmin_mcp (this repo)** | **0.3.2 → targeting 0.3.11** | `GarminSession` | **`postgres`** (this deployment's `.env`) | **fixed** on `fix/auth-hardening`, backend deliberately matched to gss (not hevy2garmin-lite) since gss is the source of truth. Verified live: real connection to the shared Neon DB, read gss's actual current token, full `garmin-mcp` startup succeeded against it end to end. Version bump to 0.3.11 still pending (`feat/garminconnect-0.3.11`) |
 
-(Table mirrored from gss's own `ai-docs/RAG.md` "Fleet" section, cross-checked
-against this repo's `pyproject.toml:13` pin — `garminconnect==0.3.2` — verified
-this session.)
+(Table originally mirrored from gss's own `ai-docs/RAG.md` "Fleet" section;
+`TOKEN_STORE` column added after checking each project's actual `.env`
+directly rather than trusting `.env.example` defaults — cross-checked
+against this repo's `pyproject.toml:13` pin — `garminconnect==0.3.2` —
+verified this session.)
 
 ## PR/branch landscape on upstream (`Taxuspt/garmin_mcp`)
 

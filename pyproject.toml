@@ -16,6 +16,9 @@ dependencies = [
     # MCPServer). Cap until the server is ported to the new API.
     "mcp>=1.28.1,<2",
     "fitparse>=1.2.0",
+    # TOKEN_STORE=postgres (matches garmin-scale-sync/hevy2garmin-lite's
+    # shared-token backend) -- see garmin_session/stores.py.
+    "psycopg2-binary==2.9.12",
 ]
 
 [project.scripts]

@@ -13,7 +13,7 @@ from garminconnect import GarminConnectAuthenticationError, GarminConnectConnect
 
 # Import all modules
 from garmin_mcp import token_utils
-from garmin_mcp.garmin_session import FileTokenStore, GarminSession
+from garmin_mcp.garmin_session import FileTokenStore, GarminSession, PostgresTokenStore
 from garmin_mcp.garmin_session import errors as _auth_errors
 from garmin_mcp import activity_management
 from garmin_mcp import health_wellness
@@ -99,6 +99,25 @@ is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 # tokenstore itself, so garminconnect's internal dump-on-refresh can't write
 # outside the store's lock discipline. See ai-docs/shared-token-store.md.
 _scratch_dir = Path(tokenstore).parent / ".garmin_mcp_scratch"
+
+
+def _build_token_store():
+    """Select the shared-token backend.
+
+    Must match the rest of this Garmin account's fleet (garmin-scale-sync,
+    hevy2garmin-lite) -- pointing this service at a different store than they
+    use splits it onto its own session, and whichever refreshes second gets
+    locked out. See ai-docs/shared-token-store.md.
+    """
+    kind = os.getenv("TOKEN_STORE", "file").strip().lower()
+    if kind == "file":
+        return FileTokenStore(tokenstore)
+    if kind == "postgres":
+        db_url = os.getenv("TOKEN_DB_URL")
+        if not db_url:
+            raise ValueError("TOKEN_STORE=postgres requires TOKEN_DB_URL to be set.")
+        return PostgresTokenStore(db_url)
+    raise ValueError(f"Unknown TOKEN_STORE {kind!r}. Use file or postgres.")
 
 
 # --- Tool filtering ---------------------------------------------------------
@@ -309,7 +328,7 @@ def init_api(email, password):
     email = _normalize_optional_user_config(email, "garmin_email")
     password = _normalize_optional_user_config(password, "garmin_password")
 
-    store = FileTokenStore(tokenstore)
+    store = _build_token_store()
     session = GarminSession(
         store=store,
         scratch_dir=_scratch_dir,
