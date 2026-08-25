@@ -334,6 +334,22 @@ async def test_get_training_status_tolerates_all_null_device_maps(
 
 
 @pytest.mark.asyncio
+async def test_get_training_status_tolerates_non_mapping_response(
+    app_with_training, mock_garmin_client
+):
+    """Test truthy non-mapping training status responses are treated as empty."""
+    mock_garmin_client.get_training_status.return_value = [None]
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    assert result[0][0].text == "No training status data found for 2026-08-24."
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
 async def test_get_vo2max_trend_falls_back_to_profile(
     app_with_training, mock_garmin_client
 ):
