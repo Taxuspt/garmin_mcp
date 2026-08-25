@@ -13,6 +13,7 @@ from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnec
 
 # Import all modules
 from garmin_mcp import token_utils
+from garmin_mcp.garmin_session import errors as _auth_errors
 from garmin_mcp import activity_management
 from garmin_mcp import health_wellness
 from garmin_mcp import user_profile
@@ -223,6 +224,12 @@ class _ToolFilter:
 def init_api(email, password):
     """Initialize Garmin API with your credentials."""
     import io
+
+    # Reclassify a real HTTP 401 as GarminConnectAuthenticationError instead
+    # of the generic GarminConnectConnectionError Client._run_request raises
+    # for every >=400 response. See garmin_session/errors.py. Idempotent;
+    # patches the Client class once, before any client is constructed below.
+    _auth_errors.install()
 
     # Claude Desktop may leave blank optional user_config values as literal
     # placeholders. Do not mistake those strings for credentials and trigger a
