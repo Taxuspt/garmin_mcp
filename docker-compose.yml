@@ -21,7 +21,7 @@ services:
 
     # Mount volume to persist Garmin OAuth tokens
     volumes:
-      - garmin-tokens:/root/.garminconnect
+      - ./.garminconnect/:/root/.garminconnect
 
     # Restart policy
     restart: unless-stopped
@@ -30,9 +30,34 @@ services:
     stdin_open: true
     tty: true
 
-volumes:
-  garmin-tokens:
-    driver: local
+  # Tooling — not started by `docker compose up`, run explicitly:
+  #   docker compose run --rm test
+  #   docker compose run --rm lint
+  # Both build the `test` stage (the default/runtime image ships no
+  # pytest/ruff) and bind-mount src/ (and tests/, for test), so edits take
+  # effect without a rebuild and `ruff --fix` changes persist on the host
+  # instead of dying with the container.
+  test:
+    build:
+      context: .
+      target: test
+    profiles: ["tools"]
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+    # Matches .github/workflows/ci.yml's scope: tests/e2e needs live Garmin
+    # credentials/network and is deliberately excluded from both.
+    entrypoint: ["python", "-m", "pytest", "tests/unit", "tests/integration", "-n", "auto", "-v"]
+
+  lint:
+    build:
+      context: .
+      target: test
+    profiles: ["tools"]
+    volumes:
+      - ./src:/app/src
+      - ./pyproject.toml:/app/pyproject.toml
+    entrypoint: ["ruff", "check", "src"]
 
 # Uncomment if using file-based secrets
 # secrets:
