@@ -581,26 +581,31 @@ def register_tools(app):
             # Use `(x.get(key) or {})` instead of `x.get(key, {})` so that
             # explicit null values in the API response are treated as missing
             # rather than causing `NoneType has no attribute 'get'` errors.
-            recent_status = (status.get("mostRecentTrainingStatus") or {})
-            latest_data = (recent_status.get("latestTrainingStatusData") or {})
+            recent_status = _as_dict(status.get("mostRecentTrainingStatus"))
+            latest_data = _as_dict(recent_status.get("latestTrainingStatusData"))
 
             # Get first device data (usually the primary device)
             device_data = {}
-            for device_id, data in latest_data.items():
+            for data in latest_data.values():
+                if not isinstance(data, dict):
+                    continue
                 device_data = data
                 break
 
-            acwr_data = (device_data.get("acuteTrainingLoadDTO") or {})
+            acwr_data = _as_dict(device_data.get("acuteTrainingLoadDTO"))
 
             # VO2 Max data
-            vo2_data = (status.get("mostRecentVO2Max") or {}).get("generic") or {}
-            cycling_vo2_data = (status.get("mostRecentVO2Max") or {}).get("cycling") or {}
+            most_recent_vo2 = _as_dict(status.get("mostRecentVO2Max"))
+            vo2_data = _as_dict(most_recent_vo2.get("generic"))
+            cycling_vo2_data = _as_dict(most_recent_vo2.get("cycling"))
 
             # Training load balance
-            load_balance = (status.get("mostRecentTrainingLoadBalance") or {})
-            load_map = (load_balance.get("metricsTrainingLoadBalanceDTOMap") or {})
+            load_balance = _as_dict(status.get("mostRecentTrainingLoadBalance"))
+            load_map = _as_dict(load_balance.get("metricsTrainingLoadBalanceDTOMap"))
             load_data = {}
-            for device_id, data in load_map.items():
+            for data in load_map.values():
+                if not isinstance(data, dict):
+                    continue
                 load_data = data
                 break
 

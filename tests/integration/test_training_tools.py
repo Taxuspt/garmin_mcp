@@ -263,6 +263,77 @@ async def test_get_training_status_tool(app_with_training, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_training_status_skips_null_device_entries(
+    app_with_training, mock_garmin_client
+):
+    """Test null device entries are skipped when selecting training status data."""
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "device-null": None,
+                "device-valid": {
+                    "calendarDate": "2026-08-24",
+                    "trainingStatus": "PRODUCTIVE",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 250,
+                    },
+                },
+            }
+        },
+        "mostRecentVO2Max": {
+            "generic": {"vo2MaxValue": 52.5},
+            "cycling": None,
+        },
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "device-null": None,
+                "device-valid": {"monthlyLoadAerobicLow": 100},
+            }
+        },
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["date"] == "2026-08-24"
+    assert data["training_status"] == "PRODUCTIVE"
+    assert data["acute_load"] == 250
+    assert data["vo2_max"] == 52.5
+    assert data["monthly_load_aerobic_low"] == 100
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_tolerates_all_null_device_maps(
+    app_with_training, mock_garmin_client
+):
+    """Test training status output contains only the requested date when maps are null."""
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {"device-null": None},
+        },
+        "mostRecentVO2Max": {
+            "generic": None,
+            "cycling": None,
+        },
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {"device-null": None},
+        },
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    assert json.loads(result[0][0].text) == {"date": "2026-08-24"}
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
 async def test_get_vo2max_trend_falls_back_to_profile(
     app_with_training, mock_garmin_client
 ):
