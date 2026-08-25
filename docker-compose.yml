@@ -10,6 +10,13 @@ services:
       - GARMIN_EMAIL=${GARMIN_EMAIL}
       - GARMIN_PASSWORD=${GARMIN_PASSWORD}
       # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
+      # Shared-token backend -- must match garmin-scale-sync/hevy2garmin-lite's
+      # TOKEN_STORE, or this service ends up on its own session and whichever
+      # refreshes second gets locked out. See ai-docs/shared-token-store.md.
+      #   file      (default) ./.garminconnect/, bind-mounted below
+      #   postgres  requires TOKEN_DB_URL
+      - TOKEN_STORE=${TOKEN_STORE:-file}
+      - TOKEN_DB_URL=${TOKEN_DB_URL:-}
 
     # Option 2: Use file-based secrets (uncomment to use)
     # environment:

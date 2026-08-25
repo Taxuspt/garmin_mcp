@@ -1,8 +1,11 @@
-# Shared token store — target design (branch 2, not yet built)
+# Shared token store — as built (branch `fix/auth-hardening`)
 
-Read this before touching anything auth-related. This document describes what
-`fix/auth-hardening` is porting in; until that branch lands, `init_api()`
-still does the naive one-shot dump/load described in `architecture.md`.
+Read this before touching anything auth-related. This describes the design
+actually delivered on `fix/auth-hardening`: `init_api()` now builds a
+`GarminSession` (`garmin_session/session.py`) backed by a `FileTokenStore`
+(`garmin_session/stores.py`), and `_GarminProxy` routes every tool call
+through it. `architecture.md`'s description of the old one-shot dump/load is
+now historical.
 
 ## Why it's needed
 
@@ -37,49 +40,90 @@ any moment, fleet-wide.
    for the original writeup and incident history — that doc's own words:
    *"This is the failure mode that took the service down daily."*)
 
-## What's being ported (branch `fix/auth-hardening`)
+## What was ported
 
 From `/Users/mr13/workspace/hevva2/src/garmin_session/` (identical copy also
-in gss), into `src/garmin_mcp/garmin_session/`:
+in gss), into `src/garmin_mcp/garmin_session/` — not a byte-for-byte copy,
+adapted where this repo's garminconnect version (0.3.2) differs (see
+`errors.py` and `ai-docs/RAG.md`):
 
-- **`FileTokenStore`** only — flock-based, atomic (`tmp` + `os.replace`) read
-  and write. Skipping `SqliteTokenStore`/`PostgresTokenStore` for now: this
-  server runs as a single local MCP subprocess, not a multi-host deployment.
-- **`_acquire()`** — re-reads the store before use; if the blob differs from
-  what we last synced, a peer rotated, so drop our client and rebuild from the
-  current token instead of trusting stale in-memory state.
-- **`client()`** context manager — read-before-use, then publish-after-use (if
-  our own `dumps()` differs from what we last synced, we rotated — write it
-  back so peers adopt it), and **never publish on auth failure** (a dropped
-  client is not republished, so a rejected token can't overwrite a peer's good
-  one).
-- **`_credential_login()`** fallback — same idea as `init_api()`'s current
-  fallback, reworked to go through the shared store instead of a private
-  token dir.
-- **`_write_scratch()`** — the library never sees the shared path directly.
-  Tokens get materialized into a private scratch directory before
-  `Garmin.login()` receives them, so `garminconnect`'s own internal
-  `_refresh_session()` dump goes somewhere harmless. `garmin_session` remains
-  the only writer to the shared store.
+- **`FileTokenStore`** only (`stores.py`) — flock-based, atomic (`tmp` +
+  `os.replace`) read and write. `SqliteTokenStore`/`PostgresTokenStore` were
+  not ported: this server runs as a single local MCP subprocess, not a
+  multi-host deployment (see "Path / backend compatibility" below).
+- **`GarminSession`** (`session.py`) — `_acquire()` re-reads the store before
+  use and adopts a peer's rotation; `client()` context manager does
+  read-before-use then publish-after-use, and never publishes on an auth
+  failure (a dropped client is not republished, so a rejected token can't
+  overwrite a peer's good one); `_credential_login()` and `_write_scratch()`
+  keep the library's own token dump away from the shared store, same as the
+  sibling module.
 
-Depends on **typed 401 detection** landing first (same branch, built first):
-`_GarminProxy`'s current `isinstance`-based classification can't tell a 401
-from a generic connection failure (see above), and `garmin_session`'s
-invalidate-on-auth-failure logic needs to know the difference to decide
-whether it's safe to keep the client.
+## How `init_api()` and `_GarminProxy` use it
 
-## Path / backend compatibility with the rest of the fleet
+`init_api()` (`__init__.py`) builds one `FileTokenStore(tokenstore)` and one
+`GarminSession` at startup, calls `session.warm()` to fail fast with the same
+clear stderr messages the old code had, and returns the `GarminSession`
+itself (not a raw client) — or `None` on failure, unchanged contract.
 
-gss's `.env.example` documents the fleet default: `TOKEN_STORE=file`, path
-`$DATA_DIR/.garminconnect/garmin_tokens.json` — the same JSON shape this
-server already reads/writes at `~/.garminconnect/garmin_tokens.json`
-(`token_utils.get_token_path()`). **If this server and the other services run
-on the same host, point this server's store at the same directory the others
-use, or it just becomes a fifth independent holder of a token that goes stale
-the same way.** If they run on different hosts, `file` doesn't solve
-cross-host sharing at all — that needs `sqlite` (same-host only, unreliable
-over network filesystems) or `postgres` (works across hosts, requires
-`TOKEN_DB_URL`). This fork-hardening plan only builds the `file` backend;
-cross-host sharing is out of scope until the actual deployment topology
-(same box as gss/hevy2garmin-lite, or not) is confirmed. Don't assume same-host
-without checking.
+`_GarminProxy.__init__` now takes that session, not a bare client.
+**Every** attribute access calls `session.acquire()` first — re-reads the
+store, adopts a peer's rotation — before resolving the requested attribute,
+so a token rotated by another process is picked up on the very next tool
+call rather than leaving a rejected client cached until a restart. On a
+successful call it publishes any rotation this process performed; on a
+`GarminConnectAuthenticationError` specifically (not a rate limit or generic
+connection error — those don't mean the client itself is bad) it invalidates
+the session before re-raising the relabeled exception.
+
+**The `.client` bypass is also covered — not deferred.** Several tool modules
+(`activity_management`, `courses`, `nutrition`, `workouts`,
+`workout_builders`) reach past `Garmin` into the raw `garmin.client`
+sub-object for HTTP verbs not exposed at the higher level
+(`garmin_client.client.put(...)`, `.post(...)`, `.delete(...)`,
+`.connectapi(...)`) — undocumented Garmin Connect endpoints, the same reason
+`hevy2garmin-lite`'s `push.py` does the exact same thing
+(`client.client.put("connectapi", ...)`, confirmed by reading that file
+directly). Their fix was manual: every call site wrapped by hand in
+`try/except GarminConnectAuthenticationError: reset_garmin_client()` plus a
+`finally: publish_garmin_tokens()` — `GarminSession.acquire()`'s documented
+"long-running operation" pattern, where the caller takes on the
+publish/invalidate obligation itself.
+
+That doesn't scale to garmin_mcp's ~19 bypass call sites across 5 files the
+way it does to hevy2garmin-lite's 2 in one file, so instead `_GarminProxy`
+special-cases `name == "client"` and hands back a `_ClientProxy` — a second,
+structurally identical proxy wrapping the raw `Client` object with the exact
+same `_session_protected_call()` helper `_GarminProxy` uses for Garmin's own
+methods. One place closes it for all 19 call sites automatically, rather
+than requiring each to remember the manual pattern. Covered by
+`tests/unit/test_garmin_proxy.py`'s `test_client_*` cases.
+
+## Backend: `postgres`, matching gss's real deployment
+
+`gss`'s `.env.example` documents `file` as the fleet default, but its
+**actual live `.env` runs `TOKEN_STORE=postgres`** against a shared Neon
+database — checked directly, not assumed. `hevy2garmin-lite`'s live `.env`
+is still on `file` (its own `config.py` comment says this "MUST match
+garmin-scale-sync's TOKEN_STORE setting" — it currently doesn't; that's a
+pre-existing drift between those two projects, not something this branch
+caused or fixes).
+
+Given gss — the project with the actual incident history this whole design
+exists to prevent — is the one that migrated, `postgres` is the fleet's real
+current source of truth. `PostgresTokenStore` (`stores.py`) was ported
+alongside `FileTokenStore`, both selectable via `_build_token_store()`
+(`__init__.py`) reading `TOKEN_STORE` (`file` default, `postgres` requires
+`TOKEN_DB_URL`) — same env var names and selection logic as gss/hevy2garmin-
+lite's own `_build_token_store()`. `SqliteTokenStore` wasn't ported; nothing
+in this fleet uses it.
+
+This deployment's `.env` now points `TOKEN_DB_URL` at the same Neon database
+gss uses. **Verified live**, not just unit-tested: `_build_token_store()`
+correctly selects `PostgresTokenStore`, connects, and a read-only `load()`
+returned gss's actual current token (`di_token`/`di_refresh_token` both
+present). Ran the real `garmin-mcp` entrypoint end to end against it —
+`init_api()` → `session.warm()` succeeded using the stored token (no
+credential login needed), every tool module initialized, clean exit. No
+`save()` was called during verification, so nothing was written to the
+shared store outside of `GarminSession`'s own normal publish-on-rotation path.

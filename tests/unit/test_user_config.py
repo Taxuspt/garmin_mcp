@@ -7,7 +7,6 @@ import pytest
 from garmin_mcp import (
     _normalize_optional_user_config,
     init_api,
-    tokenstore,
 )
 
 
@@ -29,9 +28,9 @@ def test_real_value_containing_template_syntax_is_preserved():
 
 
 @patch("garmin_mcp.is_interactive_terminal", return_value=False)
-@patch("garmin_mcp.Garmin")
-def test_unresolved_credentials_do_not_trigger_login(mock_garmin, _mock_terminal):
-    mock_garmin.return_value.login.side_effect = FileNotFoundError
+@patch("garmin_mcp.GarminSession")
+def test_unresolved_credentials_do_not_trigger_login(mock_session_cls, _mock_terminal):
+    mock_session_cls.return_value.has_stored_tokens.return_value = False
 
     result = init_api(
         "${user_config.garmin_email}",
@@ -39,5 +38,9 @@ def test_unresolved_credentials_do_not_trigger_login(mock_garmin, _mock_terminal
     )
 
     assert result is None
-    mock_garmin.assert_called_once_with(is_cn=False)
-    mock_garmin.return_value.login.assert_called_once_with(tokenstore)
+    mock_session_cls.return_value.warm.assert_not_called()
+    # The literal placeholder strings must have been normalized to None
+    # before reaching the session -- not passed through as real credentials.
+    _, kwargs = mock_session_cls.call_args
+    assert kwargs["email"] is None
+    assert kwargs["password"] is None
