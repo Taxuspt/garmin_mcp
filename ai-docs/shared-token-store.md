@@ -1,8 +1,11 @@
-# Shared token store — target design (branch 2, not yet built)
+# Shared token store — as built (branch `fix/auth-hardening`)
 
-Read this before touching anything auth-related. This document describes what
-`fix/auth-hardening` is porting in; until that branch lands, `init_api()`
-still does the naive one-shot dump/load described in `architecture.md`.
+Read this before touching anything auth-related. This describes the design
+actually delivered on `fix/auth-hardening`: `init_api()` now builds a
+`GarminSession` (`garmin_session/session.py`) backed by a `FileTokenStore`
+(`garmin_session/stores.py`), and `_GarminProxy` routes every tool call
+through it. `architecture.md`'s description of the old one-shot dump/load is
+now historical.
 
 ## Why it's needed
 
@@ -37,36 +40,59 @@ any moment, fleet-wide.
    for the original writeup and incident history — that doc's own words:
    *"This is the failure mode that took the service down daily."*)
 
-## What's being ported (branch `fix/auth-hardening`)
+## What was ported
 
 From `/Users/mr13/workspace/hevva2/src/garmin_session/` (identical copy also
-in gss), into `src/garmin_mcp/garmin_session/`:
+in gss), into `src/garmin_mcp/garmin_session/` — not a byte-for-byte copy,
+adapted where this repo's garminconnect version (0.3.2) differs (see
+`errors.py` and `ai-docs/RAG.md`):
 
-- **`FileTokenStore`** only — flock-based, atomic (`tmp` + `os.replace`) read
-  and write. Skipping `SqliteTokenStore`/`PostgresTokenStore` for now: this
-  server runs as a single local MCP subprocess, not a multi-host deployment.
-- **`_acquire()`** — re-reads the store before use; if the blob differs from
-  what we last synced, a peer rotated, so drop our client and rebuild from the
-  current token instead of trusting stale in-memory state.
-- **`client()`** context manager — read-before-use, then publish-after-use (if
-  our own `dumps()` differs from what we last synced, we rotated — write it
-  back so peers adopt it), and **never publish on auth failure** (a dropped
-  client is not republished, so a rejected token can't overwrite a peer's good
-  one).
-- **`_credential_login()`** fallback — same idea as `init_api()`'s current
-  fallback, reworked to go through the shared store instead of a private
-  token dir.
-- **`_write_scratch()`** — the library never sees the shared path directly.
-  Tokens get materialized into a private scratch directory before
-  `Garmin.login()` receives them, so `garminconnect`'s own internal
-  `_refresh_session()` dump goes somewhere harmless. `garmin_session` remains
-  the only writer to the shared store.
+- **`FileTokenStore`** only (`stores.py`) — flock-based, atomic (`tmp` +
+  `os.replace`) read and write. `SqliteTokenStore`/`PostgresTokenStore` were
+  not ported: this server runs as a single local MCP subprocess, not a
+  multi-host deployment (see "Path / backend compatibility" below).
+- **`GarminSession`** (`session.py`) — `_acquire()` re-reads the store before
+  use and adopts a peer's rotation; `client()` context manager does
+  read-before-use then publish-after-use, and never publishes on an auth
+  failure (a dropped client is not republished, so a rejected token can't
+  overwrite a peer's good one); `_credential_login()` and `_write_scratch()`
+  keep the library's own token dump away from the shared store, same as the
+  sibling module.
 
-Depends on **typed 401 detection** landing first (same branch, built first):
-`_GarminProxy`'s current `isinstance`-based classification can't tell a 401
-from a generic connection failure (see above), and `garmin_session`'s
-invalidate-on-auth-failure logic needs to know the difference to decide
-whether it's safe to keep the client.
+## How `init_api()` and `_GarminProxy` use it
+
+`init_api()` (`__init__.py`) builds one `FileTokenStore(tokenstore)` and one
+`GarminSession` at startup, calls `session.warm()` to fail fast with the same
+clear stderr messages the old code had, and returns the `GarminSession`
+itself (not a raw client) — or `None` on failure, unchanged contract.
+
+`_GarminProxy.__init__` now takes that session, not a bare client.
+**Every** attribute access calls `session.acquire()` first — re-reads the
+store, adopts a peer's rotation — before resolving the requested attribute,
+so a token rotated by another process is picked up on the very next tool
+call rather than leaving a rejected client cached until a restart. On a
+successful call it publishes any rotation this process performed; on a
+`GarminConnectAuthenticationError` specifically (not a rate limit or generic
+connection error — those don't mean the client itself is bad) it invalidates
+the session before re-raising the relabeled exception.
+
+**Documented scope boundary:** several tool modules (`activity_management`,
+`courses`, `nutrition`, `workouts`, `workout_builders`) reach past `Garmin`
+into the raw `garmin.client` sub-object for HTTP verbs not exposed at the
+higher level (`garmin_client.client.put(...)`, `.post(...)`, `.delete(...)`,
+`.connectapi(...)`). `_GarminProxy` returns that raw sub-object as-is (so
+those call sites keep working unchanged), which means calls made through it
+bypass the publish-after/invalidate-on-failure wrapping described above.
+They still get the `session.acquire()` re-validation on the way in (so a
+peer's prior rotation is still adopted before the chain proceeds), and
+still get correct typed-401 classification (that's installed at the
+`Client` class level, independent of which proxy path is used) — the only
+gap is that an auth failure *inside* one of those bypass calls doesn't
+immediately drop the cached session client the way a failure through
+`_GarminProxy`'s own wrapped calls does. Closing this fully would mean
+wrapping `.client`'s own methods the same way; deferred as a documented,
+deliberate trade-off rather than built speculatively for a path used by a
+minority of tool calls.
 
 ## Path / backend compatibility with the rest of the fleet
 

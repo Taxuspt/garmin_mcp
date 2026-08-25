@@ -4,15 +4,16 @@ Modular MCP Server for Garmin Connect Data
 
 import os
 import sys
-import base64
+from pathlib import Path
 
 import requests
 from mcp.server.fastmcp import FastMCP
 
-from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
+from garminconnect import GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
 # Import all modules
 from garmin_mcp import token_utils
+from garmin_mcp.garmin_session import FileTokenStore, GarminSession
 from garmin_mcp.garmin_session import errors as _auth_errors
 from garmin_mcp import activity_management
 from garmin_mcp import health_wellness
@@ -94,6 +95,11 @@ tokenstore = token_utils.get_token_path()
 tokenstore_base64 = token_utils.get_token_base64_path()
 is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
+# Private materialisation dir for garmin_session -- never the shared
+# tokenstore itself, so garminconnect's internal dump-on-refresh can't write
+# outside the store's lock discipline. See ai-docs/shared-token-store.md.
+_scratch_dir = Path(tokenstore).parent / ".garmin_mcp_scratch"
+
 
 # --- Tool filtering ---------------------------------------------------------
 # Optionally expose only a subset of tools, to reduce the context an LLM must
@@ -115,12 +121,27 @@ _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
 
 class _GarminProxy:
-    """Wraps the Garmin client to translate known runtime exceptions into clear messages.
+    """Wraps a GarminSession, translating known runtime exceptions into clear
+    messages and keeping every tool call rotation-safe.
 
-    Without this, token expiry or rate-limiting during a tool call surfaces raw
-    library tracebacks to the MCP client. The proxy intercepts each attribute
-    access and, if the result is callable, wraps the call so that known Garmin
-    exceptions become user-friendly strings rather than server errors.
+    Without the message translation, token expiry or rate-limiting during a
+    tool call surfaces raw library tracebacks to the MCP client. Without the
+    session lifecycle, a token rotated by a peer service leaves this process
+    holding a rejected client until it's restarted by hand -- see
+    ai-docs/shared-token-store.md.
+
+    Each attribute access resolves the *current* client via
+    ``session.acquire()`` (re-reads the shared store, adopts a peer's
+    rotation), rather than a client captured once at startup. Non-callable
+    attributes -- including ``garmin.client``, the raw garminconnect Client
+    object several tool modules dot into directly for HTTP verbs not exposed
+    on Garmin itself -- are returned as-is, so every existing call pattern
+    (``garmin_client.client.put(...)``, plain string attributes) keeps
+    working unchanged. Calls made through that raw ``.client`` bypass this
+    class's publish/invalidate wrapping below; that's a deliberate, documented
+    scope boundary (see ai-docs/shared-token-store.md), not an oversight --
+    they still benefit from the acquire() re-validation on the way in, and
+    from garmin_session/errors.py's typed-401 detection either way.
     """
 
     _MESSAGES = {
@@ -136,24 +157,34 @@ class _GarminProxy:
         ),
     }
 
-    def __init__(self, client):
-        self._client = client
+    def __init__(self, session):
+        self._session = session
 
     def __getattr__(self, name):
-        attr = getattr(self._client, name)
+        garmin = self._session.acquire()
+        attr = getattr(garmin, name)
         if not callable(attr):
             return attr
 
         def _call(*args, **kwargs):
             try:
-                return attr(*args, **kwargs)
+                result = attr(*args, **kwargs)
             except tuple(self._MESSAGES) as exc:
+                if isinstance(exc, GarminConnectAuthenticationError):
+                    # Only a real auth rejection means the client itself is
+                    # bad -- a rate limit or network blip doesn't, and
+                    # dropping the cache for those would force a needless
+                    # re-login (and more rate limiting) on the next call.
+                    self._session.invalidate()
                 for exc_type, msg in self._MESSAGES.items():
                     if isinstance(exc, exc_type):
                         error_details = str(exc)
                         full_msg = f"{msg} (Details: {error_details})" if error_details else msg
                         raise type(exc)(full_msg) from None
                 raise
+            else:
+                self._session.publish()
+                return result
 
         return _call
 
@@ -222,7 +253,16 @@ class _ToolFilter:
 
 
 def init_api(email, password):
-    """Initialize Garmin API with your credentials."""
+    """Build a rotation-safe Garmin session and log in once to fail fast.
+
+    Returns:
+        GarminSession | None: None on any login failure (a clear message has
+        already been printed to stderr) -- the process then exits the same
+        way it always has. On success, every subsequent tool call re-reads
+        the shared token store instead of trusting an in-memory copy that a
+        peer service (garmin-scale-sync, hevy2garmin-lite) may have rotated
+        away -- see ai-docs/shared-token-store.md and _GarminProxy.
+    """
     import io
 
     # Reclassify a real HTTP 401 as GarminConnectAuthenticationError instead
@@ -237,147 +277,95 @@ def init_api(email, password):
     email = _normalize_optional_user_config(email, "garmin_email")
     password = _normalize_optional_user_config(password, "garmin_password")
 
-    try:
-        # Using Oauth1 and OAuth2 token files from directory
+    store = FileTokenStore(tokenstore)
+    session = GarminSession(
+        store=store,
+        scratch_dir=_scratch_dir,
+        email=email,
+        password=password,
+        prompt_mfa=get_mfa,
+        is_cn=is_cn,
+    )
+
+    if not session.has_stored_tokens() and not is_interactive_terminal() and (not email or not password):
         print(
-            f"Trying to login to Garmin Connect using token data from directory '{tokenstore}'...\n",
+            "ERROR: OAuth tokens not found and no interactive terminal available.\n"
+            "Please authenticate first:\n"
+            "  1. Run: garmin-mcp-auth\n"
+            "  2. Enter your credentials and MFA code\n"
+            "  3. Restart your MCP client\n"
+            f"Tokens will be saved to: {tokenstore}\n",
             file=sys.stderr,
         )
+        return None
 
-        # Using Oauth1 and Oauth2 tokens from base64 encoded string
-        # print(
-        #     f"Trying to login to Garmin Connect using token data from file '{tokenstore_base64}'...\n"
-        # )
-        # dir_path = os.path.expanduser(tokenstore_base64)
-        # with open(dir_path, "r") as token_file:
-        #     tokenstore = token_file.read()
+    print(
+        f"Trying to log in to Garmin Connect (shared token store: '{tokenstore}')...\n",
+        file=sys.stderr,
+    )
 
-        # Suppress stderr AND stdout during token validation.
-        # garminconnect may print progress dots (e.g. ".") to stdout; any write
-        # to stdout before the MCP server starts corrupts the JSON-RPC framing.
-        old_stderr = sys.stderr
-        old_stdout = sys.stdout
-        sys.stderr = io.StringIO()
-        sys.stdout = io.StringIO()
+    # Suppress stderr AND stdout during login. garminconnect may print
+    # progress dots (e.g. ".") to stdout; any write to stdout before the MCP
+    # server starts corrupts the JSON-RPC framing.
+    old_stderr = sys.stderr
+    old_stdout = sys.stdout
+    sys.stderr = io.StringIO()
+    sys.stdout = io.StringIO()
+    try:
+        session.warm()
+    except (
+        FileNotFoundError,
+        GarminConnectConnectionError,
+        GarminConnectTooManyRequestsError,
+        GarminConnectAuthenticationError,
+        requests.exceptions.HTTPError,
+        RuntimeError,
+    ) as err:
+        sys.stderr, sys.stdout = old_stderr, old_stdout
 
-        try:
-            garmin = Garmin(is_cn=is_cn)
-            garmin.login(tokenstore)
-        finally:
-            sys.stderr = old_stderr
-            sys.stdout = old_stdout
-
-    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
-        # Session is expired. You'll need to log in again
-
-        # Check if we're in a non-interactive environment without credentials
-        if not is_interactive_terminal() and (not email or not password):
-            print(
-                "ERROR: OAuth tokens not found and no interactive terminal available.\n"
-                "Please authenticate first:\n"
-                "  1. Run: garmin-mcp-auth\n"
-                "  2. Enter your credentials and MFA code\n"
-                "  3. Restart your MCP client\n"
-                f"Tokens will be saved to: {tokenstore}\n",
-                file=sys.stderr,
-            )
+        if isinstance(err, RuntimeError):
+            # get_mfa() raised because we're non-interactive (no terminal to
+            # prompt for a code). It already printed its own message; fail
+            # the same clean way as every other login error instead of
+            # letting the RuntimeError propagate and crash the process.
             return None
 
-        print(
-            "Login tokens not present, login with your Garmin Connect credentials to generate them.\n"
-            f"They will be stored in '{tokenstore}' for future use.\n",
-            file=sys.stderr,
-        )
-        try:
-            garmin = Garmin(
-                email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True
-            )
-            # Suppress stdout so library progress dots don't corrupt MCP framing.
-            _saved_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            try:
-                result1, result2 = garmin.login()
-            finally:
-                sys.stdout = _saved_stdout
-            if result1 == "needs_mfa":
-                mfa_code = get_mfa()
-                garmin.resume_login(result2, mfa_code)
-            # Save Oauth1 and Oauth2 token files to directory for next login
-            garmin.client.dump(tokenstore)
-            # Restrict the freshly written tokens to owner-only. These are
-            # ~6-month bearer credentials; the default umask would otherwise
-            # leave them world-readable on multi-user hosts.
-            token_utils.secure_token_dir(tokenstore)
-            print(
-                f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n",
-                file=sys.stderr,
-            )
-            # Encode Oauth1 and Oauth2 tokens to base64 string and save to file for next login (alternative way)
-            token_json_path = os.path.join(tokenstore, "garmin_tokens.json")
-            with open(token_json_path, "r") as f:
-                token_data = f.read()
-            token_base64 = base64.b64encode(token_data.encode()).decode()
-            with open(tokenstore_base64, "w") as token_file:
-                token_file.write(token_base64)
-            os.chmod(tokenstore_base64, 0o600)
-            print(
-                f"Oauth tokens encoded as base64 string and saved to '{tokenstore_base64}' file for future use. (second method)\n",
-                file=sys.stderr,
-            )
-        except (
-            FileNotFoundError,
-            GarminConnectConnectionError,
-            GarminConnectTooManyRequestsError,
-            GarminConnectAuthenticationError,
-            requests.exceptions.HTTPError,
-            RuntimeError,
-        ) as err:
-            if isinstance(err, RuntimeError):
-                # get_mfa() raised because we're non-interactive (no terminal
-                # to prompt for a code). It already printed its own message;
-                # fail the same clean way as every other login error instead
-                # of letting the RuntimeError propagate and crash the process.
-                return None
+        error_msg = str(err)
+        print("\nAuthentication failed.", file=sys.stderr)
 
-            error_msg = str(err)
-
-            # Provide clean, actionable error messages
-            print("\nAuthentication failed.", file=sys.stderr)
-
-            if isinstance(err, GarminConnectAuthenticationError):
-                if "MFA" in error_msg or "code" in error_msg.lower():
-                    print("MFA code may be incorrect or expired.", file=sys.stderr)
-                else:
-                    print("Invalid email or password.", file=sys.stderr)
-            elif isinstance(err, GarminConnectTooManyRequestsError):
+        if isinstance(err, GarminConnectAuthenticationError):
+            if "MFA" in error_msg or "code" in error_msg.lower():
+                print("MFA code may be incorrect or expired.", file=sys.stderr)
+            else:
+                print("Invalid email or password.", file=sys.stderr)
+        elif isinstance(err, GarminConnectTooManyRequestsError):
+            print("Too many requests. Please wait and try again.", file=sys.stderr)
+        elif isinstance(err, GarminConnectConnectionError):
+            if "401" in error_msg or "Unauthorized" in error_msg:
                 print(
-                    "Too many requests. Please wait and try again.", file=sys.stderr
+                    "Invalid credentials. Please check your email and password.",
+                    file=sys.stderr,
                 )
-            elif isinstance(err, GarminConnectConnectionError):
-                if "401" in error_msg or "Unauthorized" in error_msg:
-                    print(
-                        "Invalid credentials. Please check your email and password.",
-                        file=sys.stderr,
-                    )
-                elif "500" in error_msg or "503" in error_msg:
-                    print(
-                        "Garmin Connect service issue. Please try again later.",
-                        file=sys.stderr,
-                    )
-                else:
-                    print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
-            elif isinstance(err, requests.exceptions.HTTPError):
-                print("Network error. Please check your connection.", file=sys.stderr)
+            elif "500" in error_msg or "503" in error_msg:
+                print("Garmin Connect service issue. Please try again later.", file=sys.stderr)
             else:
                 print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
+        elif isinstance(err, requests.exceptions.HTTPError):
+            print("Network error. Please check your connection.", file=sys.stderr)
+        else:
+            print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
 
-            print(
-                f"\nTip: Run 'garmin-mcp-auth' to authenticate interactively.",
-                file=sys.stderr,
-            )
-            return None
+        print("\nTip: Run 'garmin-mcp-auth' to authenticate interactively.", file=sys.stderr)
+        return None
+    else:
+        sys.stderr, sys.stdout = old_stderr, old_stdout
 
-    return garmin
+    # Restrict the shared tokens to owner-only. These are ~6-month bearer
+    # credentials; the default umask would otherwise leave them
+    # world-readable on multi-user hosts.
+    token_utils.secure_token_dir(tokenstore)
+    print("Garmin session established.\n", file=sys.stderr)
+    return session
 
 
 def main():
