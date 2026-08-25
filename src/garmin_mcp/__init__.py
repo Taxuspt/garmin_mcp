@@ -323,7 +323,15 @@ def init_api(email, password):
             GarminConnectTooManyRequestsError,
             GarminConnectAuthenticationError,
             requests.exceptions.HTTPError,
+            RuntimeError,
         ) as err:
+            if isinstance(err, RuntimeError):
+                # get_mfa() raised because we're non-interactive (no terminal
+                # to prompt for a code). It already printed its own message;
+                # fail the same clean way as every other login error instead
+                # of letting the RuntimeError propagate and crash the process.
+                return None
+
             error_msg = str(err)
 
             # Provide clean, actionable error messages
