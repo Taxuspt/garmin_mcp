@@ -995,6 +995,160 @@ def register_tools(app):
         return json.dumps(result, indent=2)
 
     @app.tool()
+    async def get_running_tolerance(
+        start_date: str, end_date: str, aggregation: str = "weekly"
+    ) -> str:
+        """Get Garmin's Running Tolerance — how much running this athlete's body
+        currently absorbs, fitted to their own history.
+
+        Tolerance is expressed in Garmin's impact-load units, not kilometres, and
+        is compared against the impact load actually accumulated. Unlike a rolling
+        maximum, tolerance **decays when running stops**, so it stays meaningful
+        after a break.
+
+        aggregation="weekly" returns one row per week with the week's total
+        distance, total impact load and the tolerance that applied.
+        aggregation="daily" returns the trailing-7-day (acute) load against the
+        acute tolerance, plus Garmin's own verdict in
+        running_tolerance_feedback — values such as ABOVE_TOLERANCE,
+        ABOVE_TOLERANCE_ONE_HARD_RUN, HIGH_LOAD, MEDIUM_LOAD, LOW_LOAD_7DAYS.
+
+        pct_of_tolerance is computed here as load / tolerance * 100; above 100
+        means the athlete is over their current tolerance.
+
+        This is a proprietary Firstbeat metric with no published validation.
+        Treat it as a personalised reference, not as an established threshold.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            aggregation: "weekly" (default) or "daily"
+        """
+        if aggregation not in ("weekly", "daily"):
+            return f"Invalid aggregation '{aggregation}': expected 'weekly' or 'daily'."
+        try:
+            data = garmin_client.get_running_tolerance(
+                start_date, end_date, aggregation=aggregation
+            )
+        except Exception as e:
+            return f"Error retrieving running tolerance: {str(e)}"
+
+        if not isinstance(data, list) or not data:
+            return f"No running tolerance data found between {start_date} and {end_date}."
+
+        def _pct(load: Any, tolerance: Any) -> Optional[int]:
+            if not isinstance(load, (int, float)) or not isinstance(tolerance, (int, float)):
+                return None
+            if not tolerance:
+                return None
+            return round(load / tolerance * 100)
+
+        entries = []
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            if aggregation == "weekly":
+                load = row.get("totalImpactLoad")
+                tolerance = row.get("tolerance")
+                distance = row.get("totalDistance")
+                entry: Dict[str, Any] = {
+                    "week_of": row.get("startOfWeek"),
+                    "week_end": row.get("endOfWeek"),
+                }
+            else:
+                load = row.get("acuteImpactLoad")
+                tolerance = row.get("acuteTolerance")
+                distance = row.get("acuteDistance")
+                entry = {"date": row.get("calendarDate")}
+                feedback = row.get("runningToleranceFeedBackPhrase")
+                if feedback:
+                    entry["running_tolerance_feedback"] = feedback
+
+            if isinstance(distance, (int, float)):
+                entry["distance_km"] = round(distance / 1000.0, 2)
+            if load is not None:
+                entry["impact_load"] = load
+            if tolerance is not None:
+                entry["tolerance"] = tolerance
+            pct = _pct(load, tolerance)
+            if pct is not None:
+                entry["pct_of_tolerance"] = pct
+            entries.append(entry)
+
+        key = "week_of" if aggregation == "weekly" else "date"
+        entries.sort(key=lambda e: e.get(key) or "")
+
+        return json.dumps(
+            {
+                "aggregation": aggregation,
+                "date_range": {"start": start_date, "end": end_date},
+                "count": len(entries),
+                "entries": entries,
+            },
+            indent=2,
+        )
+
+    @app.tool()
+    async def get_acclimation(date: str) -> str:
+        """Get heat and altitude acclimation status.
+
+        Garmin tracks how adapted the athlete currently is to training in heat
+        and at altitude. heat_acclimation_percent runs 0-100 and decays without
+        continued exposure, so it is the direct measurement behind advice to keep
+        training outdoors before a warm-weather race.
+
+        heat_trend reports Garmin's own label, such as ACCLIMATIZED. The
+        `previous_*` fields are the prior reading, which makes the direction of
+        travel visible without a second call.
+
+        VO2 max is not returned here; use get_training_status or
+        get_vo2max_trend.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            data = garmin_client.get_max_metrics(date)
+        except Exception as e:
+            return f"Error retrieving acclimation data: {str(e)}"
+
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict):
+            return f"No acclimation data found for {date}."
+
+        acc = data.get("heatAltitudeAcclimation") or {}
+        if not acc:
+            return (
+                f"No acclimation data found for {date}. Garmin populates this only "
+                "after outdoor activities in heat or at altitude."
+            )
+
+        result: Dict[str, Any] = {"date": acc.get("calendarDate", date)}
+
+        for out_key, in_key in (
+            ("heat_acclimation_percent", "heatAcclimationPercentage"),
+            ("previous_heat_acclimation_percent", "previousHeatAcclimationPercentage"),
+            ("heat_trend", "heatTrend"),
+            ("heat_acclimation_date", "heatAcclimationDate"),
+            ("previous_heat_acclimation_date", "previousHeatAcclimationDate"),
+            ("altitude_acclimation_meters", "altitudeAcclimation"),
+            ("previous_altitude_acclimation_meters", "previousAltitudeAcclimation"),
+            ("altitude_trend", "altitudeTrend"),
+            ("current_altitude_meters", "currentAltitude"),
+        ):
+            value = acc.get(in_key)
+            if value is not None:
+                result[out_key] = value
+
+        heat = result.get("heat_acclimation_percent")
+        prev = result.get("previous_heat_acclimation_percent")
+        if isinstance(heat, (int, float)) and isinstance(prev, (int, float)):
+            result["heat_acclimation_change"] = heat - prev
+
+        return json.dumps(result, indent=2)
+
+    @app.tool()
     async def get_hrv_trend(start_date: str, end_date: str) -> str:
         """Get HRV (Heart Rate Variability) trend over a date range.
 
