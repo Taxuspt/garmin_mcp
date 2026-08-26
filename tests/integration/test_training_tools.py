@@ -307,6 +307,44 @@ async def test_get_training_status_skips_null_device_entries(
 
 
 @pytest.mark.asyncio
+async def test_get_training_status_skips_empty_device_entries(
+    app_with_training, mock_garmin_client
+):
+    """Test empty device entries are skipped when selecting training status data."""
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "device-empty": {},
+                "device-valid": {
+                    "calendarDate": "2026-08-24",
+                    "trainingStatus": "PRODUCTIVE",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 250,
+                    },
+                },
+            }
+        },
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "device-empty": {},
+                "device-valid": {"monthlyLoadAerobicLow": 100},
+            }
+        },
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["training_status"] == "PRODUCTIVE"
+    assert data["acute_load"] == 250
+    assert data["monthly_load_aerobic_low"] == 100
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
 async def test_get_training_status_tolerates_all_null_device_maps(
     app_with_training, mock_garmin_client
 ):

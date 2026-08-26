@@ -586,7 +586,7 @@ def register_tools(app):
             # Get first device data (usually the primary device)
             device_data = {}
             for data in latest_data.values():
-                if not isinstance(data, dict):
+                if not isinstance(data, dict) or not data:
                     continue
                 device_data = data
                 break
@@ -603,7 +603,7 @@ def register_tools(app):
             load_map = _as_dict(load_balance.get("metricsTrainingLoadBalanceDTOMap"))
             load_data = {}
             for data in load_map.values():
-                if not isinstance(data, dict):
+                if not isinstance(data, dict) or not data:
                     continue
                 load_data = data
                 break
