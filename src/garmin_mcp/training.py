@@ -287,7 +287,11 @@ def register_tools(app):
             activity_type_mapping = _get_activity_type_mapping()
 
             # Extract the current endurance score DTO
-            score_dto = endurance_data.get("enduranceScoreDTO", {})
+            # `or {}` rather than a .get default: Garmin sends an explicit
+            # null for sections the user has no data in, and a default only
+            # applies when the key is absent. Same pattern already used for
+            # mostRecentTrainingLoadBalance in get_training_load_balance.
+            score_dto = endurance_data.get("enduranceScoreDTO") or {}
 
             # Map classification number to label
             classification_labels = {
