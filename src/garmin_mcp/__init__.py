@@ -464,6 +464,13 @@ def main():
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
 
+    # Garmin login (init_api) runs on a background thread below so it can't
+    # block the MCP handshake (issue #255). That thread may still emit
+    # stray writes to stdout; route sys.stdout so only this thread's writes
+    # reach the real stream, protecting the JSON-RPC framing this thread
+    # writes once app.run() starts.
+    sys.stdout = _ThreadFilteredStream(sys.stdout, threading.current_thread())
+
     # --- Transport configuration --------------------------------------------
     # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
     # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.
@@ -476,16 +483,13 @@ def main():
         print(str(exc), file=sys.stderr)
         sys.exit(1)
 
-    # Initialize Garmin client
-    garmin_client = init_api(email, password)
-    if not garmin_client:
-        print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
-        return
-
-    print("Garmin Connect client initialized successfully.", file=sys.stderr)
-
-    # Wrap client so runtime auth/rate-limit errors surface as clear messages
-    garmin_client = _GarminProxy(garmin_client)
+    # Start Garmin login in the background so it never blocks the MCP
+    # handshake (issue #255). Tool calls block on it individually instead,
+    # through _GarminProxy -> _PendingGarminClient, once they're actually
+    # invoked.
+    pending_client = _PendingGarminClient(timeout=_resolve_call_timeout())
+    pending_client.start(lambda: init_api(email, password))
+    garmin_client = _GarminProxy(pending_client)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)
