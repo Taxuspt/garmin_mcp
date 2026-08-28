@@ -186,6 +186,68 @@ class _ThreadFilteredStream:
         return getattr(self._real_stream, name)
 
 
+class _PendingGarminClient:
+    """Stands in for the real Garmin client until a background login finishes.
+
+    Passed as the ``client`` argument to ``_GarminProxy``, so ``_GarminProxy``
+    itself needs no changes: every attribute it looks up on ``self._client``
+    comes through here first. Before login finishes, that lookup blocks (up
+    to ``timeout`` seconds, ``0``/``None`` disables the bound) instead of
+    returning immediately -- this is what lets ``main()`` call ``app.run()``
+    right away instead of waiting on Garmin login before the MCP handshake
+    can be answered (issue #255).
+    """
+
+    def __init__(self, timeout):
+        self._timeout = timeout
+        self._ready = threading.Event()
+        self._client = None
+        self._login_error = None
+
+    def start(self, login_fn):
+        """Run ``login_fn`` on a background daemon thread; store its outcome."""
+
+        def _worker():
+            try:
+                client = login_fn()
+            except BaseException as exc:  # noqa: BLE001 - stored, not raised here
+                self._login_error = exc
+            else:
+                if client is None:
+                    self._login_error = RuntimeError(
+                        "Garmin login failed. Run 'garmin-mcp-auth' to "
+                        "authenticate, then restart the server."
+                    )
+                    print(
+                        "Garmin Connect client failed to initialize (see "
+                        "errors above). Tool calls will fail until this is "
+                        "fixed; run 'garmin-mcp-auth' and restart the server.",
+                        file=sys.stderr,
+                    )
+                else:
+                    self._client = client
+                    print(
+                        "Garmin Connect client initialized successfully.",
+                        file=sys.stderr,
+                    )
+            finally:
+                self._ready.set()
+
+        threading.Thread(target=_worker, name="garmin-login", daemon=True).start()
+        return self
+
+    def __getattr__(self, name):
+        if not self._ready.wait(self._timeout if self._timeout else None):
+            raise RuntimeError(
+                f"Garmin login did not finish within {self._timeout:g}s. "
+                "Run 'garmin-mcp-auth' to verify your credentials, then "
+                "restart the server."
+            )
+        if self._login_error is not None:
+            raise self._login_error
+        return getattr(self._client, name)
+
+
 def _parse_transport_config() -> tuple[str, str, int]:
     """Read and validate HTTP transport env vars. Raises ValueError on bad input."""
     transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
