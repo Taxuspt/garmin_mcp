@@ -5,6 +5,7 @@ Modular MCP Server for Garmin Connect Data
 import os
 import sys
 import base64
+import threading
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -486,8 +487,10 @@ def main():
     # Start Garmin login in the background so it never blocks the MCP
     # handshake (issue #255). Tool calls block on it individually instead,
     # through _GarminProxy -> _PendingGarminClient, once they're actually
-    # invoked.
-    pending_client = _PendingGarminClient(timeout=_resolve_call_timeout())
+    # invoked. 90s comfortably covers a normal slow login while still
+    # failing well before a client's own initialize timeout would matter
+    # again on a later call.
+    pending_client = _PendingGarminClient(timeout=90.0)
     pending_client.start(lambda: init_api(email, password))
     garmin_client = _GarminProxy(pending_client)
 
