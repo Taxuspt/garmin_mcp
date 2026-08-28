@@ -157,6 +157,35 @@ class _GarminProxy:
         return _call
 
 
+class _ThreadFilteredStream:
+    """Wraps a stream so only ``owner_thread``'s writes reach it.
+
+    Installed as ``sys.stdout`` before the background Garmin login thread
+    starts (issue #255): the login call may still emit stray progress
+    output, and since ``sys.stdout`` is a single process-wide object, an
+    unfiltered write from that thread would land in the middle of the
+    JSON-RPC messages the main thread writes once ``app.run()`` starts,
+    corrupting the stdio framing. Writes from any other thread are silently
+    discarded, matching the previous (single-threaded) behavior of
+    swallowing that output entirely.
+    """
+
+    def __init__(self, real_stream, owner_thread):
+        self._real_stream = real_stream
+        self._owner_thread = owner_thread
+
+    def write(self, data):
+        if threading.current_thread() is self._owner_thread:
+            return self._real_stream.write(data)
+        return len(data)
+
+    def flush(self):
+        self._real_stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._real_stream, name)
+
+
 def _parse_transport_config() -> tuple[str, str, int]:
     """Read and validate HTTP transport env vars. Raises ValueError on bad input."""
     transport = os.getenv("GARMIN_MCP_TRANSPORT", "stdio").strip().lower()
