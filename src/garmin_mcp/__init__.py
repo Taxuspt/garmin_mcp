@@ -408,20 +408,21 @@ def init_api(email, password):
         # with open(dir_path, "r") as token_file:
         #     tokenstore = token_file.read()
 
-        # Suppress stderr AND stdout during token validation.
-        # garminconnect may print progress dots (e.g. ".") to stdout; any write
-        # to stdout before the MCP server starts corrupts the JSON-RPC framing.
+        # Suppress stderr during token validation to hide noisy library
+        # warnings. stdout is deliberately NOT swapped here: by the time
+        # init_api() runs, sys.stdout is a _ThreadFilteredStream installed
+        # in main() before this call's background thread was started, which
+        # already discards any stray write from this thread on its own. A
+        # second swap here would instead risk swallowing real MCP protocol
+        # output written concurrently by the server's own thread (#255).
         old_stderr = sys.stderr
-        old_stdout = sys.stdout
         sys.stderr = io.StringIO()
-        sys.stdout = io.StringIO()
 
         try:
             garmin = Garmin(is_cn=is_cn)
             garmin.login(tokenstore)
         finally:
             sys.stderr = old_stderr
-            sys.stdout = old_stdout
 
     except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
@@ -448,13 +449,10 @@ def init_api(email, password):
             garmin = Garmin(
                 email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True
             )
-            # Suppress stdout so library progress dots don't corrupt MCP framing.
-            _saved_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            try:
-                result1, result2 = garmin.login()
-            finally:
-                sys.stdout = _saved_stdout
+            # sys.stdout is a _ThreadFilteredStream (installed in main());
+            # any stray progress output from this call is already discarded
+            # without a local swap here (see the token-load path above).
+            result1, result2 = garmin.login()
             if result1 == "needs_mfa":
                 mfa_code = get_mfa()
                 garmin.resume_login(result2, mfa_code)
