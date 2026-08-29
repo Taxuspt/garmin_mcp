@@ -587,7 +587,7 @@ def register_tools(app):
             # Get first device data (usually the primary device)
             device_data = {}
             for device_id, data in latest_data.items():
-                device_data = data
+                device_data = data or {}
                 break
 
             acwr_data = (device_data.get("acuteTrainingLoadDTO") or {})
@@ -601,7 +601,7 @@ def register_tools(app):
             load_map = (load_balance.get("metricsTrainingLoadBalanceDTOMap") or {})
             load_data = {}
             for device_id, data in load_map.items():
-                load_data = data
+                load_data = data or {}
                 break
 
             # Curate to essential fields only - remove userIds

@@ -742,3 +742,77 @@ async def test_get_training_status_no_cycling_vo2_when_absent(app_with_training,
         assert "cycling_vo2_max_precise" not in data
     except (json.JSONDecodeError, AttributeError):
         assert "cycling_vo2_max" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_handles_null_device_data(app_with_training, mock_garmin_client):
+    """Test that get_training_status handles None values in device data gracefully.
+    
+    Regression test for issue #264 where 'NoneType' object has no attribute 'get'
+    was raised when Garmin API returned None for device data.
+    """
+    # Mock response with None value in latestTrainingStatusData
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "device-123456": None  # This caused the original error
+            }
+        },
+        "mostRecentVO2Max": {},
+        "mostRecentTrainingLoadBalance": {}
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2024-01-15"}
+    )
+
+    # Should not raise an exception, should return valid JSON
+    assert result is not None
+    import json
+    text = result[0][0].text if result and result[0] else str(result)
+    try:
+        data = json.loads(text)
+        # Should return an empty or minimal response without crashing
+        assert isinstance(data, dict)
+    except (json.JSONDecodeError, AttributeError):
+        # At minimum, should not contain error message about NoneType
+        assert "NoneType" not in text
+        assert "'NoneType' object has no attribute 'get'" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_handles_null_load_balance_data(app_with_training, mock_garmin_client):
+    """Test that get_training_status handles None values in load balance data gracefully."""
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "device-123456": {
+                    "calendarDate": "2024-01-15",
+                    "trainingStatus": "PRODUCTIVE"
+                }
+            }
+        },
+        "mostRecentVO2Max": {},
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "device-123456": None  # This could also cause the error
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2024-01-15"}
+    )
+
+    assert result is not None
+    import json
+    text = result[0][0].text if result and result[0] else str(result)
+    try:
+        data = json.loads(text)
+        assert isinstance(data, dict)
+        # Should have basic data from device but no load balance data
+        assert data.get("training_status") == "PRODUCTIVE"
+    except (json.JSONDecodeError, AttributeError):
+        assert "NoneType" not in text
