@@ -5,7 +5,7 @@ Training and performance functions for Garmin Connect MCP Server
 import json
 import datetime
 import math
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -1287,6 +1287,158 @@ def register_tools(app):
             "end_date": end_date,
             "days_with_data": len(trend),
             "period_avg_sleep_breaths_per_min": avg_sleep_overall,
+            "trend": trend,
+        }, indent=2)
+
+    @app.tool()
+    async def get_running_tolerance(date: str) -> str:
+        """Get Running Tolerance for a single day.
+
+        Returns Garmin's running load capacity model: how much running load the
+        athlete can currently absorb (tolerance), the intensity-adjusted load
+        their recent runs have produced (acute load), and the raw distance behind
+        that load. All three are expressed in km so they're directly comparable —
+        `load_ratio` (acute_load_km / distance_km) quantifies how much intensity
+        is inflating the cost of each kilometer run.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            data = garmin_client.get_running_tolerance(date, date, aggregation="daily")
+        except Exception as e:
+            return f"Error retrieving running tolerance data: {str(e)}"
+
+        if not data:
+            return "Your device does not support this metric."
+
+        entry = data[0]
+        tolerance = entry.get("acuteTolerance")
+        acute_load = entry.get("acuteImpactLoad")
+        distance = entry.get("acuteDistance")
+
+        curated: Dict[str, Any] = {"date": entry.get("calendarDate", date)}
+        if tolerance is not None:
+            curated["tolerance_km"] = round(tolerance / 1000, 2)
+        if acute_load is not None:
+            curated["acute_load_km"] = round(acute_load / 1000, 2)
+        if distance is not None:
+            curated["distance_km"] = round(distance / 1000, 2)
+        if acute_load is not None and distance:
+            curated["load_ratio"] = round(acute_load / distance, 2)
+        feedback = entry.get("runningToleranceFeedBackPhrase")
+        if feedback:
+            curated["feedback_phrase"] = feedback
+
+        return json.dumps(curated, indent=2)
+
+    @app.tool()
+    async def get_running_tolerance_trend(
+        start_date: str,
+        end_date: str,
+        aggregation: Literal["daily", "weekly"] = "weekly",
+    ) -> str:
+        """Get Running Tolerance trend over a date range.
+
+        Running Tolerance moves slowly — its value is in the trajectory, not any
+        single day. Returns, per period: tolerance_km (current load capacity),
+        acute_load_km (intensity-adjusted load), distance_km (actual distance
+        run), and load_ratio (acute_load_km / distance_km — how much intensity
+        inflates the cost of each kilometer). Weekly aggregation (default) gives
+        a compact multi-month view; daily gives day-to-day resolution for a
+        shorter window.
+
+        Recommended range: 4-12 weeks. Maximum: 90 days for daily aggregation,
+        366 days for weekly (this endpoint returns the whole range in one call,
+        so the limit protects output size, not request volume).
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            aggregation: "daily" or "weekly" (default "weekly")
+        """
+        try:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+        except ValueError as e:
+            return f"Invalid date format: {e}. Use YYYY-MM-DD."
+
+        days = (end - start).days + 1
+        if days < 1:
+            return "end_date must be on or after start_date."
+
+        max_days = 90 if aggregation == "daily" else 366
+        if days > max_days:
+            return (
+                f"Date range too large ({days} days). Maximum is {max_days} "
+                f"days for {aggregation} aggregation."
+            )
+
+        try:
+            data = garmin_client.get_running_tolerance(
+                start_date, end_date, aggregation=aggregation
+            )
+        except Exception as e:
+            return f"Error retrieving running tolerance trend: {str(e)}"
+
+        if not data:
+            return "Your device does not support this metric."
+
+        trend = []
+        for entry in data:
+            if aggregation == "daily":
+                tolerance = entry.get("acuteTolerance")
+                acute_load = entry.get("acuteImpactLoad")
+                distance = entry.get("acuteDistance")
+            else:
+                tolerance = entry.get("tolerance")
+                acute_load = entry.get("totalImpactLoad")
+                distance = entry.get("totalDistance")
+
+            point: Dict[str, Any] = {"date": entry.get("calendarDate")}
+            if tolerance is not None:
+                point["tolerance_km"] = round(tolerance / 1000, 2)
+            if acute_load is not None:
+                point["acute_load_km"] = round(acute_load / 1000, 2)
+            if distance is not None:
+                point["distance_km"] = round(distance / 1000, 2)
+            if acute_load is not None and distance:
+                point["load_ratio"] = round(acute_load / distance, 2)
+
+            if aggregation == "daily":
+                feedback = entry.get("runningToleranceFeedBackPhrase")
+                if feedback:
+                    point["feedback_phrase"] = feedback
+            else:
+                if entry.get("startOfWeek") is not None:
+                    point["start_of_week"] = entry.get("startOfWeek")
+                if entry.get("endOfWeek") is not None:
+                    point["end_of_week"] = entry.get("endOfWeek")
+                if entry.get("weekIndex") is not None:
+                    point["week_index"] = entry.get("weekIndex")
+
+            trend.append(point)
+
+        # The daily aggregation is not returned in chronological order by the API.
+        trend.sort(key=lambda p: p.get("date") or "")
+
+        tolerance_values = [p["tolerance_km"] for p in trend if "tolerance_km" in p]
+        first_tolerance = tolerance_values[0] if tolerance_values else None
+        latest_tolerance = tolerance_values[-1] if tolerance_values else None
+        change = (
+            round(latest_tolerance - first_tolerance, 2)
+            if first_tolerance is not None and latest_tolerance is not None
+            else None
+        )
+
+        return json.dumps({
+            "start_date": start_date,
+            "end_date": end_date,
+            "aggregation": aggregation,
+            "data_points": len(trend),
+            "first_tolerance_km": first_tolerance,
+            "latest_tolerance_km": latest_tolerance,
+            "tolerance_change_km": change,
             "trend": trend,
         }, indent=2)
 
