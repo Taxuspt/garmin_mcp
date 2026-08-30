@@ -749,11 +749,28 @@ async def test_get_lactate_threshold_tool_latest(app_with_training, mock_garmin_
 
     # Verify output structure
     data = json.loads(result[0][0].text)
-    assert data["lactate_threshold_speed_mps"] == 0.32222132
+    assert data["lactate_threshold_speed_mps"] == pytest.approx(1 / 0.32222132)
     assert data["lactate_threshold_heart_rate_bpm"] == 169
     assert data["functional_threshold_power_watts"] == 334
     assert data["sport"] == "RUNNING"
     assert data["power_to_weight"] == 4.575
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_speed", [None, 0])
+async def test_get_lactate_threshold_tool_latest_omits_missing_or_zero_speed(
+    app_with_training, mock_garmin_client, raw_speed
+):
+    """Test latest lactate threshold avoids division by missing or zero speeds."""
+    mock_garmin_client.get_lactate_threshold.return_value = {
+        "speed_and_heart_rate": {"speed": raw_speed},
+        "power": {},
+    }
+
+    result = await app_with_training.call_tool("get_lactate_threshold", {})
+
+    data = json.loads(result[0][0].text)
+    assert "lactate_threshold_speed_mps" not in data
 
 
 @pytest.mark.asyncio
@@ -783,9 +800,31 @@ async def test_get_lactate_threshold_tool_range(app_with_training, mock_garmin_c
     assert "speed_history" in data
     assert len(data["speed_history"]) == 3
     assert data["speed_history"][0]["date"] == "2024-01-08"
+    assert data["speed_history"][0]["speed_mps"] == pytest.approx(1 / 0.29444)
+    assert data["speed_history"][1]["speed_mps"] == pytest.approx(1 / 0.30555)
+    assert data["speed_history"][2]["speed_mps"] == pytest.approx(1 / 0.31666)
     assert "heart_rate_history" in data
     assert len(data["heart_rate_history"]) == 3
     assert "power_history" in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_speed", [None, 0])
+async def test_get_lactate_threshold_tool_range_preserves_missing_or_zero_speed(
+    app_with_training, mock_garmin_client, raw_speed
+):
+    """Test range lactate threshold avoids division by missing or zero speeds."""
+    mock_garmin_client.get_lactate_threshold.return_value = {
+        "speed": [{"from": "2024-01-08", "series": "running", "value": raw_speed}]
+    }
+
+    result = await app_with_training.call_tool(
+        "get_lactate_threshold",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["speed_history"][0]["speed_mps"] is None
 
 
 # Error handling tests
