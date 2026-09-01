@@ -20,8 +20,10 @@ from typing import Any, Dict, List, Optional, Union
 
 try:
     import fitparse
+    from fitparse.profile import FIELD_TYPES as FIT_FIELD_TYPES
     FITPARSE_AVAILABLE = True
 except ImportError:
+    FIT_FIELD_TYPES = {}
     FITPARSE_AVAILABLE = False
 
 # The garmin_client will be set by the main file
@@ -111,6 +113,417 @@ def _extract_fit_bytes(raw: bytes) -> bytes:
         return gzip.decompress(raw)
 
     return raw
+
+
+def _json_safe_fit_value(value: Any) -> Any:
+    """Convert a decoded FIT value to a lossless, JSON-safe representation."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {
+            "encoding": "hex",
+            "value": bytes(value).hex(),
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_fit_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _json_safe_fit_value(item)
+            for key, item in value.items()
+        }
+
+    # fitparse commonly returns datetime/date values. isoformat retains more
+    # information than str() for values with timezone or sub-second precision.
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        try:
+            return isoformat()
+        except (TypeError, ValueError):
+            pass
+
+    # Enum-like values and Decimal both expose useful string forms. FIT values
+    # outside the normal scalar/container types are rare, but must not make an
+    # otherwise valid activity impossible to inspect.
+    return str(value)
+
+
+def _fit_field_definition_number(field: Any) -> Optional[int]:
+    """Return a FIT field definition number across fitparse object versions."""
+    field_def = getattr(field, "field_def", None)
+    for candidate in (field, field_def):
+        if candidate is None:
+            continue
+        for attr in ("def_num", "field_def_num", "field_definition_number"):
+            value = getattr(candidate, attr, None)
+            if isinstance(value, int):
+                return value
+    return None
+
+
+def _fit_profile_label(value: Any, raw_value: Any, values: Any) -> Any:
+    """Resolve one FIT enum label from either decoded or raw profile values."""
+    if not isinstance(values, dict):
+        return None
+
+    for candidate in (raw_value, value):
+        # FIT profile enum keys are numeric codes. fitparse may also expose the
+        # already-decoded string label; container values are handled by the
+        # caller and must not be used as dictionary keys.
+        if not isinstance(candidate, (int, str)):
+            continue
+        if candidate in values:
+            return values[candidate]
+
+    # fitparse renders known enum values before exposing FieldData.value. Keep
+    # that decoded label rather than requiring consumers to reverse-map it.
+    if isinstance(value, str) and value in values.values():
+        return value
+    return None
+
+
+def _map_fit_profile_values(
+    value: Any,
+    raw_value: Any,
+    values: Any,
+) -> tuple[bool, Any]:
+    """Map scalar/array FIT values through profile labels when possible."""
+    value_is_sequence = isinstance(value, (list, tuple))
+    raw_is_sequence = isinstance(raw_value, (list, tuple))
+    if not value_is_sequence and not raw_is_sequence:
+        mapped = _fit_profile_label(value, raw_value, values)
+        return mapped is not None, mapped
+
+    decoded_values = list(value) if value_is_sequence else [value]
+    raw_values = list(raw_value) if raw_is_sequence else [raw_value]
+    value_count = max(len(decoded_values), len(raw_values))
+    mapped_values = []
+    for index in range(value_count):
+        decoded_item = decoded_values[index] if index < len(decoded_values) else None
+        raw_item = raw_values[index] if index < len(raw_values) else None
+        mapped_values.append(_fit_profile_label(decoded_item, raw_item, values))
+    return any(item is not None for item in mapped_values), mapped_values
+
+
+_FIT_CONTEXTUAL_ENUM_FIELDS = {
+    # FIT stores exercise-name values as uint16 because their enum type depends
+    # on a sibling exercise category. These are standard FIT profile messages,
+    # not Garmin Connect API fields.
+    ("set", "category_subtype"): (
+        "category",
+        "exercise_category",
+        "{selector}_exercise_name",
+    ),
+    ("exercise_title", "exercise_name"): (
+        "exercise_category",
+        "exercise_category",
+        "{selector}_exercise_name",
+    ),
+}
+
+
+def _contextual_fit_value_names(field: Any, message: Any) -> tuple[bool, Any]:
+    """Resolve standard FIT enums whose type depends on a sibling field."""
+    if message is None:
+        return False, None
+
+    message_name = str(getattr(message, "name", None) or "").lower()
+    field_name = str(getattr(field, "name", None) or "").lower()
+    context = _FIT_CONTEXTUAL_ENUM_FIELDS.get(
+        (message_name, field_name)
+    )
+    if context is None:
+        return False, None
+    selector_field_name, selector_type_name, value_type_template = context
+
+    selector_field = next(
+        (
+            candidate
+            for candidate in getattr(message, "fields", [])
+            if str(getattr(candidate, "name", None) or "").lower()
+            == selector_field_name
+        ),
+        None,
+    )
+    if selector_field is None:
+        return False, None
+
+    selector_type = FIT_FIELD_TYPES.get(selector_type_name)
+    selector_values = getattr(selector_type, "values", {})
+    selectors = getattr(selector_field, "value", None)
+    raw_selectors = getattr(selector_field, "raw_value", None)
+    has_selector_names, selector_names = _map_fit_profile_values(
+        selectors,
+        raw_selectors,
+        selector_values,
+    )
+    if not has_selector_names:
+        return False, None
+
+    subtypes = getattr(field, "value", None)
+    raw_subtypes = getattr(field, "raw_value", None)
+    subtype_is_sequence = isinstance(subtypes, (list, tuple))
+    raw_subtype_is_sequence = isinstance(raw_subtypes, (list, tuple))
+    if not isinstance(selector_names, list):
+        selector_names = [selector_names]
+    if not subtype_is_sequence:
+        subtypes = [subtypes]
+    else:
+        subtypes = list(subtypes)
+    if not raw_subtype_is_sequence:
+        raw_subtypes = [raw_subtypes]
+    else:
+        raw_subtypes = list(raw_subtypes)
+
+    subtype_names: List[Optional[str]] = []
+    value_count = max(len(subtypes), len(raw_subtypes))
+    for index in range(value_count):
+        subtype = subtypes[index] if index < len(subtypes) else None
+        raw_subtype = raw_subtypes[index] if index < len(raw_subtypes) else None
+        selector_name = (
+            selector_names[index] if index < len(selector_names) else None
+        )
+        subtype_type = FIT_FIELD_TYPES.get(
+            value_type_template.format(selector=selector_name)
+        )
+        subtype_values = getattr(subtype_type, "values", {})
+        subtype_names.append(_fit_profile_label(subtype, raw_subtype, subtype_values))
+
+    has_names = any(name is not None for name in subtype_names)
+    if not subtype_is_sequence and not raw_subtype_is_sequence:
+        return has_names, subtype_names[0] if subtype_names else None
+    return has_names, subtype_names
+
+
+def _serialize_fit_field(field: Any, message: Any = None) -> Dict[str, Any]:
+    """Serialize one fitparse FieldData without curating fields by sport."""
+    definition_number = _fit_field_definition_number(field)
+    name = getattr(field, "name", None)
+    if not name:
+        name = (
+            f"unknown_{definition_number}"
+            if definition_number is not None
+            else "unknown"
+        )
+
+    serialized: Dict[str, Any] = {
+        "name": str(name),
+        "value": _json_safe_fit_value(getattr(field, "value", None)),
+    }
+
+    units = getattr(field, "units", None)
+    if units is not None:
+        serialized["units"] = str(units)
+    if definition_number is not None:
+        serialized["definition_number"] = definition_number
+
+    for source_attr, output_key in (
+        ("base_type", "base_type"),
+        ("type", "profile_type"),
+    ):
+        metadata = getattr(field, source_attr, None)
+        metadata_name = getattr(metadata, "name", None)
+        if isinstance(metadata_name, str):
+            serialized[output_key] = metadata_name
+
+    field_type = getattr(field, "field_type", None)
+    if isinstance(field_type, str):
+        serialized["field_type"] = field_type
+
+    value = getattr(field, "value", None)
+    raw_value = getattr(field, "raw_value", None)
+    profile_values = getattr(getattr(field, "type", None), "values", None)
+    has_value_names, value_names = _map_fit_profile_values(
+        value,
+        raw_value,
+        profile_values,
+    )
+    if not has_value_names:
+        has_value_names, value_names = _contextual_fit_value_names(field, message)
+    if has_value_names:
+        serialized[
+            "value_names" if isinstance(value_names, list) else "value_name"
+        ] = value_names
+
+    # Retain the pre-scaled profile value as well as the decoded/scaled value.
+    # This matters when profiles change or a consumer needs to audit decoding.
+    if hasattr(field, "raw_value"):
+        serialized["raw_value"] = _json_safe_fit_value(field.raw_value)
+
+    return serialized
+
+
+def _fit_global_message_number(message: Any) -> Optional[int]:
+    """Return a message's global FIT profile number when the decoder exposes it."""
+    candidates = [
+        message,
+        getattr(message, "definition", None),
+        getattr(message, "_definition", None),
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        for attr in ("mesg_num", "global_mesg_num", "global_message_number"):
+            value = getattr(candidate, attr, None)
+            if isinstance(value, int):
+                return value
+    return None
+
+
+def _parse_fit_messages(
+    raw: bytes,
+    *,
+    message_types: Optional[List[str]] = None,
+    include_records: bool = False,
+    message_offset: int = 0,
+    message_limit: int = 1000,
+) -> Dict[str, Any]:
+    """Parse all FIT messages/fields with safe high-frequency pagination.
+
+    Non-record messages are never curated: every message and every field
+    emitted by fitparse is returned. The high-frequency ``record`` stream is
+    counted but omitted by default. Other message types with more than 100
+    instances are also inventoried but omitted from unfiltered default results.
+    Explicitly filtered results use general pagination so a long activity
+    cannot accidentally exceed MCP result limits.
+    """
+    if message_offset < 0:
+        raise ValueError("message_offset must be at least 0")
+    if not 1 <= message_limit <= 5000:
+        raise ValueError("message_limit must be between 1 and 5000")
+
+    selected_types = None
+    if message_types is not None:
+        selected_types = {
+            str(message_type).strip().lower()
+            for message_type in message_types
+            if str(message_type).strip()
+        }
+    records_selected = selected_types is None or "record" in selected_types
+
+    fit_bytes = _extract_fit_bytes(raw)
+    fitfile = fitparse.FitFile(io.BytesIO(fit_bytes))
+    fit_messages = list(fitfile.get_messages())
+    message_counts: Dict[str, int] = {}
+
+    # Inventory without constructing JSON-shaped copies. Only the requested
+    # page is serialized below.
+    for message in fit_messages:
+        message_type = str(getattr(message, "name", None) or "unknown")
+        message_counts[message_type] = message_counts.get(message_type, 0) + 1
+
+    # An unfiltered request should be useful as an inventory without returning
+    # thousands of vendor-specific samples whose semantics are not yet known.
+    # Explicit message_types opts a caller into those types, still behind the
+    # general message_limit pagination below.
+    omitted_high_frequency_types: Dict[str, int] = {}
+    if selected_types is None:
+        omitted_high_frequency_types = {
+            message_type: count
+            for message_type, count in message_counts.items()
+            if message_type.lower() != "record" and count > 100
+        }
+    def message_type_is_eligible(message_type: str) -> bool:
+        normalized_type = message_type.lower()
+        if normalized_type == "record" and (
+            not include_records or not records_selected
+        ):
+            return False
+        if selected_types is not None and normalized_type not in selected_types:
+            return False
+        return message_type not in omitted_high_frequency_types
+
+    total_eligible_count = sum(
+        count
+        for message_type, count in message_counts.items()
+        if message_type_is_eligible(message_type)
+    )
+    page_end = message_offset + message_limit
+    messages: List[Dict[str, Any]] = []
+    eligible_index = 0
+    seen_type_counts: Dict[str, int] = {}
+    for message_index, message in enumerate(fit_messages):
+        message_type = str(getattr(message, "name", None) or "unknown")
+        type_index = seen_type_counts.get(message_type, 0)
+        seen_type_counts[message_type] = type_index + 1
+        if not message_type_is_eligible(message_type):
+            continue
+
+        if message_offset <= eligible_index < page_end:
+            serialized_message: Dict[str, Any] = {
+                "message_index": message_index,
+                "type_index": type_index,
+                "type": message_type,
+                # A list rather than an object preserves duplicate/unknown field
+                # definitions instead of overwriting fields that share a name.
+                "fields": [
+                    _serialize_fit_field(field, message)
+                    for field in getattr(message, "fields", [])
+                ],
+            }
+            global_message_number = _fit_global_message_number(message)
+            if global_message_number is not None:
+                serialized_message["global_message_number"] = (
+                    global_message_number
+                )
+            messages.append(serialized_message)
+        eligible_index += 1
+        if eligible_index >= page_end:
+            break
+
+    returned_counts: Dict[str, int] = {}
+    for message in messages:
+        message_type = message["type"]
+        returned_counts[message_type] = returned_counts.get(message_type, 0) + 1
+
+    record_count = sum(
+        count
+        for message_type, count in message_counts.items()
+        if message_type.lower() == "record"
+    )
+    records_included = include_records and records_selected
+    returned_record_count = sum(
+        count
+        for message_type, count in returned_counts.items()
+        if message_type.lower() == "record"
+    )
+    record_stream: Dict[str, Any] = {
+        "included": records_included,
+        "total_count": record_count,
+        "returned_count": returned_record_count,
+    }
+    if not include_records and records_selected and record_count:
+        record_stream["hint"] = (
+            "Set include_records=true and use message pagination to retrieve records."
+        )
+
+    pagination: Dict[str, Any] = {
+        "total_eligible_count": total_eligible_count,
+        "returned_count": len(messages),
+        "offset": message_offset,
+        "limit": message_limit,
+    }
+    if message_offset + len(messages) < total_eligible_count:
+        pagination["next_offset"] = message_offset + len(messages)
+
+    result = {
+        "fit_size_bytes": len(fit_bytes),
+        "message_counts": message_counts,
+        "returned_message_counts": returned_counts,
+        "record_stream": record_stream,
+        "pagination": pagination,
+        "messages": messages,
+    }
+    if omitted_high_frequency_types:
+        result["omitted_high_frequency_message_types"] = {
+            message_type: {
+                "count": count,
+                "hint": (
+                    f"Request message_types=['{message_type}'] and follow pagination."
+                ),
+            }
+            for message_type, count in omitted_high_frequency_types.items()
+        }
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +1461,96 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
 
 def register_tools(app):
     """Register all activity analysis tools with the MCP server app"""
+
+    @app.tool()
+    async def get_activity_fit_messages(
+        activity_id: Union[int, str],
+        message_types: Optional[List[str]] = None,
+        include_records: bool = False,
+        message_offset: int = 0,
+        message_limit: int = 1000,
+    ) -> str:
+        """Retrieve and generically parse an activity's original FIT file.
+
+        This is the source-of-truth endpoint for original device activity data.
+        It returns every message and every field emitted by the FIT decoder
+        without applying sport-specific curation. Messages remain in file order,
+        and each field includes its decoded value plus units and definition
+        number when available. Unknown and duplicate fields are retained.
+
+        Garmin Connect edits made after upload may be stored only in Garmin's
+        service and are not necessarily written back into the original FIT file.
+        This tool intentionally does not merge those service-side edits.
+
+        High-frequency ``record`` messages are counted but omitted by default.
+        Other message types occurring more than 100 times are also inventoried
+        but omitted from an unfiltered default response. Request those types
+        explicitly with message_types. All returned messages are bounded by
+        message_offset/message_limit (maximum 5000 per call); follow
+        pagination.next_offset until absent to retrieve the full selected stream.
+
+        Use message_types to return only particular FIT message types while
+        message_counts still inventories the complete file. For example, a
+        strength workout can usually be inspected efficiently with
+        ["session", "lap", "set", "exercise_title"]. Message type names are
+        case-insensitive and should use FIT/fitparse snake_case names.
+
+        Args:
+            activity_id: Garmin activity ID.
+            message_types: Optional list of FIT message types to return. Omit to
+                           return low-frequency non-record message types.
+            include_records: Include the high-frequency record stream (default false).
+            message_offset: Zero-based offset within the selected message stream.
+            message_limit: Maximum messages returned per call, 1-5000 (default 1000).
+        """
+        if not FITPARSE_AVAILABLE:
+            return (
+                "fitparse library is not installed. "
+                "Install it with: pip install fitparse"
+            )
+
+        try:
+            activity_id = int(activity_id)
+            from garminconnect import Garmin
+
+            downloaded = garmin_client.download_activity(
+                activity_id,
+                dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL,
+            )
+            if not downloaded:
+                return f"No FIT data returned for activity {activity_id}"
+
+            raw = bytes(downloaded)
+            try:
+                parsed = _parse_fit_messages(
+                    raw,
+                    message_types=message_types,
+                    include_records=include_records,
+                    message_offset=message_offset,
+                    message_limit=message_limit,
+                )
+            except Exception as parse_err:
+                return json.dumps({
+                    "error": str(parse_err),
+                    "activity_id": activity_id,
+                    "debug": {
+                        "download_size_bytes": len(raw),
+                        "first_16_bytes_hex": raw[:16].hex(),
+                        "hint": (
+                            "1f8b = gzip, 504b = ZIP, 0e10/0c10 = raw FIT, "
+                            "3c or 7b = HTML/JSON error from Garmin"
+                        ),
+                    },
+                }, indent=2)
+
+            result = {
+                "activity_id": activity_id,
+                "source": "garmin_original_fit",
+                **parsed,
+            }
+            return json.dumps(result, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return f"Error downloading FIT data for activity {activity_id}: {str(e)}"
 
     @app.tool()
     async def get_activity_fit_data(
