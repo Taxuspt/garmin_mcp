@@ -15,6 +15,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - View body composition data
 - Track training status and readiness
 - Access cycling FTP and lactate threshold metrics
+- Read and update generic or sport-specific heart-rate training zones
 - Manage gear and equipment
 - Access workouts and training plans
 - Inspect detailed workout step structures, including repeat groups and swim pace targets
@@ -37,13 +38,27 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Challenges & Badges (10 tools)
 - ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
 - ✅ Women's Health (3 tools)
-- ✅ User Profile (3 tools)
+- ✅ User Profile (5 tools) - includes configured HR-zone read/write with per-sport updates
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (3 tools) - list / upload GPX as course / delete course
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+
+### Heart Rate Zone Configuration
+
+`get_heart_rate_zones` reads the saved generic and sport-specific profiles.
+`set_heart_rate_zones` updates one profile with read-modify-write semantics and
+re-fetches it after saving. The write mutates account-level configuration and
+does not retroactively change zone boundaries baked into recorded activities.
+
+The verified Garmin request is `PUT /biometric-service/heartRateZones` with a
+JSON array containing the changed profile and `changeState: "CHANGED"`; Garmin
+returns `204 No Content`. A subsequent `GET` to the same endpoint returns the
+saved profiles. Garmin has no persisted `CUSTOM` training-method enum: custom
+BPM floors are sent exactly, while read-back reports `trainingMethod: "HR_MAX"`.
+The explicit floor values remain unchanged and authoritative.
 
 ### Activity File Downloads
 

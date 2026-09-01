@@ -4,12 +4,12 @@ Integration tests for remaining module MCP tools
 Tests tools from:
 - devices (6 tools)
 - weight_management (5 tools)
-- user_profile (4 tools)
+- user_profile (6 tools)
 - data_management (3 tools)
 - gear_management (3 tools)
 - womens_health (3 tools)
 - __init__ / main (1 tool - list_activities)
-Total: 25 tools
+Total: 27 tools
 """
 import json
 
@@ -259,6 +259,176 @@ async def test_get_userprofile_settings_tool(app_with_user_profile, mock_garmin_
     result = await app_with_user_profile.call_tool("get_userprofile_settings", {})
     assert result is not None
     mock_garmin_client.get_userprofile_settings.assert_called_once()
+
+
+HEART_RATE_ZONES = [
+    {
+        "trainingMethod": "LACTATE_THRESHOLD",
+        "restingHeartRateUsed": 54,
+        "lactateThresholdHeartRateUsed": 186,
+        "zone1Floor": 105,
+        "zone2Floor": 126,
+        "zone3Floor": 147,
+        "zone4Floor": 168,
+        "zone5Floor": 189,
+        "maxHeartRateUsed": 210,
+        "restingHrAutoUpdateUsed": False,
+        "sport": "DEFAULT",
+        "changeState": "UNCHANGED",
+    },
+    {
+        "trainingMethod": "LACTATE_THRESHOLD",
+        "restingHeartRateUsed": 54,
+        "lactateThresholdHeartRateUsed": 187,
+        "zone1Floor": 135,
+        "zone2Floor": 136,
+        "zone3Floor": 166,
+        "zone4Floor": 178,
+        "zone5Floor": 198,
+        "maxHeartRateUsed": 203,
+        "restingHrAutoUpdateUsed": False,
+        "sport": "CYCLING",
+        "changeState": "UNCHANGED",
+    },
+]
+
+
+@pytest.mark.asyncio
+async def test_get_heart_rate_zones_for_sport(app_with_user_profile, mock_garmin_client):
+    mock_garmin_client.connectapi.return_value = HEART_RATE_ZONES
+
+    result = await app_with_user_profile.call_tool("get_heart_rate_zones", {"sport": "cycling"})
+
+    data = json.loads(result[0][0].text)
+    assert data == HEART_RATE_ZONES[1]
+    mock_garmin_client.connectapi.assert_called_once_with("/biometric-service/heartRateZones")
+
+
+@pytest.mark.asyncio
+async def test_set_heart_rate_zones_custom_cycling_read_modify_write(
+    app_with_user_profile, mock_garmin_client
+):
+    confirmed = {
+        **HEART_RATE_ZONES[1],
+        "trainingMethod": "HR_MAX",
+        "maxHeartRateUsed": 204,
+        "lactateThresholdHeartRateUsed": 188,
+        "zone1Floor": 100,
+        "zone2Floor": 136,
+        "zone3Floor": 150,
+        "zone4Floor": 170,
+        "zone5Floor": 188,
+    }
+    mock_garmin_client.connectapi.side_effect = [HEART_RATE_ZONES, [HEART_RATE_ZONES[0], confirmed]]
+
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones",
+        {
+            "sport": "cycling",
+            "max_hr": 204,
+            "resting_hr": 54,
+            "lactate_threshold_hr": 188,
+            "calculation_method": "custom_bpm",
+            "zone_boundaries": [100, 136, 150, 170, 188],
+        },
+    )
+
+    assert json.loads(result[0][0].text) == confirmed
+    payload = mock_garmin_client.client.request.call_args.kwargs["json"]
+    assert payload == [{**confirmed, "changeState": "CHANGED"}]
+    assert payload[0]["sport"] == "CYCLING"
+    mock_garmin_client.client.request.assert_called_once_with(
+        "PUT",
+        "connectapi",
+        "/biometric-service/heartRateZones",
+        json=payload,
+        api=True,
+    )
+    assert mock_garmin_client.connectapi.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_set_heart_rate_zones_partial_update_preserves_other_fields(
+    app_with_user_profile, mock_garmin_client
+):
+    confirmed = {**HEART_RATE_ZONES[1], "maxHeartRateUsed": 204}
+    mock_garmin_client.connectapi.side_effect = [HEART_RATE_ZONES, [HEART_RATE_ZONES[0], confirmed]]
+
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+
+    assert json.loads(result[0][0].text) == confirmed
+    written = mock_garmin_client.client.request.call_args.kwargs["json"][0]
+    assert written["zone1Floor"] == HEART_RATE_ZONES[1]["zone1Floor"]
+    assert written["trainingMethod"] == HEART_RATE_ZONES[1]["trainingMethod"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments,error",
+    [
+        (
+            {"calculation_method": "custom_bpm", "zone_boundaries": [100, 150, 140, 170, 188]},
+            "strictly monotonically increasing",
+        ),
+        (
+            {"max_hr": 180, "calculation_method": "custom_bpm", "zone_boundaries": [100, 136, 150, 170, 188]},
+            "must not exceed max_hr",
+        ),
+        (
+            {"zone_boundaries": [100, 136, 150, 170, 188]},
+            "require calculation_method='custom_bpm'",
+        ),
+        (
+            {"calculation_method": "custom_bpm"},
+            "requires all five zone_boundaries",
+        ),
+        (
+            {"max_hr": 301},
+            "from 1 to 300",
+        ),
+    ],
+)
+async def test_set_heart_rate_zones_rejects_invalid_boundaries(
+    app_with_user_profile, mock_garmin_client, arguments, error
+):
+    mock_garmin_client.connectapi.return_value = HEART_RATE_ZONES
+
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", **arguments}
+    )
+
+    assert error in result[0][0].text
+    mock_garmin_client.client.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_heart_rate_zones_new_sport_inherits_default(
+    app_with_user_profile, mock_garmin_client
+):
+    confirmed = {**HEART_RATE_ZONES[0], "sport": "RUNNING", "maxHeartRateUsed": 205}
+    mock_garmin_client.connectapi.side_effect = [
+        [HEART_RATE_ZONES[0]],
+        [HEART_RATE_ZONES[0], confirmed],
+    ]
+
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "running", "max_hr": 205}
+    )
+
+    assert json.loads(result[0][0].text) == confirmed
+    written = mock_garmin_client.client.request.call_args.kwargs["json"][0]
+    assert written["sport"] == "RUNNING"
+    assert written["zone1Floor"] == HEART_RATE_ZONES[0]["zone1Floor"]
+
+
+@pytest.mark.asyncio
+async def test_set_heart_rate_zones_requires_an_update(app_with_user_profile, mock_garmin_client):
+    result = await app_with_user_profile.call_tool("set_heart_rate_zones", {"sport": "cycling"})
+
+    assert "No fields to update" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
 
 
 # Data Management module tests
