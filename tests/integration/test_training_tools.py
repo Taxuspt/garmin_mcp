@@ -482,6 +482,63 @@ async def test_get_vo2max_trend_uses_daily_metrics(
 
 
 @pytest.mark.asyncio
+async def test_get_vo2max_trend_carries_forward_activity_day_values(
+    app_with_training, mock_garmin_client
+):
+    """Test sparse max-metrics days match the chart by carrying values forward"""
+    mock_garmin_client.garmin_connect_metrics_url = (
+        "/metrics-service/metrics/maxmet/daily"
+    )
+    # Garmin records max-metrics entries only on days with a VO2 max recompute.
+    mock_garmin_client.connectapi.return_value = [
+        {
+            "generic": {
+                "calendarDate": "2024-01-13",
+                "vo2MaxValue": 48.0,
+                "vo2MaxPreciseValue": 47.6,
+            }
+        },
+        {
+            "generic": {
+                "calendarDate": "2024-01-15",
+                "vo2MaxValue": 49.0,
+                "vo2MaxPreciseValue": 48.7,
+            }
+        },
+    ]
+    mock_garmin_client.get_training_status.return_value = {}
+
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-12", "end_date": "2024-01-16"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "running"
+    assert data["data_points"] == 4
+    assert data["first_vo2_max"] == 47.6
+    assert data["latest_vo2_max"] == 48.7
+    assert data["change"] == 1.1
+    assert data["trend"] == [
+        {"date": "2024-01-13", "vo2_max": 47.6, "source": "get_max_metrics"},
+        {
+            "date": "2024-01-14",
+            "vo2_max": 47.6,
+            "source": "get_max_metrics",
+            "carried_forward": True,
+        },
+        {"date": "2024-01-15", "vo2_max": 48.7, "source": "get_max_metrics"},
+        {
+            "date": "2024-01-16",
+            "vo2_max": 48.7,
+            "source": "get_max_metrics",
+            "carried_forward": True,
+        },
+    ]
+    # Only the days missing from the range response trigger a status call.
+    assert mock_garmin_client.get_training_status.call_count == 3
+
+
+@pytest.mark.asyncio
 async def test_get_vo2max_trend_prefers_training_status(
     app_with_training, mock_garmin_client
 ):

@@ -37,20 +37,22 @@ def _extract_vo2_measurements(data: Any) -> Dict[str, float]:
 
     data = _as_dict(data)
     # Garmin uses "generic" for its running/non-cycling VO2 max series.
+    # Prefer "PreciseValue" fields: vo2MaxValue is rounded to 0.5 while the
+    # Connect web chart and training status report the 0.1-precision estimate.
     candidate_paths = (
         (("vo2MaxRunning",), "running"),
         (("vo2MaxCycling",), "cycling"),
         (("vo2Max",), "running"),
-        (("vo2MaxValue",), "running"),
         (("vo2MaxPreciseValue",), "running"),
-        (("generic", "vo2MaxValue"), "running"),
+        (("vo2MaxValue",), "running"),
         (("generic", "vo2MaxPreciseValue"), "running"),
-        (("cycling", "vo2MaxValue"), "cycling"),
+        (("generic", "vo2MaxValue"), "running"),
         (("cycling", "vo2MaxPreciseValue"), "cycling"),
-        (("mostRecentVO2Max", "generic", "vo2MaxValue"), "running"),
+        (("cycling", "vo2MaxValue"), "cycling"),
         (("mostRecentVO2Max", "generic", "vo2MaxPreciseValue"), "running"),
-        (("mostRecentVO2Max", "cycling", "vo2MaxValue"), "cycling"),
+        (("mostRecentVO2Max", "generic", "vo2MaxValue"), "running"),
         (("mostRecentVO2Max", "cycling", "vo2MaxPreciseValue"), "cycling"),
+        (("mostRecentVO2Max", "cycling", "vo2MaxValue"), "cycling"),
         (("userData", "vo2MaxRunning"), "running"),
         (("userData", "vo2MaxCycling"), "cycling"),
     )
@@ -103,6 +105,45 @@ def _get_max_metrics_range(
         return False, None
 
     return True, connectapi(f"{metrics_url}/{start_date}/{end_date}")
+
+
+def _build_vo2_trend_series(
+    history: List[Dict[str, Any]], end_date: datetime.date
+) -> List[Dict[str, Any]]:
+    """Expand sparse max-metrics days into a dense daily series.
+
+    Garmin's max-metrics endpoint records an entry only on days with a VO2 max
+    recompute (after an activity), while the Connect web chart carries each
+    value forward until the next one. Emit the carried-forward days too so the
+    series matches the chart instead of collapsing to recompute days.
+    """
+    series: List[Dict[str, Any]] = []
+    if not history:
+        return series
+
+    measured = {entry["date"]: entry for entry in history}
+    current = datetime.date.fromisoformat(min(measured))
+    last: Optional[Dict[str, Any]] = None
+    while current <= end_date:
+        entry = measured.get(current.isoformat())
+        if entry is not None:
+            last = {
+                "date": entry["date"],
+                "vo2_max": entry["vo2_max"],
+                "source": entry["source"],
+            }
+            series.append(last)
+        elif last is not None:
+            series.append(
+                {
+                    "date": current.isoformat(),
+                    "vo2_max": last["vo2_max"],
+                    "source": last["source"],
+                    "carried_forward": True,
+                }
+            )
+        current += datetime.timedelta(days=1)
+    return series
 
 
 def _get_activity_type_mapping() -> Dict[int, str]:
@@ -1094,6 +1135,10 @@ def register_tools(app):
         Note: VO2 max estimates are smoothed and update gradually — daily changes of <0.5
         are within normal noise. Focus on the 4-6 week trend direction.
 
+        Garmin records a new VO2 max value only on days with a recompute (after an
+        activity). Days in between carry the last known value forward and are marked
+        with "carried_forward": true, matching the trend chart in Garmin Connect.
+
         If historical values are unavailable, the current profile estimate is returned
         separately and is not represented as a historical trend point.
 
@@ -1180,13 +1225,9 @@ def register_tools(app):
                 ),
             )
 
-        trend = []
-        last_vo2 = None
-        if selected_sport is not None:
-            for entry in histories[selected_sport]:
-                if entry["vo2_max"] != last_vo2:
-                    trend.append(entry)
-                    last_vo2 = entry["vo2_max"]
+        trend = _build_vo2_trend_series(
+            histories[selected_sport] if selected_sport is not None else [], end
+        )
 
         current_estimate = None
         current_sport = None
