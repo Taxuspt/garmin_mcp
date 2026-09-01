@@ -723,10 +723,13 @@ def register_tools(app):
                 # Process speed history
                 speed_history = threshold.get("speed", [])
                 if speed_history:
+                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
                     curated["speed_history"] = [
                         {
                             "date": entry.get("from"),
-                            "speed_mps": entry.get("value"),
+                            "speed_mps": (
+                                1 / entry.get("value") if entry.get("value") else None
+                            ),
                             "series": entry.get("series"),
                         }
                         for entry in speed_history
@@ -760,9 +763,11 @@ def register_tools(app):
                 speed_hr = threshold.get("speed_and_heart_rate", {})
                 power = threshold.get("power", {})
 
+                raw_speed = speed_hr.get("speed")
                 curated = {
                     # Speed and heart rate data
-                    "lactate_threshold_speed_mps": speed_hr.get("speed"),
+                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
+                    "lactate_threshold_speed_mps": 1 / raw_speed if raw_speed else None,
                     "lactate_threshold_heart_rate_bpm": speed_hr.get("heartRate"),
                     "heart_rate_cycling_bpm": speed_hr.get("heartRateCycling"),
                     "speed_hr_date": speed_hr.get("calendarDate"),
