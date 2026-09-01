@@ -720,3 +720,60 @@ async def test_get_sleep_data_exception(app_with_health_wellness, mock_garmin_cl
     # Verify error is handled gracefully
     assert result is not None
     # The tool should return an error message, not crash
+
+
+@pytest.mark.asyncio
+async def test_get_sleep_summary_handles_null_sleep_scores(app_with_health_wellness, mock_garmin_client):
+    """A present sleep record with a null sleepScores block must not crash.
+
+    `daily_sleep.get('sleepScores', {})` returns None when Garmin sends an
+    explicit null, so the chained `.get('overall', {}).get('value')` raised
+    "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_sleep_data.return_value = {
+        "dailySleepDTO": {
+            "sleepTimeSeconds": 28800,
+            "deepSleepSeconds": 7200,
+            "lightSleepSeconds": 14400,
+            "remSleepSeconds": 7200,
+            "awakeSleepSeconds": 0,
+            "sleepScores": None,
+        },
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary",
+        {"date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
+    assert "28800" in text  # the rest of the summary still surfaces
+
+
+@pytest.mark.asyncio
+async def test_get_body_battery_handles_null_activity_events(app_with_health_wellness, mock_garmin_client):
+    """A day whose bodyBatteryActivityEvent is an explicit null must not crash.
+
+    `day.get('bodyBatteryActivityEvent', [])` returns None when the key is
+    present but null, so `for event in ...` raised
+    "'NoneType' object is not iterable".
+    """
+    mock_garmin_client.get_body_battery.return_value = [
+        {
+            "date": "2024-01-15",
+            "charged": 100,
+            "drained": 20,
+            "bodyBatteryActivityEvent": None,
+            "bodyBatteryDynamicFeedbackEvent": None,
+        }
+    ]
+
+    result = await app_with_health_wellness.call_tool(
+        "get_body_battery",
+        {"start_date": "2024-01-15", "end_date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
+    assert "100" in text

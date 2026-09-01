@@ -5,6 +5,7 @@ Modular MCP Server for Garmin Connect Data
 import os
 import sys
 import base64
+import threading
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -106,20 +107,66 @@ def _parse_tool_set(value):
     return {name.strip().lower() for name in value.split(",") if name.strip()}
 
 
-enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
-disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+def _resolve_tool_filters():
+    """Read and validate tool filter environment variables at server startup."""
+    enabled_value = os.getenv("GARMIN_ENABLED_TOOLS")
+    enabled_tools = _parse_tool_set(enabled_value)
+    if enabled_value and enabled_value.strip() and not enabled_tools:
+        raise ValueError(
+            "Invalid GARMIN_ENABLED_TOOLS: expected at least one tool name"
+        )
+    disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+    return enabled_tools, disabled_tools
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
+# Default per-call timeout (seconds). Garmin's API occasionally stalls a single
+# request indefinitely; without a bound the blocking client call hangs until the
+# MCP client's own timeout (~4 min) fires, reporting the whole server as
+# unresponsive (see issue #248). 90s sits comfortably above a normal slow call
+# yet well below that ceiling. Override with GARMIN_MCP_CALL_TIMEOUT; set 0 to
+# disable the bound entirely.
+_DEFAULT_CALL_TIMEOUT = 90.0
+
+
+def _resolve_call_timeout() -> float:
+    """Read GARMIN_MCP_CALL_TIMEOUT; fall back to the default on bad/absent input.
+
+    A value <= 0 disables the timeout (returns 0.0).
+    """
+    raw = os.getenv("GARMIN_MCP_CALL_TIMEOUT")
+    if raw is None or not raw.strip():
+        return _DEFAULT_CALL_TIMEOUT
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        print(
+            f"Invalid GARMIN_MCP_CALL_TIMEOUT {raw!r}; using default "
+            f"{_DEFAULT_CALL_TIMEOUT}s.",
+            file=sys.stderr,
+        )
+        return _DEFAULT_CALL_TIMEOUT
+    return value if value > 0 else 0.0
+
 
 class _GarminProxy:
-    """Wraps the Garmin client to translate known runtime exceptions into clear messages.
+    """Wraps the Garmin client to bound call duration and clarify runtime errors.
 
-    Without this, token expiry or rate-limiting during a tool call surfaces raw
-    library tracebacks to the MCP client. The proxy intercepts each attribute
-    access and, if the result is callable, wraps the call so that known Garmin
-    exceptions become user-friendly strings rather than server errors.
+    Two jobs:
+
+    1. Timeout: each client call runs on a daemon worker thread and is abandoned
+       if it does not return within the configured timeout (issue #248 — an
+       occasional Garmin request stalls forever and the blocking call would
+       otherwise hang the whole server until the MCP client gives up minutes
+       later). A stalled call raises a clear, retry-able error instead; the
+       abandoned daemon thread dies with the process and never blocks shutdown.
+       Such stalls are rare and transient, so a fresh thread per call is cheap
+       relative to the network round-trip it guards.
+
+    2. Error translation: token expiry or rate-limiting during a tool call would
+       otherwise surface a raw library traceback. Known Garmin exceptions become
+       user-friendly messages instead.
     """
 
     _MESSAGES = {
@@ -135,15 +182,16 @@ class _GarminProxy:
         ),
     }
 
-    def __init__(self, client):
+    def __init__(self, client, timeout=None):
         self._client = client
+        self._timeout = _resolve_call_timeout() if timeout is None else timeout
 
     def __getattr__(self, name):
         attr = getattr(self._client, name)
         if not callable(attr):
             return attr
 
-        def _call(*args, **kwargs):
+        def _invoke(*args, **kwargs):
             try:
                 return attr(*args, **kwargs)
             except tuple(self._MESSAGES) as exc:
@@ -154,7 +202,130 @@ class _GarminProxy:
                         raise type(exc)(full_msg) from None
                 raise
 
+        def _call(*args, **kwargs):
+            if not self._timeout:
+                return _invoke(*args, **kwargs)
+
+            # Run on a daemon thread and join with a timeout. The worker's
+            # return value or exception is captured and replayed in the caller
+            # so translated Garmin errors propagate unchanged.
+            outcome = {}
+
+            def _worker():
+                try:
+                    outcome["value"] = _invoke(*args, **kwargs)
+                except BaseException as exc:  # noqa: BLE001 - replayed below
+                    outcome["error"] = exc
+
+            worker = threading.Thread(
+                target=_worker, name=f"garmin-call:{name}", daemon=True
+            )
+            worker.start()
+            worker.join(self._timeout)
+            if worker.is_alive():
+                raise TimeoutError(
+                    f"Garmin request '{name}' did not return within "
+                    f"{self._timeout:g}s and was abandoned. This is usually a "
+                    f"transient stall on Garmin's side — please try again. "
+                    f"(Adjust with GARMIN_MCP_CALL_TIMEOUT, or set it to 0 to "
+                    f"disable the limit.)"
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome.get("value")
+
         return _call
+
+
+class _ThreadFilteredStream:
+    """Wraps a stream so only ``owner_thread``'s writes reach it.
+
+    Installed as ``sys.stdout`` before the background Garmin login thread
+    starts (issue #255): the login call may still emit stray progress
+    output, and since ``sys.stdout`` is a single process-wide object, an
+    unfiltered write from that thread would land in the middle of the
+    JSON-RPC messages the main thread writes once ``app.run()`` starts,
+    corrupting the stdio framing. Writes from any other thread are silently
+    discarded, matching the previous (single-threaded) behavior of
+    swallowing that output entirely.
+    """
+
+    def __init__(self, real_stream, owner_thread):
+        self._real_stream = real_stream
+        self._owner_thread = owner_thread
+
+    def write(self, data):
+        if threading.current_thread() is self._owner_thread:
+            return self._real_stream.write(data)
+        return len(data)
+
+    def flush(self):
+        self._real_stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._real_stream, name)
+
+
+class _PendingGarminClient:
+    """Stands in for the real Garmin client until a background login finishes.
+
+    Passed as the ``client`` argument to ``_GarminProxy``, so ``_GarminProxy``
+    itself needs no changes: every attribute it looks up on ``self._client``
+    comes through here first. Before login finishes, that lookup blocks (up
+    to ``timeout`` seconds, ``0``/``None`` disables the bound) instead of
+    returning immediately -- this is what lets ``main()`` call ``app.run()``
+    right away instead of waiting on Garmin login before the MCP handshake
+    can be answered (issue #255).
+    """
+
+    def __init__(self, timeout):
+        self._timeout = timeout
+        self._ready = threading.Event()
+        self._client = None
+        self._login_error = None
+
+    def start(self, login_fn):
+        """Run ``login_fn`` on a background daemon thread; store its outcome."""
+
+        def _worker():
+            try:
+                client = login_fn()
+            except BaseException as exc:  # noqa: BLE001 - stored, not raised here
+                self._login_error = exc
+            else:
+                if client is None:
+                    self._login_error = RuntimeError(
+                        "Garmin login failed. Run 'garmin-mcp-auth' to "
+                        "authenticate, then restart the server."
+                    )
+                    print(
+                        "Garmin Connect client failed to initialize (see "
+                        "errors above). Tool calls will fail until this is "
+                        "fixed; run 'garmin-mcp-auth' and restart the server.",
+                        file=sys.stderr,
+                    )
+                else:
+                    self._client = client
+                    print(
+                        "Garmin Connect client initialized successfully.",
+                        file=sys.stderr,
+                    )
+            finally:
+                self._ready.set()
+
+        threading.Thread(target=_worker, name="garmin-login", daemon=True).start()
+        return self
+
+    def __getattr__(self, name):
+        if not self._ready.wait(self._timeout if self._timeout else None):
+            raise RuntimeError(
+                f"Garmin login did not finish within {self._timeout:g}s. "
+                "Run 'garmin-mcp-auth' to verify your credentials, then "
+                "restart the server."
+            )
+        if self._login_error is not None:
+            raise self._login_error
+        return getattr(self._client, name)
 
 
 def _parse_transport_config() -> tuple[str, str, int]:
@@ -245,20 +416,21 @@ def init_api(email, password):
         # with open(dir_path, "r") as token_file:
         #     tokenstore = token_file.read()
 
-        # Suppress stderr AND stdout during token validation.
-        # garminconnect may print progress dots (e.g. ".") to stdout; any write
-        # to stdout before the MCP server starts corrupts the JSON-RPC framing.
+        # Suppress stderr during token validation to hide noisy library
+        # warnings. stdout is deliberately NOT swapped here: by the time
+        # init_api() runs, sys.stdout is a _ThreadFilteredStream installed
+        # in main() before this call's background thread was started, which
+        # already discards any stray write from this thread on its own. A
+        # second swap here would instead risk swallowing real MCP protocol
+        # output written concurrently by the server's own thread (#255).
         old_stderr = sys.stderr
-        old_stdout = sys.stdout
         sys.stderr = io.StringIO()
-        sys.stdout = io.StringIO()
 
         try:
             garmin = Garmin(is_cn=is_cn)
             garmin.login(tokenstore)
         finally:
             sys.stderr = old_stderr
-            sys.stdout = old_stdout
 
     except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
@@ -285,13 +457,10 @@ def init_api(email, password):
             garmin = Garmin(
                 email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True
             )
-            # Suppress stdout so library progress dots don't corrupt MCP framing.
-            _saved_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            try:
-                result1, result2 = garmin.login()
-            finally:
-                sys.stdout = _saved_stdout
+            # sys.stdout is a _ThreadFilteredStream (installed in main());
+            # any stray progress output from this call is already discarded
+            # without a local swap here (see the token-load path above).
+            result1, result2 = garmin.login()
             if result1 == "needs_mfa":
                 mfa_code = get_mfa()
                 garmin.resume_login(result2, mfa_code)
@@ -375,6 +544,13 @@ def main():
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
 
+    # Garmin login (init_api) runs on a background thread below so it can't
+    # block the MCP handshake (issue #255). That thread may still emit
+    # stray writes to stdout; route sys.stdout so only this thread's writes
+    # reach the real stream, protecting the JSON-RPC framing this thread
+    # writes once app.run() starts.
+    sys.stdout = _ThreadFilteredStream(sys.stdout, threading.current_thread())
+
     # --- Transport configuration --------------------------------------------
     # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
     # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.
@@ -382,21 +558,21 @@ def main():
     #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     try:
+        enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
 
-    # Initialize Garmin client
-    garmin_client = init_api(email, password)
-    if not garmin_client:
-        print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
-        return
-
-    print("Garmin Connect client initialized successfully.", file=sys.stderr)
-
-    # Wrap client so runtime auth/rate-limit errors surface as clear messages
-    garmin_client = _GarminProxy(garmin_client)
+    # Start Garmin login in the background so it never blocks the MCP
+    # handshake (issue #255). Tool calls block on it individually instead,
+    # through _GarminProxy -> _PendingGarminClient, once they're actually
+    # invoked. 90s comfortably covers a normal slow login while still
+    # failing well before a client's own initialize timeout would matter
+    # again on a later call.
+    pending_client = _PendingGarminClient(timeout=90.0)
+    pending_client.start(lambda: init_api(email, password))
+    garmin_client = _GarminProxy(pending_client)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)

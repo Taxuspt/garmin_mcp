@@ -125,10 +125,60 @@ def test_build_strength_json_structure():
     assert result["sportType"]["sportTypeKey"] == "strength_training"
     assert result["sportType"]["sportTypeId"] == 5
     steps = result["workoutSegments"][0]["workoutSteps"]
-    # 2 exercises + 1 rest between them = 3 steps
+    # Multi-set exercises each become one repeat group; rest lives inside the
+    # group (after every set), so no separate inter-exercise rest step.
+    assert len(steps) == 2
+    assert [s["type"] for s in steps] == ["RepeatGroupDTO", "RepeatGroupDTO"]
+    assert steps[0]["numberOfIterations"] == 3
+    assert steps[0]["workoutSteps"][0]["exerciseName"] == "Sentadillas"
+    assert steps[1]["workoutSteps"][0]["exerciseName"] == "Flexiones"
+
+
+def test_strength_single_set_stays_flat():
+    result = build_strength_json(
+        name="Singles",
+        exercises=[
+            {"name": "Plank Hold", "sets": 1, "reps": 1, "rest_seconds": 60},
+            {"name": "Dead Hang", "sets": 1, "reps": 1, "rest_seconds": 0},
+        ],
+    )
+    steps = result["workoutSegments"][0]["workoutSteps"]
+    # 2 flat work steps + 1 rest between them; no repeat group for a single set
     assert len(steps) == 3
-    assert steps[0]["exerciseName"] == "Sentadillas"
-    assert steps[2]["exerciseName"] == "Flexiones"
+    assert [s["type"] for s in steps] == ["ExecutableStepDTO"] * 3
+    assert steps[0]["exerciseName"] == "Plank Hold"
+    assert steps[1]["stepType"]["stepTypeKey"] == "recovery"
+
+
+def test_strength_multi_set_repeat_group_shape():
+    result = build_strength_json(
+        name="Sets",
+        exercises=[{"name": "Goblet Squat", "sets": 4, "reps": 8, "rest_seconds": 90}],
+    )
+    (group,) = result["workoutSegments"][0]["workoutSteps"]
+    # The shape _sanitize_repeat_group enforces on upload: without a valid
+    # iterations endCondition the Garmin API silently corrupts the group.
+    assert group["type"] == "RepeatGroupDTO"
+    assert group["stepType"] == {"stepTypeId": 6, "stepTypeKey": "repeat"}
+    assert group["numberOfIterations"] == 4
+    assert group["endCondition"]["conditionTypeKey"] == "iterations"
+    work, rest = group["workoutSteps"]
+    assert work["endCondition"]["conditionTypeKey"] == "reps"
+    assert work["endConditionValue"] == 8.0
+    assert "4 sets x 8 reps" in work["description"]
+    assert rest["stepType"]["stepTypeKey"] == "recovery"
+    assert rest["endConditionValue"] == 90.0
+
+
+def test_strength_multi_set_without_rest_has_no_recovery_step():
+    result = build_strength_json(
+        name="No rest",
+        exercises=[{"name": "Push Up", "sets": 3, "reps": 12, "rest_seconds": 0}],
+    )
+    (group,) = result["workoutSegments"][0]["workoutSteps"]
+    assert group["numberOfIterations"] == 3
+    assert len(group["workoutSteps"]) == 1
+    assert group["workoutSteps"][0]["stepType"]["stepTypeKey"] == "interval"
 
 
 # ---------------------------------------------------------------------------
@@ -141,9 +191,18 @@ def test_build_strength_json_structure():
 
 
 def _work_steps(result):
-    """Only the exercise steps; rest steps are recovery steps and carry no category."""
+    """Only the exercise steps; rest steps are recovery steps and carry no category.
+
+    Multi-set exercises nest their work step inside a RepeatGroupDTO, so look
+    through repeat groups as well as at top-level steps.
+    """
     steps = result["workoutSegments"][0]["workoutSteps"]
-    return [s for s in steps if s["stepType"]["stepTypeKey"] == "interval"]
+    flat = []
+    for s in steps:
+        for child in s.get("workoutSteps", [s]):
+            if child["stepType"]["stepTypeKey"] == "interval":
+                flat.append(child)
+    return flat
 
 
 def test_strength_omits_category_when_not_supplied():

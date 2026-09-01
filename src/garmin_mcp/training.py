@@ -37,20 +37,22 @@ def _extract_vo2_measurements(data: Any) -> Dict[str, float]:
 
     data = _as_dict(data)
     # Garmin uses "generic" for its running/non-cycling VO2 max series.
+    # Prefer "PreciseValue" fields: vo2MaxValue is rounded to 0.5 while the
+    # Connect web chart and training status report the 0.1-precision estimate.
     candidate_paths = (
         (("vo2MaxRunning",), "running"),
         (("vo2MaxCycling",), "cycling"),
         (("vo2Max",), "running"),
-        (("vo2MaxValue",), "running"),
         (("vo2MaxPreciseValue",), "running"),
-        (("generic", "vo2MaxValue"), "running"),
+        (("vo2MaxValue",), "running"),
         (("generic", "vo2MaxPreciseValue"), "running"),
-        (("cycling", "vo2MaxValue"), "cycling"),
+        (("generic", "vo2MaxValue"), "running"),
         (("cycling", "vo2MaxPreciseValue"), "cycling"),
-        (("mostRecentVO2Max", "generic", "vo2MaxValue"), "running"),
+        (("cycling", "vo2MaxValue"), "cycling"),
         (("mostRecentVO2Max", "generic", "vo2MaxPreciseValue"), "running"),
-        (("mostRecentVO2Max", "cycling", "vo2MaxValue"), "cycling"),
+        (("mostRecentVO2Max", "generic", "vo2MaxValue"), "running"),
         (("mostRecentVO2Max", "cycling", "vo2MaxPreciseValue"), "cycling"),
+        (("mostRecentVO2Max", "cycling", "vo2MaxValue"), "cycling"),
         (("userData", "vo2MaxRunning"), "running"),
         (("userData", "vo2MaxCycling"), "cycling"),
     )
@@ -103,6 +105,45 @@ def _get_max_metrics_range(
         return False, None
 
     return True, connectapi(f"{metrics_url}/{start_date}/{end_date}")
+
+
+def _build_vo2_trend_series(
+    history: List[Dict[str, Any]], end_date: datetime.date
+) -> List[Dict[str, Any]]:
+    """Expand sparse max-metrics days into a dense daily series.
+
+    Garmin's max-metrics endpoint records an entry only on days with a VO2 max
+    recompute (after an activity), while the Connect web chart carries each
+    value forward until the next one. Emit the carried-forward days too so the
+    series matches the chart instead of collapsing to recompute days.
+    """
+    series: List[Dict[str, Any]] = []
+    if not history:
+        return series
+
+    measured = {entry["date"]: entry for entry in history}
+    current = datetime.date.fromisoformat(min(measured))
+    last: Optional[Dict[str, Any]] = None
+    while current <= end_date:
+        entry = measured.get(current.isoformat())
+        if entry is not None:
+            last = {
+                "date": entry["date"],
+                "vo2_max": entry["vo2_max"],
+                "source": entry["source"],
+            }
+            series.append(last)
+        elif last is not None:
+            series.append(
+                {
+                    "date": current.isoformat(),
+                    "vo2_max": last["vo2_max"],
+                    "source": last["source"],
+                    "carried_forward": True,
+                }
+            )
+        current += datetime.timedelta(days=1)
+    return series
 
 
 def _get_activity_type_mapping() -> Dict[int, str]:
@@ -192,8 +233,10 @@ def register_tools(app):
                 "stats_by_activity_type": {},
             }
 
-            # Parse stats by activity type
-            stats = data.get("stats", {})
+            # Parse stats by activity type. `or {}` guards against an explicit
+            # null `stats` (Garmin sends null for empty sections), which would
+            # otherwise raise "'NoneType' object has no attribute 'items'".
+            stats = data.get("stats") or {}
             for activity_type, activity_stats in stats.items():
                 if metric in activity_stats:
                     metric_data = activity_stats[metric]
@@ -440,9 +483,13 @@ def register_tools(app):
             if not hrv_data:
                 return f"No HRV data found for {date}."
 
-            # Extract the summary from hrvSummary key
-            summary = hrv_data.get("hrvSummary", {})
-            baseline = summary.get("baseline", {})
+            # Extract the summary from hrvSummary key.
+            # Use `x.get(key) or {}` rather than `x.get(key, {})`: Garmin sends
+            # an explicit null for sections the user has no data in, and a
+            # default only applies when the key is absent. Same pattern as
+            # get_training_status.
+            summary = hrv_data.get("hrvSummary") or {}
+            baseline = summary.get("baseline") or {}
 
             # Curate to essential fields only
             curated = {
@@ -573,34 +620,38 @@ def register_tools(app):
             date: Date in YYYY-MM-DD format
         """
         try:
-            status = garmin_client.get_training_status(date)
+            status = _as_dict(garmin_client.get_training_status(date))
             if not status:
                 return f"No training status data found for {date}."
 
             # Extract from nested structure
-            # Use `(x.get(key) or {})` instead of `x.get(key, {})` so that
-            # explicit null values in the API response are treated as missing
-            # rather than causing `NoneType has no attribute 'get'` errors.
-            recent_status = (status.get("mostRecentTrainingStatus") or {})
-            latest_data = (recent_status.get("latestTrainingStatusData") or {})
+            # Use `_as_dict()` for nested Garmin sections so null or non-dict
+            # values are treated as missing instead of causing attribute errors.
+            recent_status = _as_dict(status.get("mostRecentTrainingStatus"))
+            latest_data = _as_dict(recent_status.get("latestTrainingStatusData"))
 
             # Get first device data (usually the primary device)
             device_data = {}
-            for device_id, data in latest_data.items():
+            for data in latest_data.values():
+                if not isinstance(data, dict) or not data:
+                    continue
                 device_data = data
                 break
 
-            acwr_data = (device_data.get("acuteTrainingLoadDTO") or {})
+            acwr_data = _as_dict(device_data.get("acuteTrainingLoadDTO"))
 
             # VO2 Max data
-            vo2_data = (status.get("mostRecentVO2Max") or {}).get("generic") or {}
-            cycling_vo2_data = (status.get("mostRecentVO2Max") or {}).get("cycling") or {}
+            most_recent_vo2 = _as_dict(status.get("mostRecentVO2Max"))
+            vo2_data = _as_dict(most_recent_vo2.get("generic"))
+            cycling_vo2_data = _as_dict(most_recent_vo2.get("cycling"))
 
             # Training load balance
-            load_balance = (status.get("mostRecentTrainingLoadBalance") or {})
-            load_map = (load_balance.get("metricsTrainingLoadBalanceDTOMap") or {})
+            load_balance = _as_dict(status.get("mostRecentTrainingLoadBalance"))
+            load_map = _as_dict(load_balance.get("metricsTrainingLoadBalanceDTOMap"))
             load_data = {}
-            for device_id, data in load_map.items():
+            for data in load_map.values():
+                if not isinstance(data, dict) or not data:
+                    continue
                 load_data = data
                 break
 
@@ -713,10 +764,13 @@ def register_tools(app):
                 # Process speed history
                 speed_history = threshold.get("speed", [])
                 if speed_history:
+                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
                     curated["speed_history"] = [
                         {
                             "date": entry.get("from"),
-                            "speed_mps": entry.get("value"),
+                            "speed_mps": (
+                                1 / entry.get("value") if entry.get("value") else None
+                            ),
                             "series": entry.get("series"),
                         }
                         for entry in speed_history
@@ -750,9 +804,11 @@ def register_tools(app):
                 speed_hr = threshold.get("speed_and_heart_rate", {})
                 power = threshold.get("power", {})
 
+                raw_speed = speed_hr.get("speed")
                 curated = {
                     # Speed and heart rate data
-                    "lactate_threshold_speed_mps": speed_hr.get("speed"),
+                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
+                    "lactate_threshold_speed_mps": 1 / raw_speed if raw_speed else None,
                     "lactate_threshold_heart_rate_bpm": speed_hr.get("heartRate"),
                     "heart_rate_cycling_bpm": speed_hr.get("heartRateCycling"),
                     "speed_hr_date": speed_hr.get("calendarDate"),
@@ -1079,6 +1135,10 @@ def register_tools(app):
         Note: VO2 max estimates are smoothed and update gradually — daily changes of <0.5
         are within normal noise. Focus on the 4-6 week trend direction.
 
+        Garmin records a new VO2 max value only on days with a recompute (after an
+        activity). Days in between carry the last known value forward and are marked
+        with "carried_forward": true, matching the trend chart in Garmin Connect.
+
         If historical values are unavailable, the current profile estimate is returned
         separately and is not represented as a historical trend point.
 
@@ -1165,13 +1225,9 @@ def register_tools(app):
                 ),
             )
 
-        trend = []
-        last_vo2 = None
-        if selected_sport is not None:
-            for entry in histories[selected_sport]:
-                if entry["vo2_max"] != last_vo2:
-                    trend.append(entry)
-                    last_vo2 = entry["vo2_max"]
+        trend = _build_vo2_trend_series(
+            histories[selected_sport] if selected_sport is not None else [], end
+        )
 
         current_estimate = None
         current_sport = None
