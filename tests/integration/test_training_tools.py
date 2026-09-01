@@ -263,6 +263,131 @@ async def test_get_training_status_tool(app_with_training, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_training_status_skips_null_device_entries(
+    app_with_training, mock_garmin_client
+):
+    """Test null device entries are skipped when selecting training status data."""
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "device-null": None,
+                "device-valid": {
+                    "calendarDate": "2026-08-24",
+                    "trainingStatus": "PRODUCTIVE",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 250,
+                    },
+                },
+            }
+        },
+        "mostRecentVO2Max": {
+            "generic": {"vo2MaxValue": 52.5},
+            "cycling": None,
+        },
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "device-null": None,
+                "device-valid": {"monthlyLoadAerobicLow": 100},
+            }
+        },
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["date"] == "2026-08-24"
+    assert data["training_status"] == "PRODUCTIVE"
+    assert data["acute_load"] == 250
+    assert data["vo2_max"] == 52.5
+    assert data["monthly_load_aerobic_low"] == 100
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_skips_empty_device_entries(
+    app_with_training, mock_garmin_client
+):
+    """Test empty device entries are skipped when selecting training status data."""
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "device-empty": {},
+                "device-valid": {
+                    "calendarDate": "2026-08-24",
+                    "trainingStatus": "PRODUCTIVE",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 250,
+                    },
+                },
+            }
+        },
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "device-empty": {},
+                "device-valid": {"monthlyLoadAerobicLow": 100},
+            }
+        },
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["training_status"] == "PRODUCTIVE"
+    assert data["acute_load"] == 250
+    assert data["monthly_load_aerobic_low"] == 100
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_tolerates_all_null_device_maps(
+    app_with_training, mock_garmin_client
+):
+    """Test training status output contains only the requested date when maps are null."""
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {"device-null": None},
+        },
+        "mostRecentVO2Max": {
+            "generic": None,
+            "cycling": None,
+        },
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {"device-null": None},
+        },
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    assert json.loads(result[0][0].text) == {"date": "2026-08-24"}
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_tolerates_non_mapping_response(
+    app_with_training, mock_garmin_client
+):
+    """Test truthy non-mapping training status responses are treated as empty."""
+    mock_garmin_client.get_training_status.return_value = [None]
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2026-08-24"},
+    )
+
+    assert result[0][0].text == "No training status data found for 2026-08-24."
+    mock_garmin_client.get_training_status.assert_called_once_with("2026-08-24")
+
+
+@pytest.mark.asyncio
 async def test_get_vo2max_trend_falls_back_to_profile(
     app_with_training, mock_garmin_client
 ):
@@ -624,7 +749,8 @@ async def test_get_lactate_threshold_tool_latest(app_with_training, mock_garmin_
 
     # Verify output structure
     data = json.loads(result[0][0].text)
-    assert data["lactate_threshold_speed_mps"] == 0.32222132
+    # Garmin returns speed as seconds/metre (inverse pace); the tool inverts it to m/s.
+    assert abs(data["lactate_threshold_speed_mps"] - 1 / 0.32222132) < 1e-6
     assert data["lactate_threshold_heart_rate_bpm"] == 169
     assert data["functional_threshold_power_watts"] == 334
     assert data["sport"] == "RUNNING"
@@ -658,6 +784,8 @@ async def test_get_lactate_threshold_tool_range(app_with_training, mock_garmin_c
     assert "speed_history" in data
     assert len(data["speed_history"]) == 3
     assert data["speed_history"][0]["date"] == "2024-01-08"
+    # Garmin returns speed as seconds/metre (inverse pace); the tool inverts it to m/s.
+    assert abs(data["speed_history"][0]["speed_mps"] - 1 / 0.29444) < 1e-4
     assert "heart_rate_history" in data
     assert len(data["heart_rate_history"]) == 3
     assert "power_history" in data
@@ -742,3 +870,47 @@ async def test_get_training_status_no_cycling_vo2_when_absent(app_with_training,
         assert "cycling_vo2_max_precise" not in data
     except (json.JSONDecodeError, AttributeError):
         assert "cycling_vo2_max" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_hrv_data_handles_null_summary(app_with_training, mock_garmin_client):
+    """A null hrvSummary must not crash the tool.
+
+    Garmin returns an explicit null for sections the user has no data in.
+    `hrv_data.get("hrvSummary", {})` returns None in that case (the default
+    only applies when the key is absent), so `summary.get("baseline", {})`
+    raised "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_hrv_data.return_value = {
+        "hrvSummary": None,
+        "sleepStartTimestampLocal": None,
+    }
+
+    result = await app_with_training.call_tool(
+        "get_hrv_data",
+        {"date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_progress_summary_handles_null_stats(app_with_training, mock_garmin_client):
+    """A null `stats` block must not crash the tool.
+
+    An empty range can come back with `stats` as an explicit null;
+    `data.get("stats", {})` then returns None and `.items()` raised
+    "'NoneType' object has no attribute 'items'".
+    """
+    mock_garmin_client.get_progress_summary_between_dates.return_value = [
+        {"date": "2024-01-15", "stats": None}
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_progress_summary_between_dates",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15", "metric": "duration"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text

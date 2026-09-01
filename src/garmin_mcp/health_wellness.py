@@ -268,7 +268,7 @@ def register_tools(app):
                     "events": []
                 }
 
-                for event in day.get('bodyBatteryActivityEvent', []):
+                for event in (day.get('bodyBatteryActivityEvent') or []):
                     entry["events"].append({
                         "type": event.get('eventType'),
                         "start_time": event.get('eventStartTimeGmt'),
@@ -474,9 +474,14 @@ def register_tools(app):
                 summary['sleep_start'] = daily_sleep.get('sleepStartTimestampGMT')
                 summary['sleep_end'] = daily_sleep.get('sleepEndTimestampGMT')
 
-                # Sleep score and quality
-                summary['sleep_score'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('value')
-                summary['sleep_score_qualifier'] = daily_sleep.get('sleepScores', {}).get('overall', {}).get('qualifierKey')
+                # Sleep score and quality. Guard each level with `or {}`: a
+                # sleep record can exist while `sleepScores` (or its `overall`
+                # block) is an explicit null, which would otherwise raise
+                # "'NoneType' object has no attribute 'get'".
+                sleep_scores = daily_sleep.get('sleepScores') or {}
+                overall_score = sleep_scores.get('overall') or {}
+                summary['sleep_score'] = overall_score.get('value')
+                summary['sleep_score_qualifier'] = overall_score.get('qualifierKey')
 
                 # Sleep phases (in seconds)
                 summary['deep_sleep_seconds'] = daily_sleep.get('deepSleepSeconds')
