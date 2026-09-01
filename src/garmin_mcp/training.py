@@ -4,7 +4,8 @@ Training and performance functions for Garmin Connect MCP Server
 
 import json
 import datetime
-from typing import Any, Dict, List, Optional, Union
+import math
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -18,6 +19,90 @@ def configure(client):
     global garmin_client, _activity_type_cache
     garmin_client = client
     _activity_type_cache = None  # Reset cache when client changes
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    """Return a dict for Garmin sections that may be null or another shape."""
+    return value if isinstance(value, dict) else {}
+
+
+def _extract_vo2_measurements(data: Any) -> Dict[str, float]:
+    """Find all VO2 max values by sport in known Garmin response shapes."""
+    if isinstance(data, list):
+        measurements: Dict[str, float] = {}
+        for item in data:
+            for sport, value in _extract_vo2_measurements(item).items():
+                measurements.setdefault(sport, value)
+        return measurements
+
+    data = _as_dict(data)
+    # Garmin uses "generic" for its running/non-cycling VO2 max series.
+    candidate_paths = (
+        (("vo2MaxRunning",), "running"),
+        (("vo2MaxCycling",), "cycling"),
+        (("vo2Max",), "running"),
+        (("vo2MaxValue",), "running"),
+        (("vo2MaxPreciseValue",), "running"),
+        (("generic", "vo2MaxValue"), "running"),
+        (("generic", "vo2MaxPreciseValue"), "running"),
+        (("cycling", "vo2MaxValue"), "cycling"),
+        (("cycling", "vo2MaxPreciseValue"), "cycling"),
+        (("mostRecentVO2Max", "generic", "vo2MaxValue"), "running"),
+        (("mostRecentVO2Max", "generic", "vo2MaxPreciseValue"), "running"),
+        (("mostRecentVO2Max", "cycling", "vo2MaxValue"), "cycling"),
+        (("mostRecentVO2Max", "cycling", "vo2MaxPreciseValue"), "cycling"),
+        (("userData", "vo2MaxRunning"), "running"),
+        (("userData", "vo2MaxCycling"), "cycling"),
+    )
+
+    measurements = {}
+    for path, sport in candidate_paths:
+        current: Any = data
+        for key in path:
+            current = _as_dict(current).get(key)
+        if (
+            sport not in measurements
+            and isinstance(current, (int, float))
+            and not isinstance(current, bool)
+            and math.isfinite(current)
+        ):
+            measurements[sport] = float(current)
+    return measurements
+
+
+def _extract_dated_vo2_measurements(data: Any) -> Dict[str, Dict[str, float]]:
+    """Index max-metrics range values by calendar date and sport."""
+    by_date: Dict[str, Dict[str, float]] = {}
+
+    def collect(item: Any) -> None:
+        if isinstance(item, list):
+            for nested_item in item:
+                collect(nested_item)
+            return
+
+        item = _as_dict(item)
+        measurements = _extract_vo2_measurements(item)
+        for sport, value in measurements.items():
+            section_name = "generic" if sport == "running" else "cycling"
+            section = _as_dict(item.get(section_name))
+            calendar_date = section.get("calendarDate") or item.get("calendarDate")
+            if isinstance(calendar_date, str):
+                by_date.setdefault(calendar_date, {}).setdefault(sport, value)
+
+    collect(data)
+    return by_date
+
+
+def _get_max_metrics_range(
+    client: Any, start_date: str, end_date: str
+) -> Tuple[bool, Any]:
+    """Fetch max metrics for a range when the Garmin client supports it."""
+    connectapi = getattr(client, "connectapi", None)
+    metrics_url = getattr(client, "garmin_connect_metrics_url", None)
+    if not callable(connectapi) or not isinstance(metrics_url, str) or not metrics_url:
+        return False, None
+
+    return True, connectapi(f"{metrics_url}/{start_date}/{end_date}")
 
 
 def _get_activity_type_mapping() -> Dict[int, str]:
@@ -994,6 +1079,9 @@ def register_tools(app):
         Note: VO2 max estimates are smoothed and update gradually — daily changes of <0.5
         are within normal noise. Focus on the 4-6 week trend direction.
 
+        If historical values are unavailable, the current profile estimate is returned
+        separately and is not represented as a historical trend point.
+
         Recommended range: 4-12 weeks. Maximum: 90 days.
 
         Args:
@@ -1013,33 +1101,104 @@ def register_tools(app):
         if days < 1:
             return "end_date must be on or after start_date."
 
-        trend = []
-        last_vo2 = None
+        histories: Dict[str, List[Dict[str, Any]]] = {
+            "running": [],
+            "cycling": [],
+        }
+        range_measurements: Optional[Dict[str, Dict[str, float]]] = None
+        try:
+            range_supported, range_data = _get_max_metrics_range(
+                garmin_client, start_date, end_date
+            )
+            if range_supported:
+                range_measurements = _extract_dated_vo2_measurements(range_data)
+        except Exception:
+            # The range endpoint exists but failed. Continue with training status
+            # without retrying the same max-metrics endpoint once per day.
+            range_measurements = {}
+
         current = start
         while current <= end:
             date_str = current.isoformat()
-            try:
-                data = garmin_client.get_training_status(date_str)
-                if data:
-                    vo2_data = (data.get("mostRecentVO2Max") or {}).get("generic") or {}
-                    vo2 = vo2_data.get("vo2MaxValue")
-                    if vo2 is not None:
-                        vo2_rounded = round(vo2, 1)
-                        if vo2_rounded != last_vo2:  # deduplicate unchanged values
-                            trend.append({"date": date_str, "vo2_max": vo2_rounded})
-                            last_vo2 = vo2_rounded
-            except Exception:
-                pass
+            measurements: Dict[str, float] = {}
+            source = None
+
+            if range_measurements is not None:
+                measurements = range_measurements.get(date_str, {})
+                if measurements:
+                    source = "get_max_metrics"
+                method_names = ("get_training_status",) if not measurements else ()
+            else:
+                method_names = ("get_training_status", "get_max_metrics")
+
+            for method_name in method_names:
+                method = getattr(garmin_client, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    measurements = _extract_vo2_measurements(method(date_str))
+                except Exception:
+                    continue
+                if not measurements:
+                    continue
+                source = method_name
+                break
+
+            for sport, vo2 in measurements.items():
+                histories[sport].append(
+                    {
+                        "date": date_str,
+                        "vo2_max": round(vo2, 1),
+                        "source": source,
+                    }
+                )
             current += datetime.timedelta(days=1)
 
+        selected_sport = None
+        if any(histories.values()):
+            # Prefer the sport with the best coverage; make ties deterministic.
+            selected_sport = max(
+                histories,
+                key=lambda sport: (
+                    len(histories[sport]),
+                    sport == "running",
+                ),
+            )
+
+        trend = []
+        last_vo2 = None
+        if selected_sport is not None:
+            for entry in histories[selected_sport]:
+                if entry["vo2_max"] != last_vo2:
+                    trend.append(entry)
+                    last_vo2 = entry["vo2_max"]
+
+        current_estimate = None
+        current_sport = None
         if not trend:
-            return f"No VO2 max data found between {start_date} and {end_date}."
+            try:
+                profile = garmin_client.get_user_profile()
+            except Exception:
+                profile = None
+
+            profile_measurements = _extract_vo2_measurements(profile)
+            if profile_measurements:
+                current_sport = (
+                    "running" if "running" in profile_measurements else "cycling"
+                )
+                current_estimate = profile_measurements[current_sport]
+            else:
+                return f"No VO2 max data found between {start_date} and {end_date}."
 
         first_vo2 = trend[0]["vo2_max"] if trend else None
         latest_vo2 = trend[-1]["vo2_max"] if trend else None
-        change = round(latest_vo2 - first_vo2, 1) if (first_vo2 and latest_vo2) else None
+        change = (
+            round(latest_vo2 - first_vo2, 1)
+            if (first_vo2 is not None and latest_vo2 is not None)
+            else None
+        )
 
-        return json.dumps({
+        response = {
             "start_date": start_date,
             "end_date": end_date,
             "data_points": len(trend),
@@ -1047,7 +1206,22 @@ def register_tools(app):
             "latest_vo2_max": latest_vo2,
             "change": change,
             "trend": trend,
-        }, indent=2)
+        }
+        if selected_sport is not None:
+            response["sport"] = selected_sport
+
+        if current_estimate is not None:
+            response["current_vo2_max_estimate"] = {
+                "vo2_max": round(current_estimate, 1),
+                "sport": current_sport,
+                "source": "get_user_profile",
+            }
+            response["note"] = (
+                "Historical VO2 max values were not available from Garmin; "
+                "returning the current profile estimate separately."
+            )
+
+        return json.dumps(response, indent=2)
 
     @app.tool()
     async def get_respiration_trend(start_date: str, end_date: str) -> str:
