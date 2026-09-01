@@ -1498,4 +1498,62 @@ def register_tools(app):
             "trend": trend,
         }, indent=2)
 
+    @app.tool()
+    async def get_acclimation(date: str) -> str:
+        """Get heat and altitude acclimation status for a given date.
+
+        Garmin tracks how adapted the athlete currently is to training in heat
+        and at altitude. heat_acclimation_percent runs 0-100 and decays without
+        continued exposure; use it to judge readiness for a warm-weather race.
+
+        heat_trend reports Garmin's own label (e.g. ACCLIMATIZED). The
+        previous_* fields hold the prior reading so direction of travel is
+        visible without a second call.
+
+        VO2 max is not returned here; use get_training_status or get_vo2max_trend.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            data = garmin_client.get_max_metrics(date)
+        except Exception as e:
+            return f"Error retrieving acclimation data: {str(e)}"
+
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict):
+            return f"No acclimation data found for {date}."
+
+        acc = _as_dict(data.get("heatAltitudeAcclimation"))
+        if not acc:
+            return (
+                f"No acclimation data found for {date}. Garmin populates this only "
+                "after outdoor activities in heat or at altitude."
+            )
+
+        result: Dict[str, Any] = {"date": acc.get("calendarDate", date)}
+
+        for out_key, in_key in (
+            ("heat_acclimation_percent", "heatAcclimationPercentage"),
+            ("previous_heat_acclimation_percent", "previousHeatAcclimationPercentage"),
+            ("heat_trend", "heatTrend"),
+            ("heat_acclimation_date", "heatAcclimationDate"),
+            ("previous_heat_acclimation_date", "previousHeatAcclimationDate"),
+            ("altitude_acclimation_meters", "altitudeAcclimation"),
+            ("previous_altitude_acclimation_meters", "previousAltitudeAcclimation"),
+            ("altitude_trend", "altitudeTrend"),
+            ("current_altitude_meters", "currentAltitude"),
+        ):
+            value = acc.get(in_key)
+            if value is not None:
+                result[out_key] = value
+
+        heat = result.get("heat_acclimation_percent")
+        prev = result.get("previous_heat_acclimation_percent")
+        if isinstance(heat, (int, float)) and isinstance(prev, (int, float)):
+            result["heat_acclimation_change"] = round(heat - prev, 1)
+
+        return json.dumps(result, indent=2)
+
     return app

@@ -1133,3 +1133,65 @@ async def test_get_progress_summary_handles_null_stats(app_with_training, mock_g
     text = result[0][0].text
     assert "NoneType" not in text
     assert "Error" not in text
+
+
+@pytest.mark.asyncio
+async def test_get_acclimation_returns_heat_data(app_with_training, mock_garmin_client):
+    """Test get_acclimation returns curated heat/altitude acclimation data."""
+    mock_garmin_client.get_max_metrics.return_value = [
+        {
+            "heatAltitudeAcclimation": {
+                "calendarDate": "2024-07-15",
+                "heatAcclimationPercentage": 72.5,
+                "previousHeatAcclimationPercentage": 65.0,
+                "heatTrend": "ACCLIMATIZED",
+                "heatAcclimationDate": "2024-07-15",
+                "altitudeAcclimation": 1200,
+                "altitudeTrend": "INCREASING",
+                "currentAltitude": 850,
+            }
+        }
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_acclimation",
+        {"date": "2024-07-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["date"] == "2024-07-15"
+    assert data["heat_acclimation_percent"] == 72.5
+    assert data["previous_heat_acclimation_percent"] == 65.0
+    assert data["heat_trend"] == "ACCLIMATIZED"
+    assert data["heat_acclimation_change"] == 7.5
+    assert data["altitude_acclimation_meters"] == 1200
+    assert data["altitude_trend"] == "INCREASING"
+    mock_garmin_client.get_max_metrics.assert_called_once_with("2024-07-15")
+
+
+@pytest.mark.asyncio
+async def test_get_acclimation_no_data(app_with_training, mock_garmin_client):
+    """Test get_acclimation handles missing heatAltitudeAcclimation."""
+    mock_garmin_client.get_max_metrics.return_value = [
+        {"generic": {"calendarDate": "2024-07-15", "vo2MaxValue": 48.0}}
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_acclimation",
+        {"date": "2024-07-15"},
+    )
+
+    assert "No acclimation data" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_get_acclimation_exception(app_with_training, mock_garmin_client):
+    """Test get_acclimation error handling."""
+    mock_garmin_client.get_max_metrics.side_effect = Exception("API Error")
+
+    result = await app_with_training.call_tool(
+        "get_acclimation",
+        {"date": "2024-07-15"},
+    )
+
+    assert "Error" in result[0][0].text
