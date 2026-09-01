@@ -3,7 +3,6 @@ Nutrition/food logging functions for Garmin Connect MCP Server
 """
 import json
 from typing import Optional
-from urllib.parse import quote
 
 from garminconnect import GarminConnectConnectionError
 
@@ -165,12 +164,10 @@ def register_tools(app):
             limit: Maximum number of results per page (default 20)
         """
         try:
-            url = (
-                f"/nutrition-service/food/search"
-                f"?searchExpression={quote(query)}"
-                f"&start={start}&limit={limit}"
+            data = garmin_client.connectapi(
+                "/nutrition-service/food/search",
+                params={"searchExpression": query, "start": start, "limit": limit},
             )
-            data = garmin_client.connectapi(url)
             if not data:
                 return "No foods found."
 
@@ -236,13 +233,15 @@ def register_tools(app):
             limit: Maximum number of results (default 20)
         """
         try:
-            url = (
-                f"/nutrition-service/customFood"
-                f"?searchExpression={quote(search)}"
-                f"&start={start}&limit={limit}"
-                f"&includeContent=true"
+            data = garmin_client.connectapi(
+                "/nutrition-service/customFood",
+                params={
+                    "searchExpression": search,
+                    "start": start,
+                    "limit": limit,
+                    "includeContent": "true",
+                },
             )
-            data = garmin_client.connectapi(url)
             if not data:
                 return "No custom foods found."
             return json.dumps(data, indent=2)
@@ -435,12 +434,15 @@ def register_tools(app):
             existing_nutrition: dict = {}
             existing_brand: Optional[str] = None
             try:
-                search_url = (
-                    f"/nutrition-service/customFood"
-                    f"?searchExpression={quote(food_name)}"
-                    f"&start=0&limit=20&includeContent=true"
+                search_data = garmin_client.connectapi(
+                    "/nutrition-service/customFood",
+                    params={
+                        "searchExpression": food_name,
+                        "start": 0,
+                        "limit": 20,
+                        "includeContent": "true",
+                    },
                 )
-                search_data = garmin_client.connectapi(search_url)
                 foods = search_data.get("customFoods", []) if isinstance(search_data, dict) else []
                 for f in foods:
                     if str(f.get("foodMetaData", {}).get("foodId", "")) == food_id:
@@ -778,12 +780,15 @@ def register_tools(app):
             from datetime import datetime, timezone
 
             # 1. Search for existing custom food
-            search_url = (
-                f"/nutrition-service/customFood"
-                f"?searchExpression={quote(food_name)}"
-                f"&start=0&limit=10&includeContent=true"
+            search_data = garmin_client.connectapi(
+                "/nutrition-service/customFood",
+                params={
+                    "searchExpression": food_name,
+                    "start": 0,
+                    "limit": 10,
+                    "includeContent": "true",
+                },
             )
-            search_data = garmin_client.connectapi(search_url)
             foods = search_data.get("customFoods", []) if isinstance(search_data, dict) else []
 
             food_id = None
@@ -831,12 +836,15 @@ def register_tools(app):
                         serving_id = str(contents[0].get("servingId", ""))
                 # 204: no body — look up by name
                 if not food_id or not serving_id:
-                    lookup_url = (
-                        f"/nutrition-service/customFood"
-                        f"?searchExpression={quote(food_name)}"
-                        f"&start=0&limit=10&includeContent=true"
+                    lookup_data = garmin_client.connectapi(
+                        "/nutrition-service/customFood",
+                        params={
+                            "searchExpression": food_name,
+                            "start": 0,
+                            "limit": 10,
+                            "includeContent": "true",
+                        },
                     )
-                    lookup_data = garmin_client.connectapi(lookup_url)
                     lookup_foods = lookup_data.get("customFoods", []) if isinstance(lookup_data, dict) else []
                     for f in lookup_foods:
                         meta = f.get("foodMetaData", f)

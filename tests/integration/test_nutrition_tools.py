@@ -6,7 +6,7 @@ Tests tools from:
 """
 import json
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import nutrition
@@ -173,7 +173,13 @@ async def test_get_custom_foods(app_with_nutrition, mock_garmin_client):
     result = await app_with_nutrition.call_tool("get_custom_foods", {})
     assert result is not None
     mock_garmin_client.connectapi.assert_called_once_with(
-        "/nutrition-service/customFood?searchExpression=&start=0&limit=20&includeContent=true"
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": "",
+            "start": 0,
+            "limit": 20,
+            "includeContent": "true",
+        },
     )
 
 
@@ -183,11 +189,17 @@ async def test_get_custom_foods_with_search(app_with_nutrition, mock_garmin_clie
     mock_garmin_client.connectapi.return_value = []
     result = await app_with_nutrition.call_tool(
         "get_custom_foods",
-        {"search": "cookie", "start": 0, "limit": 10}
+        {"search": "cookie & cream/é", "start": 0, "limit": 10}
     )
     assert result is not None
     mock_garmin_client.connectapi.assert_called_once_with(
-        "/nutrition-service/customFood?searchExpression=cookie&start=0&limit=10&includeContent=true"
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": "cookie & cream/é",
+            "start": 0,
+            "limit": 10,
+            "includeContent": "true",
+        },
     )
 
 
@@ -323,6 +335,15 @@ async def test_update_custom_food(app_with_nutrition, mock_garmin_client):
     assert payload["nutritionContents"][0]["carbs"] == "22"
     assert payload["nutritionContents"][0]["protein"] == "3"
     assert payload["nutritionContents"][0]["fat"] == "8"
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": "Homemade Cookies Updated",
+            "start": 0,
+            "limit": 20,
+            "includeContent": "true",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -765,6 +786,15 @@ async def test_upsert_and_log_existing_food(app_with_nutrition, mock_garmin_clie
     assert item["foodId"] == "food001"
     assert item["servingId"] == "srv001"
     assert item["mealId"] == 20249  # BREAKFAST
+    assert mock_garmin_client.connectapi.call_args_list[0] == call(
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": "Greek Yogurt",
+            "start": 0,
+            "limit": 10,
+            "includeContent": "true",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -794,6 +824,49 @@ async def test_upsert_and_log_creates_new_food(app_with_nutrition, mock_garmin_c
     log_payload = mock_garmin_client.client.put.call_args_list[1][1]["json"]
     assert log_payload["foodLogItems"][0]["foodId"] == "food999"
     assert log_payload["foodLogItems"][0]["servingId"] == "srv999"
+    assert mock_garmin_client.connectapi.call_args_list[0] == call(
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": "New Food",
+            "start": 0,
+            "limit": 10,
+            "includeContent": "true",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_recovers_ids_after_bodyless_create(app_with_nutrition, mock_garmin_client):
+    """Test upsert_and_log looks up IDs after a bodyless create response."""
+    mock_garmin_client.connectapi.side_effect = [
+        {"customFoods": []},  # search returns empty
+        MOCK_CUSTOM_FOODS,      # post-create lookup
+        MOCK_MEALS,              # meal resolution
+    ]
+    mock_garmin_client.client.put.side_effect = [{}, {}]
+    result = await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "food_name": "Greek Yogurt",
+            "calories": 200,
+        }
+    )
+    assert "Food logged successfully" in result[0][0].text
+    log_payload = mock_garmin_client.client.put.call_args_list[1][1]["json"]
+    assert log_payload["foodLogItems"][0]["foodId"] == "food001"
+    assert log_payload["foodLogItems"][0]["servingId"] == "srv001"
+    expected_lookup = call(
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": "Greek Yogurt",
+            "start": 0,
+            "limit": 10,
+            "includeContent": "true",
+        },
+    )
+    assert mock_garmin_client.connectapi.call_args_list[:2] == [expected_lookup, expected_lookup]
 
 
 @pytest.mark.asyncio
@@ -990,7 +1063,7 @@ async def test_search_foods_returns_results(app_with_nutrition, mock_garmin_clie
 
     result = await app_with_nutrition.call_tool(
         "search_foods",
-        {"query": "Cheerios"},
+        {"query": "Cheerios & Oats/é"},
     )
     data = json.loads(result[0][0].text)
     assert data["count"] == 1
@@ -999,9 +1072,14 @@ async def test_search_foods_returns_results(app_with_nutrition, mock_garmin_clie
     assert data["results"][0]["brand"] == "General Mills"
     assert data["results"][0]["servings"][0]["calories"] == 100.0
     assert not data["has_more"]
-    mock_garmin_client.connectapi.assert_called_once()
-    called_url = mock_garmin_client.connectapi.call_args[0][0]
-    assert "Cheerios" in called_url
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/nutrition-service/food/search",
+        params={
+            "searchExpression": "Cheerios & Oats/é",
+            "start": 0,
+            "limit": 20,
+        },
+    )
 
 
 @pytest.mark.asyncio

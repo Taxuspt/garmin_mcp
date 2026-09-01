@@ -15,7 +15,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - View body composition data
 - Track training status and readiness
 - Access cycling FTP and lactate threshold metrics
-- Manage gear and equipment
+- Manage gear and equipment, including free-text notes returned by `get_gear`
 - Access workouts and training plans
 - Inspect detailed workout step structures, including repeat groups and swim pace targets
 - Weekly health aggregates (steps, stress, intensity minutes)
@@ -39,11 +39,17 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (3 tools)
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
-- ✅ Courses (3 tools) - list / upload GPX as course / delete course
+- ✅ Courses (5 tools) - list / get details / upload GPX as course / download GPX / delete course
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+
+### Gear Notes
+
+Each item in the `gear` array returned by `get_gear` includes a `notes` field
+containing the free-text Notes value shown in Garmin Connect. Gear without a
+Notes value returns `null`; all existing gear fields remain unchanged.
 
 ### Activity File Downloads
 
@@ -436,6 +442,7 @@ By default the server communicates over **stdio**, which is what Claude Desktop,
 - `GARMIN_MCP_TRANSPORT`: `stdio` (default), `streamable-http`, or `sse`
 - `GARMIN_MCP_HOST`: bind address for HTTP transports (default `127.0.0.1`; set to `0.0.0.0` only when the endpoint is fronted by an authenticating reverse proxy)
 - `GARMIN_MCP_PORT`: bind port for HTTP transports (default `8000`)
+- `GARMIN_MCP_CALL_TIMEOUT`: per-request timeout in seconds for calls to Garmin (default `90`). Garmin's API occasionally stalls a single request indefinitely; without this bound the call hangs until the MCP client's own timeout fires and reports the whole server as unresponsive. On timeout the tool returns a clear, retry-able error instead. Set to `0` to disable the bound.
 
 ```bash
 GARMIN_MCP_TRANSPORT=streamable-http garmin-mcp
