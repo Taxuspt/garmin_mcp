@@ -11,6 +11,7 @@ import requests
 from mcp.server.fastmcp import FastMCP
 
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
+from garmin_mcp.garmin_cn_compat import configure_garmin_region
 
 # Import all modules
 from garmin_mcp import token_utils
@@ -94,6 +95,7 @@ elif password_file:
 tokenstore = token_utils.get_token_path()
 tokenstore_base64 = token_utils.get_token_base64_path()
 is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
+configure_garmin_region(is_cn)
 
 
 # --- Tool filtering ---------------------------------------------------------
