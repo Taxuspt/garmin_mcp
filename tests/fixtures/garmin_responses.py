@@ -595,6 +595,19 @@ MOCK_GEAR = [
     },
 ]
 
+# Gear notes are exposed by Garmin's v2 endpoint, whose UUIDs are hyphenated.
+MOCK_GEAR_V2 = [
+    {
+        "uuid": "8ABFC40D-71FB-4860-BCE1-9072B6C79644",
+        "name": "Nimbus 25",
+        "notes": "Rotation shoe; blue laces.",
+    },
+    {
+        "uuid": "6f27ed27-3977-49ac-9f6f-450e039c2424",
+        "name": "Nimbus 24",
+    },
+]
+
 MOCK_GEAR_DEFAULTS = [
     {
         "uuid": "8abfc40d71fb4860bce19072b6c79644",
