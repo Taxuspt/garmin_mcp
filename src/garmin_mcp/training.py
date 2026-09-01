@@ -579,34 +579,38 @@ def register_tools(app):
             date: Date in YYYY-MM-DD format
         """
         try:
-            status = garmin_client.get_training_status(date)
+            status = _as_dict(garmin_client.get_training_status(date))
             if not status:
                 return f"No training status data found for {date}."
 
             # Extract from nested structure
-            # Use `(x.get(key) or {})` instead of `x.get(key, {})` so that
-            # explicit null values in the API response are treated as missing
-            # rather than causing `NoneType has no attribute 'get'` errors.
-            recent_status = (status.get("mostRecentTrainingStatus") or {})
-            latest_data = (recent_status.get("latestTrainingStatusData") or {})
+            # Use `_as_dict()` for nested Garmin sections so null or non-dict
+            # values are treated as missing instead of causing attribute errors.
+            recent_status = _as_dict(status.get("mostRecentTrainingStatus"))
+            latest_data = _as_dict(recent_status.get("latestTrainingStatusData"))
 
             # Get first device data (usually the primary device)
             device_data = {}
-            for device_id, data in latest_data.items():
+            for data in latest_data.values():
+                if not isinstance(data, dict) or not data:
+                    continue
                 device_data = data
                 break
 
-            acwr_data = (device_data.get("acuteTrainingLoadDTO") or {})
+            acwr_data = _as_dict(device_data.get("acuteTrainingLoadDTO"))
 
             # VO2 Max data
-            vo2_data = (status.get("mostRecentVO2Max") or {}).get("generic") or {}
-            cycling_vo2_data = (status.get("mostRecentVO2Max") or {}).get("cycling") or {}
+            most_recent_vo2 = _as_dict(status.get("mostRecentVO2Max"))
+            vo2_data = _as_dict(most_recent_vo2.get("generic"))
+            cycling_vo2_data = _as_dict(most_recent_vo2.get("cycling"))
 
             # Training load balance
-            load_balance = (status.get("mostRecentTrainingLoadBalance") or {})
-            load_map = (load_balance.get("metricsTrainingLoadBalanceDTOMap") or {})
+            load_balance = _as_dict(status.get("mostRecentTrainingLoadBalance"))
+            load_map = _as_dict(load_balance.get("metricsTrainingLoadBalanceDTOMap"))
             load_data = {}
-            for device_id, data in load_map.items():
+            for data in load_map.values():
+                if not isinstance(data, dict) or not data:
+                    continue
                 load_data = data
                 break
 
