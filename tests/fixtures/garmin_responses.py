@@ -985,3 +985,61 @@ MOCK_CYCLING_FTP = {
     "functionalThresholdPower": 294,
     "biometricSourceType": "CHANGE_LOG",
 }
+
+# Training - Running Tolerance
+# All three load fields are in meters despite the name — acuteImpactLoad is an
+# intensity-adjusted distance-equivalent, not an arbitrary load score.
+MOCK_RUNNING_TOLERANCE_DAILY = [
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15",
+        "acuteImpactLoad": 25000,
+        "acuteDistance": 22000,
+        "acuteTolerance": 34000,
+        "runningToleranceFeedBackPhrase": "MEDIUM_LOAD",
+    }
+]
+
+# Deliberately out of chronological order — the real API returns daily
+# aggregation this way, so the trend tool must sort it itself.
+MOCK_RUNNING_TOLERANCE_DAILY_TREND = [
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-16",
+        "acuteImpactLoad": 26000,
+        "acuteDistance": 23000,
+        "acuteTolerance": 34500,
+        "runningToleranceFeedBackPhrase": "MEDIUM_LOAD",
+    },
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15",
+        "acuteImpactLoad": 25000,
+        "acuteDistance": 22000,
+        "acuteTolerance": 34000,
+        "runningToleranceFeedBackPhrase": "MEDIUM_LOAD",
+    },
+]
+
+MOCK_RUNNING_TOLERANCE_WEEKLY = [
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-08",
+        "totalImpactLoad": 26000,
+        "totalDistance": 24000.0,
+        "tolerance": 33000,
+        "startOfWeek": "2024-01-02",
+        "endOfWeek": "2024-01-08",
+        "weekIndex": 1900,
+    },
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15",
+        "totalImpactLoad": 28000,
+        "totalDistance": 26000.0,
+        "tolerance": 34000,
+        "startOfWeek": "2024-01-09",
+        "endOfWeek": "2024-01-15",
+        "weekIndex": 1901,
+    },
+]
