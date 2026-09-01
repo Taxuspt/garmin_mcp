@@ -35,3 +35,14 @@ def test_bundled_manifest_matches_source_manifest():
         bundled_manifest = json.loads(bundle.read("manifest.json"))
 
     assert bundled_manifest == manifest
+
+
+def test_manifest_exposes_china_account_region():
+    manifest = _read_manifest()
+
+    assert manifest["user_config"]["garmin_is_cn"]["type"] == "boolean"
+    assert manifest["user_config"]["garmin_is_cn"]["default"] is False
+    assert manifest["server"]["mcp_config"]["env"]["GARMIN_IS_CN"] == (
+        "${user_config.garmin_is_cn}"
+    )
+    assert manifest["compatibility"]["runtimes"]["python"] == ">=3.12"

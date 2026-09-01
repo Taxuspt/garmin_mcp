@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Tuple
 
 from garminconnect import Garmin, GarminConnectConnectionError
+from garmin_mcp.garmin_cn_compat import configure_garmin_region
 
 
 def resolve_token_path(path: str) -> str:
@@ -100,6 +101,7 @@ def validate_tokens(token_path: str = None, is_cn: bool = False) -> Tuple[bool, 
     sys.stderr = io.StringIO()
 
     try:
+        configure_garmin_region(is_cn)
         garmin = Garmin(is_cn=is_cn)
         garmin.login(token_path)
 

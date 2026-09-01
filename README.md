@@ -1,8 +1,9 @@
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/taxuspt-garmin-mcp-badge.png)](https://mseep.ai/app/taxuspt-garmin-mcp)
-
 # Garmin MCP Server
 
 This Model Context Protocol (MCP) server connects to Garmin Connect and exposes your fitness and health data to Claude and other MCP-compatible clients.
+
+This fork adds working authentication and persisted-session compatibility for
+Garmin Connect China accounts while retaining international account support.
 
 Garmin's API is accessed via the awesome [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library.
 
@@ -25,7 +26,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2 on Python 3.10/3.11; v0.3.4 on Python 3.12+):
 
 - ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
@@ -80,7 +81,7 @@ Some endpoints are not implemented due to performance or complexity consideratio
 - `delete_activity()`, `delete_blood_pressure()` - Destructive operations require careful consideration.
 - Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
 
-If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
+If you need any of these endpoints, please [open an issue](https://github.com/lewobx/garmin_china_mcp/issues).
 
 ## Tool Filtering
 
@@ -312,16 +313,18 @@ The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop E
 
 ### Download and install
 
-1. Download the latest `garmin-mcp.dxt` from the [Releases page](https://github.com/Taxuspt/garmin_mcp/releases).
+1. Download the latest `garmin-mcp.dxt` from the [Releases page](https://github.com/lewobx/garmin_china_mcp/releases).
 2. Drag the `.dxt` file into the Claude Desktop window, **or** double-click it, **or** go to **Settings → Extensions → Install Extension** and select the file.
-3. Claude Desktop will prompt you for optional configuration (token path, email, password).
+3. Claude Desktop will prompt you for optional configuration (token path,
+   account region, email, password). Enable **Garmin Connect China account** if
+   your account is hosted on `garmin.cn`.
 
 ### First-time authentication
 
 The extension installs and runs the server automatically, but you must authenticate with Garmin once before data can be fetched:
 
 ```bash
-uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
+uvx --python 3.12 --from git+https://github.com/lewobx/garmin_china_mcp garmin-mcp-auth
 ```
 
 This saves OAuth tokens to `~/.garminconnect`. After that the server works without any credentials in the config.
@@ -344,7 +347,8 @@ The easiest way to use this MCP server with Claude Desktop, [Codex](https://open
 
 #### Prerequisites
 
-- Python 3.12+
+- Python 3.10+ for international accounts
+- Python 3.12+ for Garmin Connect China accounts
 - Garmin Connect account
 - MFA may be required if enabled on your account
 
@@ -355,7 +359,7 @@ Before adding the server to your MCP client, authenticate once in your terminal:
 ```bash
 
 # Install and run authentication tool
-uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
+uvx --python 3.12 --from git+https://github.com/lewobx/garmin_china_mcp garmin-mcp-auth
 
 # You'll be prompted for:
 # - Email (or set GARMIN_EMAIL env var)
@@ -393,7 +397,7 @@ Add to your Claude Desktop MCP settings **WITHOUT** credentials:
         "--python",
         "3.12",
         "--from",
-        "git+https://github.com/Taxuspt/garmin_mcp",
+        "git+https://github.com/lewobx/garmin_china_mcp",
         "garmin-mcp"
       ]
     }
@@ -457,14 +461,29 @@ The server itself performs **no authentication** on the HTTP endpoint — put it
 
 ### Garmin Connect China (garmin.cn)
 
-If you use Garmin Connect China (garmin.cn) instead of the international version, set the `GARMIN_IS_CN` environment variable to `true`:
+Garmin Connect China and the international Garmin Connect service use separate
+accounts and authentication systems. If your data is in the Garmin China app or
+on `garmin.cn`, use this mode; an international integration cannot read that
+account.
+
+Python 3.12 or newer is required. Authenticate once from a terminal:
 
 ```bash
-# Pre-authenticate with Garmin Connect China
-GARMIN_IS_CN=true garmin-mcp-auth
+# Run directly from this fork
+uvx --python 3.12 \
+  --from git+https://github.com/lewobx/garmin_china_mcp \
+  garmin-mcp-auth --is-cn
+```
 
-# Or use the CLI flag
-garmin-mcp-auth --is-cn
+Complete MFA when prompted. OAuth tokens are saved under
+`~/.garminconnect` with owner-only permissions; do not put your Garmin password
+in an MCP client configuration. Verify the saved session against the China
+service with:
+
+```bash
+GARMIN_IS_CN=true uvx --python 3.12 \
+  --from git+https://github.com/lewobx/garmin_china_mcp \
+  garmin-mcp-auth --verify
 ```
 
 For Claude Desktop, add `GARMIN_IS_CN` to the `env` section:
@@ -478,7 +497,7 @@ For Claude Desktop, add `GARMIN_IS_CN` to the `env` section:
         "--python",
         "3.12",
         "--from",
-        "git+https://github.com/Taxuspt/garmin_mcp",
+        "git+https://github.com/lewobx/garmin_china_mcp",
         "garmin-mcp"
       ],
       "env": {
@@ -490,6 +509,19 @@ For Claude Desktop, add `GARMIN_IS_CN` to the `env` section:
 ```
 
 For Docker, add `GARMIN_IS_CN=true` to your `.env` file or uncomment it in `docker-compose.yml`.
+
+#### China authentication troubleshooting
+
+- Always use Python 3.12+ and this fork's current `main` branch. Older
+  `garminconnect` releases do not contain the authentication flow used here.
+- If Garmin reports rate limiting or every DI client ID fails, stop retrying for
+  10–30 minutes before using `--force-reauth`; repeated MFA attempts can extend
+  the temporary block.
+- If authentication says that tokens were saved but verification fails, run the
+  regional `--verify` command above. Re-authenticate only if that command still
+  reports an invalid session.
+- The China flag is required both during pre-authentication and when the MCP
+  server runs. A China token cannot be validated against the international API.
 
 ### Testing the server locally with MCP Inspector
 
@@ -525,7 +557,7 @@ You have two options to run the MCP locally with Claude.
         "--python",
         "3.12",
         "--from",
-        "git+https://github.com/Taxuspt/garmin_mcp",
+        "git+https://github.com/lewobx/garmin_china_mcp",
         "garmin-mcp"
       ],
       "env": {
@@ -570,7 +602,7 @@ Codex uses TOML for MCP server configuration. Add one of the following entries t
 You can also ask your MCP-capable client to set this up for you. For example:
 
 ```text
-Install the Garmin MCP server from https://github.com/Taxuspt/garmin_mcp, authenticate with garmin-mcp-auth, and add it to my MCP configuration without storing my Garmin email or password.
+Install the Garmin MCP server from https://github.com/lewobx/garmin_china_mcp, authenticate with garmin-mcp-auth, and add it to my MCP configuration without storing my Garmin email or password.
 ```
 
 #### Directly from GitHub without cloning the repo
@@ -582,7 +614,7 @@ args = [
   "--python",
   "3.12",
   "--from",
-  "git+https://github.com/Taxuspt/garmin_mcp",
+  "git+https://github.com/lewobx/garmin_china_mcp",
   "garmin-mcp"
 ]
 ```
@@ -611,8 +643,8 @@ Restart your MCP client after saving the file.
 This repo ships an [`opencode.json`](./opencode.json) that runs the MCP via `uv run garmin-mcp`, so it always tracks the working tree.
 
 ```bash
-git clone https://github.com/Taxuspt/garmin_mcp.git
-cd garmin_mcp
+git clone https://github.com/lewobx/garmin_china_mcp.git
+cd garmin_china_mcp
 uv sync                # install dependencies
 garmin-mcp-auth        # one-time Garmin login (skip if ~/.garminconnect already exists)
 opencode               # launches with the garmin MCP attached
@@ -641,7 +673,7 @@ Add the server to your global opencode config at `~/.config/opencode/opencode.js
         "--python",
         "3.12",
         "--from",
-        "git+https://github.com/Taxuspt/garmin_mcp",
+        "git+https://github.com/lewobx/garmin_china_mcp",
         "garmin-mcp"
       ],
       "enabled": true,
@@ -811,7 +843,7 @@ which uvx
         "--python",
         "3.12",
         "--from",
-        "git+https://github.com/Taxuspt/garmin_mcp",
+        "git+https://github.com/lewobx/garmin_china_mcp",
         "garmin-mcp"
       ]
     }
@@ -878,7 +910,7 @@ chmod 600 ~/.garmin_email ~/.garmin_password
 
 # Run server interactively to authenticate
 GARMIN_EMAIL_FILE=~/.garmin_email GARMIN_PASSWORD_FILE=~/.garmin_password \
-  uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp
+  uvx --python 3.12 --from git+https://github.com/lewobx/garmin_china_mcp garmin-mcp
 
 # Enter MFA code when prompted
 # Tokens will be saved automatically
@@ -896,7 +928,7 @@ After initial authentication, configure Claude Desktop **without** credentials (
         "--python",
         "3.12",
         "--from",
-        "git+https://github.com/Taxuspt/garmin_mcp",
+        "git+https://github.com/lewobx/garmin_china_mcp",
         "garmin-mcp"
       ]
     }
