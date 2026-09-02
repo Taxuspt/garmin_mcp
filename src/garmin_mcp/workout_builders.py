@@ -255,6 +255,23 @@ def build_z2_walk_json(
     }
 
 
+def _assign_step_orders(steps: List[dict], counter: Optional[List[int]] = None) -> None:
+    """Number every step in document order, descending into repeat groups.
+
+    Garmin expects stepOrder to be a single sequence across the whole workout, so a
+    nested step continues the outer numbering rather than restarting at 1.
+    """
+    if counter is None:
+        counter = [1]
+
+    for step in steps:
+        step["stepOrder"] = counter[0]
+        counter[0] += 1
+        nested = step.get("workoutSteps")
+        if nested:
+            _assign_step_orders(nested, counter)
+
+
 def build_strength_json(
     name: str,
     exercises: List[Dict[str, Any]],
@@ -277,20 +294,21 @@ def build_strength_json(
     https://connect.garmin.com/web-data/exercises/Exercises.json
     """
     steps: List[dict] = []
-    step_order = 1
 
-    for ex in exercises:
+    for index, ex in enumerate(exercises):
         ex_name = ex.get("name", "Exercise")
         sets = int(ex.get("sets", 1))
         reps = int(ex.get("reps", 1))
         rest_seconds = int(ex.get("rest_seconds", 60))
+        is_last = index == len(exercises) - 1
 
-        # Work step
-        step = {
+        # Work step. The set count is carried by the enclosing repeat group, so the
+        # description names the exercise only — labelling a step "3 sets" when Garmin
+        # runs it once is what made earlier workouts contradict themselves.
+        work = {
             "type": "ExecutableStepDTO",
-            "stepOrder": step_order,
             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-            "description": f"{ex_name}: {sets} sets x {reps} reps",
+            "description": ex_name,
             "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
             "endConditionValue": float(reps),
             "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
@@ -306,7 +324,7 @@ def build_strength_json(
                 raise ValueError(
                     f"category for exercise {ex_name!r} must be a non-empty string"
                 )
-            step["category"] = category.strip().upper()
+            work["category"] = category.strip().upper()
 
         if sets > 1:
             # N sets = a repeat group iterated N times (work + rest per iteration).
@@ -346,14 +364,33 @@ def build_strength_json(
         if rest_seconds > 0 and ex != exercises[-1]:
             steps.append({
                 "type": "ExecutableStepDTO",
-                "stepOrder": step_order,
                 "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
                 "description": f"Rest {rest_seconds}s",
                 "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
                 "endConditionValue": float(rest_seconds),
                 "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+            }
+
+        if sets > 1:
+            # One repeat group per exercise: sets x (work + rest between sets).
+            steps.append({
+                "type": "RepeatGroupDTO",
+                "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
+                "numberOfIterations": sets,
+                "smartRepeat": False,
+                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                "workoutSteps": [work] + ([rest] if rest else []),
             })
-            step_order += 1
+        else:
+            steps.append(work)
+            # A single-set exercise keeps its rest as a sibling, skipped after the
+            # last one so the workout does not end on a recovery step. Compared by
+            # index, not by value: two identical exercise dicts would otherwise make
+            # the earlier one look like the last.
+            if rest and not is_last:
+                steps.append(rest)
+
+    _assign_step_orders(steps)
 
     return {
         "workoutName": name,

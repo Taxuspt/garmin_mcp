@@ -144,10 +144,12 @@ Returns: `{"status": "success", "workout_id": 1234567890, ...}`
 
 ### `create_strength_workout`
 
-Creates a strength workout from a list of exercises. Each becomes a reps-based step, with the
-name kept in the step description. The name is also sent as `exerciseName`, but Garmin only
-retains that when it matches one of its own exercise keys (e.g. `FARMERS_CARRY`) — any other
-value is accepted and then stored empty.
+Creates a strength workout from a list of exercises. An exercise with more than one set
+becomes a repeat group of `sets` x (reps step + rest step), so the watch counts the sets
+down; a single-set exercise stays a flat step with its rest alongside. The name is kept in
+the step description. The name is also sent as `exerciseName`, but Garmin only retains that
+when it matches one of its own exercise keys (e.g. `FARMERS_CARRY`) — any other value is
+accepted and then stored empty.
 
 `category` is optional and passed straight through. Omit it and the key is left out of the
 payload entirely, which Garmin accepts. Supply it and it must be one of Garmin's exercise
