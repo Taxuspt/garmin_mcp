@@ -1,3 +1,4 @@
+import datetime
 import math
 from unittest.mock import Mock
 
@@ -111,3 +112,42 @@ def test_get_max_metrics_range_handles_missing_connectapi():
     assert training._get_max_metrics_range(
         client, "2024-01-14", "2024-01-15"
     ) == (False, None)
+
+
+def test_extract_vo2_measurements_prefers_precise_value():
+    payload = {"generic": {"vo2MaxValue": 48.0, "vo2MaxPreciseValue": 47.6}}
+
+    assert training._extract_vo2_measurements(payload) == {"running": 47.6}
+
+
+def test_build_vo2_trend_series_carries_values_forward():
+    history = [
+        {"date": "2024-01-13", "vo2_max": 47.6, "source": "get_max_metrics"},
+        {"date": "2024-01-15", "vo2_max": 48.7, "source": "get_training_status"},
+    ]
+
+    series = training._build_vo2_trend_series(history, datetime.date(2024, 1, 16))
+
+    assert series == [
+        {"date": "2024-01-13", "vo2_max": 47.6, "source": "get_max_metrics"},
+        {
+            "date": "2024-01-14",
+            "vo2_max": 47.6,
+            "source": "get_max_metrics",
+            "carried_forward": True,
+        },
+        {"date": "2024-01-15", "vo2_max": 48.7, "source": "get_training_status"},
+        {
+            "date": "2024-01-16",
+            "vo2_max": 48.7,
+            "source": "get_training_status",
+            "carried_forward": True,
+        },
+    ]
+
+
+def test_build_vo2_trend_series_handles_empty_history_and_early_end():
+    assert training._build_vo2_trend_series([], datetime.date(2024, 1, 16)) == []
+    history = [{"date": "2024-01-20", "vo2_max": 48.0, "source": "get_max_metrics"}]
+
+    assert training._build_vo2_trend_series(history, datetime.date(2024, 1, 16)) == []
