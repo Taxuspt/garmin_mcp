@@ -125,10 +125,11 @@ def test_build_strength_json_structure():
     assert result["sportType"]["sportTypeKey"] == "strength_training"
     assert result["sportType"]["sportTypeId"] == 5
     steps = result["workoutSegments"][0]["workoutSteps"]
-    # 2 exercises + 1 rest between them = 3 steps
-    assert len(steps) == 3
-    assert steps[0]["exerciseName"] == "Sentadillas"
-    assert steps[2]["exerciseName"] == "Flexiones"
+    # Each multi-set exercise is one repeat group of sets x (work + rest).
+    assert len(steps) == 2
+    assert [s["type"] for s in steps] == ["RepeatGroupDTO", "RepeatGroupDTO"]
+    assert steps[0]["workoutSteps"][0]["exerciseName"] == "Sentadillas"
+    assert steps[1]["workoutSteps"][0]["exerciseName"] == "Flexiones"
 
 
 # ---------------------------------------------------------------------------
@@ -140,9 +141,22 @@ def test_build_strength_json_structure():
 # ---------------------------------------------------------------------------
 
 
+def _flatten(steps):
+    """Every step in document order, descending into repeat groups."""
+    out = []
+    for step in steps:
+        out.append(step)
+        out.extend(_flatten(step.get("workoutSteps") or []))
+    return out
+
+
 def _work_steps(result):
-    """Only the exercise steps; rest steps are recovery steps and carry no category."""
-    steps = result["workoutSegments"][0]["workoutSteps"]
+    """Only the exercise steps; rest steps are recovery steps and carry no category.
+
+    Multi-set exercises nest their work step inside a repeat group, so this walks
+    the tree rather than reading only the top level.
+    """
+    steps = _flatten(result["workoutSegments"][0]["workoutSteps"])
     return [s for s in steps if s["stepType"]["stepTypeKey"] == "interval"]
 
 
@@ -157,7 +171,7 @@ def test_strength_omits_category_when_not_supplied():
     for step in _work_steps(result):
         assert "category" not in step
     # The name survives the Garmin round trip in the description, not exerciseName.
-    assert _work_steps(result)[0]["description"].startswith("Back Squat:")
+    assert _work_steps(result)[0]["description"] == "Back Squat"
 
 
 def test_strength_passes_through_supplied_category():
@@ -181,3 +195,61 @@ def test_strength_rejects_empty_category():
                 name="Bad",
                 exercises=[{"name": "Back Squat", "sets": 1, "reps": 1, "category": bad}],
             )
+
+
+# ---------------------------------------------------------------------------
+# Set counts
+#
+# "sets" used to reach the payload only as description text, so a 3x12 exercise
+# uploaded as a single 12-rep step and the watch counted one set while the
+# description claimed three.
+# ---------------------------------------------------------------------------
+
+
+def test_multi_set_exercise_becomes_a_repeat_group():
+    result = build_strength_json(
+        name="Legs",
+        exercises=[{"name": "Back Squat", "sets": 3, "reps": 12, "rest_seconds": 90}],
+    )
+    (group,) = result["workoutSegments"][0]["workoutSteps"]
+    assert group["type"] == "RepeatGroupDTO"
+    assert group["numberOfIterations"] == 3
+    # Omitting conditionTypeId makes Garmin silently corrupt the repeat count.
+    assert group["endCondition"] == {"conditionTypeId": 7, "conditionTypeKey": "iterations"}
+    work, rest = group["workoutSteps"]
+    assert work["endConditionValue"] == 12.0
+    assert rest["stepType"]["stepTypeKey"] == "recovery"
+    assert rest["endConditionValue"] == 90.0
+
+
+def test_single_set_exercise_stays_flat():
+    result = build_strength_json(
+        name="Singles",
+        exercises=[
+            {"name": "Deadlift", "sets": 1, "reps": 5, "rest_seconds": 120},
+            {"name": "Plank", "sets": 1, "reps": 1, "rest_seconds": 60},
+        ],
+    )
+    steps = result["workoutSegments"][0]["workoutSteps"]
+    # work, rest, work — no rest after the last exercise, and no repeat groups.
+    assert [s["stepType"]["stepTypeKey"] for s in steps] == ["interval", "recovery", "interval"]
+
+
+def test_step_orders_are_sequential_through_repeat_groups():
+    result = build_strength_json(
+        name="Ordering",
+        exercises=[
+            {"name": "Back Squat", "sets": 2, "reps": 5, "rest_seconds": 60},
+            {"name": "Row", "sets": 2, "reps": 8, "rest_seconds": 60},
+        ],
+    )
+    orders = [s["stepOrder"] for s in _flatten(result["workoutSegments"][0]["workoutSteps"])]
+    assert orders == list(range(1, len(orders) + 1))
+
+
+def test_identical_exercises_each_keep_their_rest():
+    """The last-exercise check compares by index; equal dicts used to collide."""
+    same = {"name": "Plank", "sets": 1, "reps": 1, "rest_seconds": 45}
+    result = build_strength_json(name="Dupes", exercises=[dict(same), dict(same)])
+    steps = result["workoutSegments"][0]["workoutSteps"]
+    assert [s["stepType"]["stepTypeKey"] for s in steps] == ["interval", "recovery", "interval"]
