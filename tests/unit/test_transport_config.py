@@ -4,7 +4,12 @@ import os
 import pytest
 from unittest.mock import patch
 
-from garmin_mcp import _parse_transport_config, _VALID_TRANSPORTS
+from garmin_mcp import (
+    _parse_request_budget_config,
+    _parse_request_timeout_config,
+    _parse_transport_config,
+    _VALID_TRANSPORTS,
+)
 
 
 class TestParseTransportConfig:
@@ -55,3 +60,39 @@ class TestParseTransportConfig:
         with patch.dict(os.environ, {"GARMIN_MCP_PORT": "not-a-number"}):
             with pytest.raises(ValueError):
                 _parse_transport_config()
+
+
+class TestParseRequestTimeoutConfig:
+    def test_default_is_fifteen_seconds(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GARMIN_REQUEST_TIMEOUT_SECONDS", None)
+            assert _parse_request_timeout_config() == 15.0
+
+    def test_custom_timeout_is_read(self):
+        with patch.dict(
+            os.environ, {"GARMIN_REQUEST_TIMEOUT_SECONDS": "22.5"}
+        ):
+            assert _parse_request_timeout_config() == 22.5
+
+    @pytest.mark.parametrize("value", ["0", "-1", "forever"])
+    def test_timeout_must_be_positive_number(self, value):
+        with patch.dict(os.environ, {"GARMIN_REQUEST_TIMEOUT_SECONDS": value}):
+            with pytest.raises(ValueError, match="positive number"):
+                _parse_request_timeout_config()
+
+
+class TestParseRequestBudgetConfig:
+    def test_default_is_120_per_minute(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GARMIN_REQUEST_BUDGET_PER_MINUTE", None)
+            assert _parse_request_budget_config() == 120
+
+    def test_custom_budget_is_read(self):
+        with patch.dict(os.environ, {"GARMIN_REQUEST_BUDGET_PER_MINUTE": "240"}):
+            assert _parse_request_budget_config() == 240
+
+    @pytest.mark.parametrize("value", ["0", "-1", "many"])
+    def test_budget_must_be_positive_integer(self, value):
+        with patch.dict(os.environ, {"GARMIN_REQUEST_BUDGET_PER_MINUTE": value}):
+            with pytest.raises(ValueError, match="positive integer"):
+                _parse_request_budget_config()

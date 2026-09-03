@@ -9,13 +9,15 @@ Run with: pytest tests/e2e/test_upsert_dedup_and_update_merge_live.py -m e2e -s
 import os
 import sys
 import time
+import uuid
+import warnings
 import pytest
 from datetime import datetime, timezone
 from urllib.parse import quote
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.live_write]
 
 TEST_DATE = datetime.now().strftime("%Y-%m-%d")
 
@@ -84,6 +86,42 @@ def _delete_log_entry(garmin, log_id, date):
     )
 
 
+def _cleanup_unique_foods(garmin, name, known_food_ids=()):
+    """Remove logs/foods scoped to this invocation's UUID-bearing name."""
+    failures = []
+    food_ids = {
+        str(food_id)
+        for food_id in known_food_ids
+        if food_id is not None
+    }
+    try:
+        for attempt in range(3):
+            for food in _search_foods(garmin, name):
+                meta = food.get("foodMetaData", {})
+                if meta.get("foodName") == name and meta.get("foodId") is not None:
+                    food_ids.add(str(meta["foodId"]))
+            if attempt == 2:
+                break
+            time.sleep(0.5)
+    except Exception as error:
+        failures.append(f"food lookup failed: {error}")
+
+    for food_id in food_ids:
+        try:
+            for entry in _get_log_entries(garmin, food_id, TEST_DATE):
+                if entry.get("logId") is not None:
+                    _delete_log_entry(garmin, entry["logId"], TEST_DATE)
+                    time.sleep(0.3)
+        except Exception as error:
+            failures.append(f"delete logs for food {food_id} failed: {error}")
+        try:
+            _delete_food(garmin, food_id)
+        except Exception as error:
+            failures.append(f"delete food {food_id} failed: {error}")
+    if failures:
+        warnings.warn("; ".join(failures), stacklevel=2)
+
+
 def _upsert_and_log(garmin, food_name, calories, meal_id):
     """Replicate the fixed upsert_and_log find-or-create-then-log logic."""
     r = garmin.connectapi(
@@ -142,27 +180,7 @@ def _upsert_and_log(garmin, food_name, calories, meal_id):
 
 # ── Bug A: upsert dedup ───────────────────────────────────────────────────────
 
-# Name sorts very late alphabetically to mimic the original failure mode
-# (foods beyond the first page were never matched).
-_UPSERT_NAME = "ZZ Live Upsert Dedup Test ZZZZZ"
-
-
-@pytest.fixture(autouse=False)
-def cleanup_upsert(garmin):
-    """Remove any pre-existing library/log entries for the test food."""
-    for f in _search_foods(garmin, _UPSERT_NAME):
-        if f["foodMetaData"]["foodName"] == _UPSERT_NAME:
-            fid = str(f["foodMetaData"]["foodId"])
-            for entry in _get_log_entries(garmin, fid, TEST_DATE):
-                _delete_log_entry(garmin, entry["logId"], TEST_DATE)
-                time.sleep(0.3)
-            time.sleep(0.3)
-            _delete_food(garmin, fid)
-    time.sleep(0.5)
-    yield
-
-
-def test_upsert_dedup_same_name_reuses_food(garmin, cleanup_upsert):
+def test_upsert_dedup_same_name_reuses_food(garmin, nutrition_capability):
     """
     Calling upsert twice with the same food_name must reuse the same library
     entry (one food, two log rows) — not create a duplicate.
@@ -170,110 +188,109 @@ def test_upsert_dedup_same_name_reuses_food(garmin, cleanup_upsert):
     Uses a name that sorts very late alphabetically to reproduce the original
     failure where page-1 results never included the food, so it was always created.
     """
-    meals = garmin.connectapi(f"/nutrition-service/meals/{TEST_DATE}")
-    meal_id = next(m["mealId"] for m in meals["meals"] if m["mealName"] == "SNACKS")
+    # The prefix still sorts late; UUID scoping prevents collisions with user data.
+    food_name = f"ZZ Live Upsert Dedup ZZZZZ {uuid.uuid4().hex}"
+    fid1 = None
+    fid2 = None
+    try:
+        meals = garmin.connectapi(f"/nutrition-service/meals/{TEST_DATE}")
+        meal_id = nutrition_capability.meal_id(meals, "SNACKS")
 
-    fid1, created1 = _upsert_and_log(garmin, _UPSERT_NAME, 100, meal_id)
-    assert created1, "First call should create the food"
-    time.sleep(1)
+        with nutrition_capability.require("custom-food creation and food logging"):
+            fid1, created1 = _upsert_and_log(garmin, food_name, 100, meal_id)
+        assert created1, "First call should create the food"
+        time.sleep(1)
 
-    fid2, created2 = _upsert_and_log(garmin, _UPSERT_NAME, 100, meal_id)
-    assert not created2, "Second call must reuse, not create"
-    time.sleep(1)
+        fid2, created2 = _upsert_and_log(garmin, food_name, 100, meal_id)
+        assert not created2, "Second call must reuse, not create"
+        time.sleep(1)
 
-    assert fid1 == fid2, f"Got different food IDs: {fid1} vs {fid2}"
-    assert _count_library(garmin, _UPSERT_NAME) == 1, "Expected exactly 1 library entry"
-    assert _count_log_entries(garmin, fid1, TEST_DATE) == 2, "Expected 2 log entries"
-
-    # cleanup
-    for entry in _get_log_entries(garmin, fid1, TEST_DATE):
-        _delete_log_entry(garmin, entry["logId"], TEST_DATE)
-        time.sleep(0.3)
-    time.sleep(0.3)
-    _delete_food(garmin, fid1)
+        assert fid1 == fid2, f"Got different food IDs: {fid1} vs {fid2}"
+        assert _count_library(garmin, food_name) == 1
+        assert _count_log_entries(garmin, fid1, TEST_DATE) == 2
+    finally:
+        _cleanup_unique_foods(garmin, food_name, (fid1, fid2))
 
 
 # ── Bug B: update merge ───────────────────────────────────────────────────────
 
-_UPDATE_NAME = "ZZ Live Update Merge Test"
-
-
-def test_update_custom_food_preserves_unset_fields(garmin):
+def test_update_custom_food_preserves_unset_fields(garmin, nutrition_capability):
     """
     Calling update_custom_food with only sodium (omitting carbs/protein/fat)
     must preserve the existing macro values, not wipe them.
     """
-    resp = garmin.client.put(
-        "connectapi", "/nutrition-service/customFood",
-        json={
-            "foodMetaData": {
-                "foodName": _UPDATE_NAME, "foodType": "GENERIC",
-                "source": "GARMIN", "regionCode": "US", "languageCode": "en",
+    food_name = f"ZZ Live Update Merge {uuid.uuid4().hex}"
+    food_id = None
+    try:
+        with nutrition_capability.require("custom-food write"):
+            resp = garmin.client.put(
+                "connectapi", "/nutrition-service/customFood",
+                json={
+                    "foodMetaData": {
+                        "foodName": food_name, "foodType": "GENERIC",
+                        "source": "GARMIN", "regionCode": "US", "languageCode": "en",
+                    },
+                    "nutritionContents": [
+                        {"servingUnit": "G", "numberOfUnits": "100", "calories": "200",
+                         "carbs": "10", "protein": "20", "fat": "5"}
+                    ],
+                },
+                api=True,
+            )
+        food_id = str(resp["foodMetaData"]["foodId"])
+        serving_id = str(resp["nutritionContents"][0]["servingId"])
+        time.sleep(1)
+
+        before = _find_by_id(garmin, food_name, food_id)
+        assert before is not None, "Food not found after create"
+        nc_before = (before.get("nutritionContents") or [{}])[0]
+        assert nc_before.get("carbs") == 10
+        assert nc_before.get("protein") == 20
+        assert nc_before.get("fat") == 5
+
+        existing = nc_before
+        optional_updates = {
+            "carbs": None, "protein": None, "fat": None, "fiber": None,
+            "sugar": None, "saturatedFat": None, "sodium": 500.0,
+            "cholesterol": None, "potassium": None,
+        }
+
+        def _s(v):
+            f = float(v)
+            return str(int(f)) if f == int(f) else str(f)
+
+        nutrition: dict = {
+            "servingId": serving_id, "servingUnit": "G",
+            "numberOfUnits": "100", "calories": "200",
+        }
+        preserved = set(optional_updates.keys())
+        for key, val in existing.items():
+            if key in preserved and val is not None:
+                nutrition[key] = _s(val)
+        for key, val in optional_updates.items():
+            if val is not None:
+                nutrition[key] = _s(val)
+
+        garmin.client.put(
+            "connectapi", "/nutrition-service/customFood",
+            json={
+                "foodMetaData": {
+                    "foodId": food_id, "foodName": food_name, "foodType": "GENERIC",
+                    "source": "GARMIN", "regionCode": "US", "languageCode": "en",
+                },
+                "nutritionContents": [nutrition],
             },
-            "nutritionContents": [
-                {"servingUnit": "G", "numberOfUnits": "100", "calories": "200",
-                 "carbs": "10", "protein": "20", "fat": "5"}
-            ],
-        },
-        api=True,
-    )
-    food_id = str(resp["foodMetaData"]["foodId"])
-    serving_id = str(resp["nutritionContents"][0]["servingId"])
-    time.sleep(1)
+            api=True,
+        )
+        time.sleep(1)
 
-    # Confirm initial values
-    before = _find_by_id(garmin, _UPDATE_NAME, food_id)
-    assert before is not None, "Food not found after create"
-    nc_before = (before.get("nutritionContents") or [{}])[0]
-    assert nc_before.get("carbs") == 10
-    assert nc_before.get("protein") == 20
-    assert nc_before.get("fat") == 5
+        after = _find_by_id(garmin, food_name, food_id)
+        assert after is not None, "Food not found after update"
+        nc_after = (after.get("nutritionContents") or [{}])[0]
 
-    # Update with only sodium — replicate the fixed update logic
-    existing = nc_before
-    optional_updates = {
-        "carbs": None, "protein": None, "fat": None, "fiber": None,
-        "sugar": None, "saturatedFat": None, "sodium": 500.0,
-        "cholesterol": None, "potassium": None,
-    }
-
-    def _s(v):
-        f = float(v)
-        return str(int(f)) if f == int(f) else str(f)
-
-    nutrition: dict = {
-        "servingId": serving_id, "servingUnit": "G",
-        "numberOfUnits": "100", "calories": "200",
-    }
-    preserved = set(optional_updates.keys())
-    for key, val in existing.items():
-        if key in preserved and val is not None:
-            nutrition[key] = _s(val)
-    for key, val in optional_updates.items():
-        if val is not None:
-            nutrition[key] = _s(val)
-
-    garmin.client.put(
-        "connectapi", "/nutrition-service/customFood",
-        json={
-            "foodMetaData": {
-                "foodId": food_id, "foodName": _UPDATE_NAME, "foodType": "GENERIC",
-                "source": "GARMIN", "regionCode": "US", "languageCode": "en",
-            },
-            "nutritionContents": [nutrition],
-        },
-        api=True,
-    )
-    time.sleep(1)
-
-    after = _find_by_id(garmin, _UPDATE_NAME, food_id)
-    assert after is not None, "Food not found after update"
-    nc_after = (after.get("nutritionContents") or [{}])[0]
-
-    assert nc_after.get("carbs") == 10, f"carbs wiped: {nc_after.get('carbs')}"
-    assert nc_after.get("protein") == 20, f"protein wiped: {nc_after.get('protein')}"
-    assert nc_after.get("fat") == 5, f"fat wiped: {nc_after.get('fat')}"
-    assert nc_after.get("sodium") == 500, f"sodium not set: {nc_after.get('sodium')}"
-
-    # cleanup
-    _delete_food(garmin, food_id)
+        assert nc_after.get("carbs") == 10
+        assert nc_after.get("protein") == 20
+        assert nc_after.get("fat") == 5
+        assert nc_after.get("sodium") == 500
+    finally:
+        _cleanup_unique_foods(garmin, food_name, (food_id,))

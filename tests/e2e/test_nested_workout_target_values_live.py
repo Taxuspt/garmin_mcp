@@ -7,6 +7,7 @@ pytest tests/e2e/test_nested_workout_target_values_live.py -m e2e -s
 import asyncio
 import json
 import sys
+import uuid
 import warnings
 from io import BytesIO
 
@@ -17,67 +18,123 @@ from mcp.client.stdio import stdio_client
 
 from garmin_mcp import email, init_api, password
 
+_CALENDAR_DATE = "2099-01-01"
 
-async def _cleanup_scheduled_workout(session, workout_id):
-    """Best-effort cleanup that cannot hide the test's real failure."""
+
+def _decode_result(result):
+    try:
+        return json.loads(result.content[0].text)
+    except (AttributeError, IndexError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+async def _cleanup_scheduled_workout(session, workout_id, workout_name):
+    """Clean only IDs/name created by this invocation, even after partial failure."""
     failures = []
-    scheduled_workout_id = None
+    workout_ids = {str(workout_id)} if workout_id is not None else set()
+    scheduled_workout_ids = set()
 
     try:
-        for attempt in range(3):
-            result = await session.call_tool(
+        for attempt in range(12):
+            listed = await session.call_tool("get_workouts", arguments={})
+            for workout in _decode_result(listed).get("workouts", []):
+                if workout.get("name") == workout_name and workout.get("id") is not None:
+                    workout_ids.add(str(workout["id"]))
+
+            scheduled_result = await session.call_tool(
                 "get_scheduled_workouts",
                 arguments={
-                    "start_date": "2099-01-01",
-                    "end_date": "2099-01-01",
+                    "start_date": _CALENDAR_DATE,
+                    "end_date": _CALENDAR_DATE,
                 },
             )
-            try:
-                scheduled = json.loads(result.content[0].text)
-            except json.JSONDecodeError:
-                scheduled = {}
-            scheduled_workout_id = next(
-                (
-                    item.get("scheduled_workout_id")
-                    for item in scheduled.get("scheduled_workouts", [])
-                    if item.get("workout_id") == workout_id
-                ),
-                None,
-            )
-            if scheduled_workout_id is not None or attempt == 2:
+            for item in _decode_result(scheduled_result).get("scheduled_workouts", []):
+                item_workout_id = item.get("workout_id")
+                matches_id = (
+                    item_workout_id is not None
+                    and str(item_workout_id) in workout_ids
+                )
+                if item.get("name") != workout_name and not matches_id:
+                    continue
+                if item_workout_id is not None:
+                    workout_ids.add(str(item_workout_id))
+                if item.get("scheduled_workout_id") is not None:
+                    scheduled_workout_ids.add(item["scheduled_workout_id"])
+            if scheduled_workout_ids or attempt == 11:
                 break
             await asyncio.sleep(1)
     except Exception as error:
-        failures.append(f"calendar lookup failed: {error}")
+        failures.append(f"cleanup lookup failed: {error}")
 
-    if scheduled_workout_id is not None:
+    safe_to_delete = bool(scheduled_workout_ids)
+    for scheduled_workout_id in scheduled_workout_ids:
+        disappeared = False
+        for delete_attempt in range(3):
+            try:
+                removed = await session.call_tool(
+                    "unschedule_workout",
+                    arguments={"scheduled_workout_id": scheduled_workout_id},
+                )
+                if _decode_result(removed).get("read_back_absent") is True:
+                    disappeared = True
+            except Exception:
+                pass
+            if disappeared:
+                break
+            for read_attempt in range(5):
+                scheduled_result = await session.call_tool(
+                    "get_scheduled_workouts",
+                    arguments={
+                        "start_date": _CALENDAR_DATE,
+                        "end_date": _CALENDAR_DATE,
+                    },
+                )
+                remaining = _decode_result(scheduled_result).get(
+                    "scheduled_workouts", []
+                )
+                if not any(
+                    str(item.get("scheduled_workout_id"))
+                    == str(scheduled_workout_id)
+                    for item in remaining
+                ):
+                    disappeared = True
+                    break
+                if read_attempt < 4:
+                    await asyncio.sleep(1)
+            if disappeared:
+                break
+            if delete_attempt < 2:
+                await asyncio.sleep(1)
+        if not disappeared:
+            safe_to_delete = False
+            failures.append(
+                f"calendar entry {scheduled_workout_id} remained after exact unschedule retries"
+            )
+
+    if not scheduled_workout_ids:
+        failures.append(
+            "schedule outcome stayed indeterminate; retained the unique workout template"
+        )
+
+    for generated_workout_id in workout_ids if safe_to_delete else ():
         try:
             result = await session.call_tool(
-                "unschedule_workout",
-                arguments={"scheduled_workout_id": scheduled_workout_id},
+                "delete_workout",
+                arguments={"workout_id": generated_workout_id},
             )
-            data = json.loads(result.content[0].text)
+            data = _decode_result(result)
             if data.get("status") != "success":
-                failures.append(f"unschedule failed: {data}")
+                failures.append(f"delete {generated_workout_id} failed: {data}")
         except Exception as error:
-            failures.append(f"unschedule failed: {error}")
-
-    try:
-        result = await session.call_tool(
-            "delete_workout",
-            arguments={"workout_id": workout_id},
-        )
-        data = json.loads(result.content[0].text)
-        if data.get("status") != "success":
-            failures.append(f"delete failed: {data}")
-    except Exception as error:
-        failures.append(f"delete failed: {error}")
+            failures.append(f"delete {generated_workout_id} failed: {error}")
 
     if failures:
         warnings.warn("; ".join(failures), stacklevel=2)
+    return failures
 
 
 @pytest.mark.e2e
+@pytest.mark.live_write
 @pytest.mark.asyncio
 @pytest.mark.timeout(90)
 async def test_nested_pace_bounds_survive_inline_schedule_and_fit_export():
@@ -87,8 +144,9 @@ async def test_nested_pace_bounds_survive_inline_schedule_and_fit_export():
         args=["-m", "garmin_mcp"],
         env=None,
     )
+    workout_name = f"e2e nested target contract {uuid.uuid4().hex}"
     workout_data = {
-        "workoutName": "e2e nested target values - DELETE ME",
+        "workoutName": workout_name,
         "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
         "workoutSegments": [{
             "segmentOrder": 1,
@@ -125,7 +183,7 @@ async def test_nested_pace_bounds_survive_inline_schedule_and_fit_export():
                         "schedule_workouts",
                         arguments={
                             "schedules": [{
-                                "calendar_date": "2099-01-01",
+                                "calendar_date": _CALENDAR_DATE,
                                 "workout_data": workout_data,
                             }]
                         },
@@ -173,9 +231,10 @@ async def test_nested_pace_bounds_survive_inline_schedule_and_fit_export():
                     abs=0.001,
                 )
             finally:
-                if workout_id is not None:
-                    async with asyncio.timeout(20):
-                        await _cleanup_scheduled_workout(
-                            session,
-                            workout_id,
-                        )
+                async with asyncio.timeout(20):
+                    cleanup_failures = await _cleanup_scheduled_workout(
+                        session,
+                        workout_id,
+                        workout_name,
+                    )
+                assert not cleanup_failures, "; ".join(cleanup_failures)

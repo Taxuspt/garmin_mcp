@@ -365,6 +365,24 @@ async def test_set_heart_rate_zones_partial_update_preserves_other_fields(
 
 
 @pytest.mark.asyncio
+async def test_set_heart_rate_zones_rejects_readback_mismatch(
+    app_with_user_profile, mock_garmin_client
+):
+    ignored = {**HEART_RATE_ZONES[1], "maxHeartRateUsed": 203}
+    mock_garmin_client.connectapi.side_effect = [
+        HEART_RATE_ZONES,
+        [HEART_RATE_ZONES[0], ignored],
+    ]
+
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+
+    assert "read-back did not match" in result[0][0].text
+    assert "maxHeartRateUsed" in result[0][0].text
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "arguments,error",
     [

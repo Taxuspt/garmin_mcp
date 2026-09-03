@@ -12,7 +12,17 @@ import pytest
 from dotenv import load_dotenv
 from garminconnect import Garmin
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.live_read,
+    pytest.mark.skip(
+        reason=(
+            "Quarantined legacy manual diagnostic: it relies on test return "
+            "values as pytest fixtures and prints account/activity details. "
+            "Use tests/e2e/test_server_e2e.py live_read contracts instead."
+        )
+    ),
+]
 
 # Load environment variables from .env file
 env_path = Path(__file__).parent / '.env'
