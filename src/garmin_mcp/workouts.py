@@ -2,6 +2,7 @@
 Workout-related functions for Garmin Connect MCP Server
 """
 import json
+import math
 import re
 import datetime
 from typing import Any, Dict, List, Optional, Union
@@ -34,17 +35,34 @@ END_CONDITION_TYPE_KEYS = {
     for condition_key, condition_id in END_CONDITION_TYPE_IDS.items()
 }
 
-# Verified from Garmin-created workouts and live upload/fetch probes. Unknown
+# Verified from Garmin-created workouts and live upload/fetch/FIT probes. Unknown
 # target type IDs are allowed so we do not block valid Garmin targets that are
 # not in this partial mapping yet.
+#
+# Cycling power uses the same target type for both named FTP zones and absolute
+# watt ranges.  The payload shape selects the mode:
+#   - zoneNumber -> named power zone
+#   - targetValueOne/targetValueTwo -> custom watt range
+#
+# ID 6 is pace.zone. Garmin treats the numeric ID as authoritative and rewrites
+# an attempted {id: 6, key: "power.between"} target to pace.zone; the resulting
+# FIT workout is a speed/pace target instead of a power target.
+#
+# ID 2 with custom watt bounds exports as current/3-second power guidance.
+# ID 9 / power.lap is a distinct lap-average target and is intentionally not
+# substituted for that behavior here.
 KNOWN_TARGET_TYPE_IDS = {
     1: frozenset(["no.target"]),
     2: frozenset(["power.zone"]),
     4: frozenset(["heart.rate.zone"]),
-    # ID 6 is sport-context-dependent:
-    #   - running / swimming: "pace.zone"
-    #   - cycling: "power.between" (absolute watt range, uses targetValueOne/targetValueTwo)
-    6: frozenset(["pace.zone", "power.between"]),
+    6: frozenset(["pace.zone"]),
+}
+
+REJECTED_TARGET_TYPE_KEYS = {
+    "power.between": (
+        "use workoutTargetTypeId 2 / 'power.zone' with step-level "
+        "targetValueOne/targetValueTwo and no zoneNumber for absolute watts"
+    ),
 }
 
 # Reverse map: workoutTargetTypeKey -> workoutTargetTypeId (each key maps to exactly one ID).
@@ -287,6 +305,13 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
         target_key = target_type.get('workoutTargetTypeKey')
         target_id = target_type.get('workoutTargetTypeId')
 
+        rejection = REJECTED_TARGET_TYPE_KEYS.get(target_key)
+        if rejection is not None:
+            raise ValueError(
+                f"{path}.{target_field} workoutTargetTypeKey "
+                f"{target_key!r} is unsupported; {rejection}"
+            )
+
         if target_id is not None:
             try:
                 target_id = int(target_id)
@@ -316,10 +341,117 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
             )
 
 
+def _effective_target_type_key(target_type: dict) -> Optional[str]:
+    """Resolve a missing target key from a known authoritative numeric ID."""
+    target_key = target_type.get('workoutTargetTypeKey')
+    if target_key:
+        return target_key
+
+    target_id = target_type.get('workoutTargetTypeId')
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        return None
+
+    valid_keys = KNOWN_TARGET_TYPE_IDS.get(target_id)
+    if valid_keys is not None and len(valid_keys) == 1:
+        return next(iter(valid_keys))
+    return None
+
+
+def _validate_power_target_values(
+    step: dict,
+    path: str,
+    target_field: str,
+    value_one_field: str,
+    value_two_field: str,
+    zone_field: str,
+) -> None:
+    """Validate named-zone and custom-watt payload shapes for power targets."""
+    target_type = step.get(target_field)
+    if not isinstance(target_type, dict):
+        return
+    if _effective_target_type_key(target_type) != 'power.zone':
+        return
+
+    zone = step.get(zone_field)
+    low = step.get(value_one_field)
+    high = step.get(value_two_field)
+    has_range = low is not None or high is not None
+
+    # _normalize_workout_steps rejects zone-plus-range ambiguity for every
+    # target type before upload validation reaches this function.
+    if zone is None and not has_range:
+        raise ValueError(
+            f"{path}.{target_field} power target requires {zone_field} or a "
+            f"{value_one_field}/{value_two_field} watt range"
+        )
+    if has_range and (low is None or high is None):
+        raise ValueError(
+            f"{path}.{target_field} custom power target requires both "
+            f"{value_one_field} and {value_two_field}"
+        )
+
+    if zone is not None:
+        if isinstance(zone, bool):
+            raise ValueError(f"{path}.{zone_field} must be an integer between 1 and 7")
+        try:
+            zone_number = float(zone)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"{path}.{zone_field} must be an integer between 1 and 7"
+            ) from exc
+        if (
+            not math.isfinite(zone_number)
+            or not zone_number.is_integer()
+            or not 1 <= zone_number <= 7
+            or (
+                isinstance(zone, str)
+                and str(int(zone_number)) != zone.strip()
+            )
+        ):
+            raise ValueError(f"{path}.{zone_field} must be an integer between 1 and 7")
+        return
+
+    if (
+        isinstance(low, bool)
+        or isinstance(high, bool)
+        or not isinstance(low, (int, float))
+        or not isinstance(high, (int, float))
+    ):
+        raise ValueError(f"{path}.{target_field} watt range must be numeric")
+    low_watts = float(low)
+    high_watts = float(high)
+    if not math.isfinite(low_watts) or not math.isfinite(high_watts):
+        raise ValueError(f"{path}.{target_field} watt range must be finite")
+    if low_watts < 0 or high_watts < 0:
+        raise ValueError(f"{path}.{target_field} watt range must be non-negative")
+    if low_watts > high_watts:
+        raise ValueError(
+            f"{path}.{target_field} power target low value cannot exceed high value"
+        )
+
+
 def _validate_target_type_step(step: dict, path: str) -> None:
     """Reject targetType id/key pairs Garmin would silently reinterpret."""
     _validate_target_type_block(step, path, 'targetType')
     _validate_target_type_block(step, path, 'secondaryTargetType')
+    _validate_power_target_values(
+        step,
+        path,
+        target_field='targetType',
+        value_one_field='targetValueOne',
+        value_two_field='targetValueTwo',
+        zone_field='zoneNumber',
+    )
+    _validate_power_target_values(
+        step,
+        path,
+        target_field='secondaryTargetType',
+        value_one_field='secondaryTargetValueOne',
+        value_two_field='secondaryTargetValueTwo',
+        zone_field='secondaryZoneNumber',
+    )
 
     for index, nested in enumerate(step.get('workoutSteps', [])):
         _validate_target_type_step(nested, f"{path}.workoutSteps[{index}]")
@@ -825,17 +957,18 @@ def register_tools(app):
         Garmin treats workoutTargetTypeId as authoritative, so mismatches are rejected
         before upload.  Known mappings:
         - workoutTargetTypeId 1  -> "no.target"
-        - workoutTargetTypeId 2  -> "power.zone"  (cycling power zone 1-7, use zoneNumber)
+        - workoutTargetTypeId 2  -> "power.zone"  (cycling power target)
         - workoutTargetTypeId 4  -> "heart.rate.zone"
-        - workoutTargetTypeId 6  -> "pace.zone" (running/swim) OR "power.between" (cycling)
+        - workoutTargetTypeId 6  -> "pace.zone" (pace/speed target, not cycling power)
 
         IMPORTANT: For cycling power targets use the correct target type:
         - Power zone (zone 1-7 based on FTP %): use workoutTargetTypeId 2, key "power.zone",
           and "zoneNumber" (1-7).
-        - Absolute watt range (e.g. 200-250 W): use workoutTargetTypeId 6, key "power.between",
-          and "targetValueOne" (low watts) / "targetValueTwo" (high watts).
-        Using workoutTargetTypeId 2 with key "power.between" is a silent Garmin bug: the
-        workout uploads but Garmin stores it as "power.zone" and the intent is lost.
+        - Absolute watt range (e.g. 200-250 W): use the same workoutTargetTypeId 2 and
+          key "power.zone", set "targetValueOne" (low watts) / "targetValueTwo"
+          (high watts), and omit "zoneNumber".
+        Do not use workoutTargetTypeId 6 or key "power.between" for cycling power.
+        Garmin stores ID 6 as "pace.zone", causing the device to show a speed target.
 
         Use {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"} with
         targetValueOne/targetValueTwo for custom heart-rate ranges.
@@ -949,9 +1082,10 @@ def register_tools(app):
         For custom heart-rate ranges, use targetType {"workoutTargetTypeId": 4,
         "workoutTargetTypeKey": "heart.rate.zone"} with targetValueOne/targetValueTwo.
         Target values belong on the workout step, alongside targetType, not inside it.
-        For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
-        For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
-        with targetValueOne (low watts) and targetValueTwo (high watts).
+        For cycling power targets use workoutTargetTypeId 2 and key "power.zone".
+        Use zoneNumber for a named FTP zone, or targetValueOne/targetValueTwo for an
+        absolute watt range (with no zoneNumber). Never use ID 6 or "power.between"
+        for cycling power; Garmin stores ID 6 as a pace/speed target.
         Target type IDs and keys must match Garmin's canonical mapping.
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
