@@ -20,7 +20,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - Track training status and readiness
 - Access cycling FTP and lactate threshold metrics
 - Read and update generic or sport-specific heart-rate training zones
-- Manage gear and equipment
+- Manage gear and equipment, including free-text notes returned by `get_gear`
 - Access workouts and training plans
 - Inspect detailed workout step structures, including repeat groups and swim pace targets
 - Weekly health aggregates (steps, stress, intensity minutes)
@@ -35,7 +35,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-The default build currently registers **168 tools**. The complete existing
+The default build currently registers **more than 168 tools**. The complete existing
 endpoint-oriented catalog remains exposed by default.
 The server adds intent-level tools where aggregation or deterministic domain
 logic materially reduces round trips; it does not hide the raw tools or replace
@@ -53,9 +53,10 @@ them with a small façade.
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (5 tools) - includes configured HR-zone read/write with per-sport updates
 - ✅ High-Level Workout Builders - running, strength, HR-target cycling, and interval builders
-- ✅ Courses (3 tools) - list / upload GPX as course / delete course
+- ✅ Courses (5 tools) - list / get details / upload GPX as course / download GPX / delete course
 - ✅ Activity Analysis - legacy FIT analysis plus streams, decoupling, zone re-slicing, and polarization
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
+- ✅ Calendar Events - expose races and events from the Garmin calendar
 - ✅ Physiology & Coach - optional evidence store, threshold candidates, profile sync, plans, and adaptations
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
@@ -73,6 +74,12 @@ returns `204 No Content`. A subsequent `GET` to the same endpoint returns the
 saved profiles. Garmin has no persisted `CUSTOM` training-method enum: custom
 BPM floors are sent exactly, while read-back reports `trainingMethod: "HR_MAX"`.
 The explicit floor values remain unchanged and authoritative.
+
+### Gear Notes
+
+Each item in the `gear` array returned by `get_gear` includes a `notes` field
+containing the free-text Notes value shown in Garmin Connect. Gear without a
+Notes value returns `null`; all existing gear fields remain unchanged.
 
 ### Activity File Downloads
 

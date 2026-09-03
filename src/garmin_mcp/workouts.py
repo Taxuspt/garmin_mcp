@@ -672,8 +672,10 @@ def _is_already_scheduled(workout_id: int, calendar_date: str) -> bool:
             )
         }
         result = garmin_client.query_garmin_graphql(query) or {}
+        # GraphQL returns {"data": null} on error, so `result.get("data", {})`
+        # would yield None and the chained .get would crash. Guard with `or {}`.
         existing = (
-            result.get("data", {}).get("workoutScheduleSummariesScalar", []) or []
+            (result.get("data") or {}).get("workoutScheduleSummariesScalar") or []
         )
         for entry in existing:
             if (
@@ -1142,7 +1144,10 @@ def register_tools(app):
             if not result or "data" not in result:
                 return "No scheduled workouts found or error querying data."
 
-            scheduled = result.get("data", {}).get("workoutScheduleSummariesScalar", [])
+            # "data" can be present but explicitly null (GraphQL error response),
+            # which passes the check above; `or {}` stops the chained .get from
+            # crashing on None.
+            scheduled = (result.get("data") or {}).get("workoutScheduleSummariesScalar") or []
 
             if not scheduled:
                 return f"No workouts scheduled between {start_date} and {end_date}."

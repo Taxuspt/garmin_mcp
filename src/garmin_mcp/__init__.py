@@ -5,6 +5,7 @@ Modular MCP Server for Garmin Connect Data
 import os
 import sys
 import base64
+import threading
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -30,6 +31,7 @@ from garmin_mcp import nutrition
 from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
+from garmin_mcp import calendar_events
 from garmin_mcp import activity_streams
 from garmin_mcp import physiology
 from garmin_mcp import fit_upload
@@ -113,11 +115,37 @@ def _parse_tool_set(value):
     return {name.strip().lower() for name in value.split(",") if name.strip()}
 
 
-enabled_tools = _parse_tool_set(os.getenv("GARMIN_ENABLED_TOOLS"))
-disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
+def _resolve_tool_filters() -> tuple[set[str], set[str]]:
+    """Read tool filters at startup and reject a nonblank empty allowlist."""
+    raw_enabled = os.getenv("GARMIN_ENABLED_TOOLS")
+    enabled = _parse_tool_set(raw_enabled)
+    if raw_enabled and raw_enabled.strip() and not enabled:
+        raise ValueError(
+            "Invalid GARMIN_ENABLED_TOOLS: expected at least one tool name"
+        )
+    return enabled, _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
+
+_DEFAULT_CALL_TIMEOUT = 90.0
+
+
+def _resolve_call_timeout() -> float:
+    """Read the legacy outer call timeout; non-positive values disable it."""
+    raw = os.getenv("GARMIN_MCP_CALL_TIMEOUT")
+    if raw is None or not raw.strip():
+        return _DEFAULT_CALL_TIMEOUT
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        print(
+            f"Invalid GARMIN_MCP_CALL_TIMEOUT {raw!r}; using default "
+            f"{_DEFAULT_CALL_TIMEOUT}s.",
+            file=sys.stderr,
+        )
+        return _DEFAULT_CALL_TIMEOUT
+    return value if value > 0 else 0.0
 
 
 class _GarminProxy:
@@ -142,15 +170,16 @@ class _GarminProxy:
         ),
     }
 
-    def __init__(self, client):
+    def __init__(self, client, timeout=None):
         self._client = client
+        self._timeout = _resolve_call_timeout() if timeout is None else timeout
 
     def __getattr__(self, name):
         attr = getattr(self._client, name)
         if not callable(attr):
             return attr
 
-        def _call(*args, **kwargs):
+        def _invoke(*args, **kwargs):
             try:
                 return attr(*args, **kwargs)
             except tuple(self._MESSAGES) as exc:
@@ -161,7 +190,96 @@ class _GarminProxy:
                         raise type(exc)(full_msg) from None
                 raise
 
+        def _call(*args, **kwargs):
+            if not self._timeout:
+                return _invoke(*args, **kwargs)
+
+            outcome = {}
+
+            def _worker():
+                try:
+                    outcome["value"] = _invoke(*args, **kwargs)
+                except BaseException as exc:  # noqa: BLE001 - replayed below
+                    outcome["error"] = exc
+
+            worker = threading.Thread(
+                target=_worker, name=f"garmin-call:{name}", daemon=True
+            )
+            worker.start()
+            worker.join(self._timeout)
+            if worker.is_alive():
+                raise TimeoutError(
+                    f"Garmin request '{name}' did not return within "
+                    f"{self._timeout:g}s and was abandoned. This is usually a "
+                    "transient stall on Garmin's side — please try again. "
+                    "(Adjust with GARMIN_MCP_CALL_TIMEOUT, or set it to 0 to "
+                    "disable the limit.)"
+                )
+            if "error" in outcome:
+                raise outcome["error"]
+            return outcome.get("value")
+
         return _call
+
+
+class _ThreadFilteredStream:
+    """Allow writes only from the owner thread, preserving MCP stdio framing."""
+
+    def __init__(self, real_stream, owner_thread):
+        self._real_stream = real_stream
+        self._owner_thread = owner_thread
+
+    def write(self, data):
+        if threading.current_thread() is self._owner_thread:
+            return self._real_stream.write(data)
+        return len(data)
+
+    def flush(self):
+        self._real_stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._real_stream, name)
+
+
+class _PendingGarminClient:
+    """Compatibility helper for callers using upstream's background-login gate."""
+
+    def __init__(self, timeout):
+        self._timeout = timeout
+        self._ready = threading.Event()
+        self._client = None
+        self._login_error = None
+
+    def start(self, login_fn):
+        def _worker():
+            try:
+                client = login_fn()
+            except BaseException as exc:  # noqa: BLE001 - replayed on access
+                self._login_error = exc
+            else:
+                if client is None:
+                    self._login_error = RuntimeError(
+                        "Garmin login failed. Run 'garmin-mcp-auth' to "
+                        "authenticate, then restart the server."
+                    )
+                else:
+                    self._client = client
+            finally:
+                self._ready.set()
+
+        threading.Thread(target=_worker, name="garmin-login", daemon=True).start()
+        return self
+
+    def __getattr__(self, name):
+        if not self._ready.wait(self._timeout if self._timeout else None):
+            raise RuntimeError(
+                f"Garmin login did not finish within {self._timeout:g}s. "
+                "Run 'garmin-mcp-auth' to verify your credentials, then "
+                "restart the server."
+            )
+        if self._login_error is not None:
+            raise self._login_error
+        return getattr(self._client, name)
 
 
 def _parse_transport_config() -> tuple[str, str, int]:
@@ -457,6 +575,7 @@ def main():
     #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     try:
+        enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
         request_timeout = _parse_request_timeout_config()
         request_budget = _parse_request_budget_config()
@@ -495,6 +614,7 @@ def main():
     workout_builders.configure(garmin_client)
     courses.configure(garmin_client)
     activity_analysis.configure(garmin_client)
+    calendar_events.configure(garmin_client)
     physiology.configure(garmin_client)
 
     def resolve_zone_model(model_id: str):
@@ -556,6 +676,7 @@ def main():
     app = workout_builders.register_tools(app)
     app = courses.register_tools(app)
     app = activity_analysis.register_tools(app)
+    app = calendar_events.register_tools(app)
     app = activity_streams.register_tools(app)
     app = physiology.register_tools(app)
     app = fit_upload.register_tools(app)

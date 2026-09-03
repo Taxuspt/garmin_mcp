@@ -3,6 +3,8 @@ Integration tests for health_wellness module MCP tools
 
 Tests all 22 health and wellness tools using FastMCP integration with mocked Garmin API responses.
 """
+import json
+
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -356,6 +358,96 @@ async def test_get_sleep_summary_tool(app_with_health_wellness, mock_garmin_clie
 
 
 @pytest.mark.asyncio
+async def test_get_sleep_summary_range_tool(app_with_health_wellness, mock_garmin_client):
+    """Test get_sleep_summary_range returns one curated summary per night"""
+    # Setup mock: return sleep data for each of the 3 requested nights
+    mock_garmin_client.get_sleep_data.side_effect = lambda date: {
+        **MOCK_SLEEP_DATA,
+        "dailySleepDTO": {**MOCK_SLEEP_DATA["dailySleepDTO"], "calendarDate": date},
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary_range",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"},
+    )
+
+    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data["start_date"] == "2024-01-13"
+    assert data["end_date"] == "2024-01-15"
+    assert data["nights_requested"] == 3
+    assert data["nights_returned"] == 3
+    assert [n["date"] for n in data["nights"]] == [
+        "2024-01-13",
+        "2024-01-14",
+        "2024-01-15",
+    ]
+    # Each night should carry the same curated fields as get_sleep_summary
+    assert data["nights"][0]["sleep_score"] == 85
+    assert data["nights"][0]["sleep_hours"] == 8.0
+    assert mock_garmin_client.get_sleep_data.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_get_sleep_summary_range_skips_nights_without_data(
+    app_with_health_wellness, mock_garmin_client
+):
+    """Nights with no Garmin data (or a per-night error) are skipped, not fatal"""
+
+    def side_effect(date):
+        if date == "2024-01-14":
+            return None
+        if date == "2024-01-15":
+            raise Exception("transient API error")
+        return MOCK_SLEEP_DATA
+
+    mock_garmin_client.get_sleep_data.side_effect = side_effect
+
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary_range",
+        {"start_date": "2024-01-13", "end_date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["nights_requested"] == 3
+    assert data["nights_returned"] == 1
+    assert data["nights"][0]["date"] == "2024-01-13"
+
+
+@pytest.mark.asyncio
+async def test_get_sleep_summary_range_rejects_invalid_dates(
+    app_with_health_wellness, mock_garmin_client
+):
+    """Malformed dates and inverted ranges return a clear error, no API calls"""
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary_range",
+        {"start_date": "not-a-date", "end_date": "2024-01-15"},
+    )
+    assert "Invalid date format" in result[0][0].text
+
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary_range",
+        {"start_date": "2024-01-15", "end_date": "2024-01-13"},
+    )
+    assert "end_date must be on or after start_date" in result[0][0].text
+
+    mock_garmin_client.get_sleep_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_sleep_summary_range_enforces_max_days(
+    app_with_health_wellness, mock_garmin_client
+):
+    """Ranges over 90 days are rejected before making any API calls"""
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary_range",
+        {"start_date": "2024-01-01", "end_date": "2024-04-15"},  # 106 days
+    )
+    assert "too large" in result[0][0].text
+    mock_garmin_client.get_sleep_data.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_stress_data_tool(app_with_health_wellness, mock_garmin_client):
     """Test get_stress_data tool returns stress data"""
     # Setup mock
@@ -628,3 +720,60 @@ async def test_get_sleep_data_exception(app_with_health_wellness, mock_garmin_cl
     # Verify error is handled gracefully
     assert result is not None
     # The tool should return an error message, not crash
+
+
+@pytest.mark.asyncio
+async def test_get_sleep_summary_handles_null_sleep_scores(app_with_health_wellness, mock_garmin_client):
+    """A present sleep record with a null sleepScores block must not crash.
+
+    `daily_sleep.get('sleepScores', {})` returns None when Garmin sends an
+    explicit null, so the chained `.get('overall', {}).get('value')` raised
+    "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_sleep_data.return_value = {
+        "dailySleepDTO": {
+            "sleepTimeSeconds": 28800,
+            "deepSleepSeconds": 7200,
+            "lightSleepSeconds": 14400,
+            "remSleepSeconds": 7200,
+            "awakeSleepSeconds": 0,
+            "sleepScores": None,
+        },
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary",
+        {"date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
+    assert "28800" in text  # the rest of the summary still surfaces
+
+
+@pytest.mark.asyncio
+async def test_get_body_battery_handles_null_activity_events(app_with_health_wellness, mock_garmin_client):
+    """A day whose bodyBatteryActivityEvent is an explicit null must not crash.
+
+    `day.get('bodyBatteryActivityEvent', [])` returns None when the key is
+    present but null, so `for event in ...` raised
+    "'NoneType' object is not iterable".
+    """
+    mock_garmin_client.get_body_battery.return_value = [
+        {
+            "date": "2024-01-15",
+            "charged": 100,
+            "drained": 20,
+            "bodyBatteryActivityEvent": None,
+            "bodyBatteryDynamicFeedbackEvent": None,
+        }
+    ]
+
+    result = await app_with_health_wellness.call_tool(
+        "get_body_battery",
+        {"start_date": "2024-01-15", "end_date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
+    assert "100" in text

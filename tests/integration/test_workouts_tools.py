@@ -2673,3 +2673,23 @@ async def test_get_scheduled_workouts_exposes_scheduled_id(app_with_workouts, mo
     workout = result_data["scheduled_workouts"][0]
     assert workout["scheduled_workout_id"] == 555
     assert workout["workout_id"] == 123456
+
+
+@pytest.mark.asyncio
+async def test_get_scheduled_workouts_handles_null_graphql_data(app_with_workouts, mock_garmin_client):
+    """A GraphQL error response ({"data": null}) must not crash the tool.
+
+    "data" is present but null, so it passes the `"data" not in result`
+    guard; `result.get("data", {})` then returns None and the chained
+    `.get("workoutScheduleSummariesScalar", [])` raised
+    "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.query_garmin_graphql.return_value = {"data": None}
+
+    result = await app_with_workouts.call_tool(
+        "get_scheduled_workouts",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "No workouts scheduled" in text

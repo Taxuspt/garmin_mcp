@@ -1,5 +1,8 @@
 """Unit tests for the env-var tool filter (_ToolFilter)."""
 
+import pytest
+
+import garmin_mcp
 from garmin_mcp import _ToolFilter, _default_tool_annotations
 
 
@@ -39,6 +42,26 @@ def test_no_filter_registers_all():
     filt = _ToolFilter(app, set(), set())
     _register(filt, ["get_a", "get_b"])
     assert app.registered == ["get_a", "get_b"]
+
+
+def test_blank_allowlist_keeps_denylist_behavior(monkeypatch):
+    monkeypatch.setenv("GARMIN_ENABLED_TOOLS", "  \t")
+    monkeypatch.setenv("GARMIN_DISABLED_TOOLS", "get_b")
+
+    enabled, disabled = garmin_mcp._resolve_tool_filters()
+
+    assert enabled == set()
+    assert disabled == {"get_b"}
+
+
+def test_malformed_nonblank_allowlist_is_rejected(monkeypatch):
+    monkeypatch.setenv("GARMIN_ENABLED_TOOLS", ",,  ,")
+
+    with pytest.raises(
+        ValueError,
+        match="Invalid GARMIN_ENABLED_TOOLS: expected at least one tool name",
+    ):
+        garmin_mcp._resolve_tool_filters()
 
 
 def test_allowlist_only_registers_listed():

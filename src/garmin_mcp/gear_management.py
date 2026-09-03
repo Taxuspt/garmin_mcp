@@ -3,10 +3,12 @@ Gear management functions for Garmin Connect MCP Server
 """
 
 import json
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 # The garmin_client will be set by the main file
 garmin_client = None
+logger = logging.getLogger(__name__)
 
 # Activity type mappings for gear defaults
 # This is extrapolated from data and might not be complete or 100% accurate
@@ -21,12 +23,21 @@ ACTIVITY_TYPE_MAPPING = {
     8: "Other",
 }
 
+GEAR_V2_LIST_ENDPOINT = "/gear-service/gear/v2/list"
 
-def _parse_iso_date(iso_string: str) -> str:
-    """Extract date from ISO datetime string"""
+
+def _parse_iso_date(iso_string: Optional[str]) -> Optional[str]:
+    """Extract a date from an optional ISO datetime string."""
     if not iso_string:
         return None
     return iso_string.split("T")[0] if "T" in iso_string else iso_string
+
+
+def _normalize_gear_uuid(uuid: Optional[str]) -> Optional[str]:
+    """Normalize UUIDs returned in hyphenated and unhyphenated forms."""
+    if not isinstance(uuid, str):
+        return None
+    return uuid.replace("-", "").lower()
 
 
 def configure(client):
@@ -42,8 +53,9 @@ def register_tools(app):
     async def get_gear(include_stats: bool = True) -> str:
         """Get all gear registered with the user account
 
-        Returns complete gear inventory including usage statistics and default
-        activity associations. No parameters required - user profile is fetched automatically.
+        Returns complete gear inventory including free-text notes, usage statistics,
+        and default activity associations. The notes field is null when unavailable.
+        No parameters required - user profile is fetched automatically.
 
         Args:
             include_stats: Include usage statistics for each gear item (default True).
@@ -60,6 +72,28 @@ def register_tools(app):
             gear_list = garmin_client.get_gear(user_profile_id)
             if not gear_list:
                 return "No gear found."
+
+            # Notes are only exposed by Garmin's v2 gear endpoint. Its UUIDs are
+            # hyphenated, unlike the legacy endpoint used for the existing fields.
+            notes_by_uuid: Dict[str, Optional[str]] = {}
+            try:
+                gear_v2_list = garmin_client.connectapi(GEAR_V2_LIST_ENDPOINT) or []
+                if not isinstance(gear_v2_list, list):
+                    logger.debug(
+                        "Unexpected Garmin v2 gear response type: %s",
+                        type(gear_v2_list).__name__,
+                    )
+                    gear_v2_list = []
+                for gear_v2 in gear_v2_list:
+                    if not isinstance(gear_v2, dict):
+                        continue
+                    normalized_v2_uuid = _normalize_gear_uuid(gear_v2.get("uuid"))
+                    if normalized_v2_uuid:
+                        notes_by_uuid[normalized_v2_uuid] = gear_v2.get("notes")
+            except Exception as exc:
+                logger.debug(
+                    "Garmin v2 gear list unavailable: %s", exc, exc_info=True
+                )
 
             # 3. Get defaults to map gear -> activity types
             defaults_list = garmin_client.get_gear_defaults(user_profile_id) or []
@@ -96,6 +130,9 @@ def register_tools(app):
                     "status": status,
                     "date_begin": _parse_iso_date(g.get("dateBegin")),
                     "date_end": _parse_iso_date(g.get("dateEnd")),
+                    "notes": notes_by_uuid.get(
+                        _normalize_gear_uuid(uuid), g.get("notes")
+                    ),
                 }
 
                 # Add max distance in km if set

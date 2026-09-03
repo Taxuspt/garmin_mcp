@@ -5,7 +5,7 @@ Training and performance functions for Garmin Connect MCP Server
 import json
 import datetime
 import math
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -37,20 +37,22 @@ def _extract_vo2_measurements(data: Any) -> Dict[str, float]:
 
     data = _as_dict(data)
     # Garmin uses "generic" for its running/non-cycling VO2 max series.
+    # Prefer "PreciseValue" fields: vo2MaxValue is rounded to 0.5 while the
+    # Connect web chart and training status report the 0.1-precision estimate.
     candidate_paths = (
         (("vo2MaxRunning",), "running"),
         (("vo2MaxCycling",), "cycling"),
         (("vo2Max",), "running"),
-        (("vo2MaxValue",), "running"),
         (("vo2MaxPreciseValue",), "running"),
-        (("generic", "vo2MaxValue"), "running"),
+        (("vo2MaxValue",), "running"),
         (("generic", "vo2MaxPreciseValue"), "running"),
-        (("cycling", "vo2MaxValue"), "cycling"),
+        (("generic", "vo2MaxValue"), "running"),
         (("cycling", "vo2MaxPreciseValue"), "cycling"),
-        (("mostRecentVO2Max", "generic", "vo2MaxValue"), "running"),
+        (("cycling", "vo2MaxValue"), "cycling"),
         (("mostRecentVO2Max", "generic", "vo2MaxPreciseValue"), "running"),
-        (("mostRecentVO2Max", "cycling", "vo2MaxValue"), "cycling"),
+        (("mostRecentVO2Max", "generic", "vo2MaxValue"), "running"),
         (("mostRecentVO2Max", "cycling", "vo2MaxPreciseValue"), "cycling"),
+        (("mostRecentVO2Max", "cycling", "vo2MaxValue"), "cycling"),
         (("userData", "vo2MaxRunning"), "running"),
         (("userData", "vo2MaxCycling"), "cycling"),
     )
@@ -103,6 +105,45 @@ def _get_max_metrics_range(
         return False, None
 
     return True, connectapi(f"{metrics_url}/{start_date}/{end_date}")
+
+
+def _build_vo2_trend_series(
+    history: List[Dict[str, Any]], end_date: datetime.date
+) -> List[Dict[str, Any]]:
+    """Expand sparse max-metrics days into a dense daily series.
+
+    Garmin's max-metrics endpoint records an entry only on days with a VO2 max
+    recompute (after an activity), while the Connect web chart carries each
+    value forward until the next one. Emit the carried-forward days too so the
+    series matches the chart instead of collapsing to recompute days.
+    """
+    series: List[Dict[str, Any]] = []
+    if not history:
+        return series
+
+    measured = {entry["date"]: entry for entry in history}
+    current = datetime.date.fromisoformat(min(measured))
+    last: Optional[Dict[str, Any]] = None
+    while current <= end_date:
+        entry = measured.get(current.isoformat())
+        if entry is not None:
+            last = {
+                "date": entry["date"],
+                "vo2_max": entry["vo2_max"],
+                "source": entry["source"],
+            }
+            series.append(last)
+        elif last is not None:
+            series.append(
+                {
+                    "date": current.isoformat(),
+                    "vo2_max": last["vo2_max"],
+                    "source": last["source"],
+                    "carried_forward": True,
+                }
+            )
+        current += datetime.timedelta(days=1)
+    return series
 
 
 def _get_activity_type_mapping() -> Dict[int, str]:
@@ -192,8 +233,10 @@ def register_tools(app):
                 "stats_by_activity_type": {},
             }
 
-            # Parse stats by activity type
-            stats = data.get("stats", {})
+            # Parse stats by activity type. `or {}` guards against an explicit
+            # null `stats` (Garmin sends null for empty sections), which would
+            # otherwise raise "'NoneType' object has no attribute 'items'".
+            stats = data.get("stats") or {}
             for activity_type, activity_stats in stats.items():
                 if metric in activity_stats:
                     metric_data = activity_stats[metric]
@@ -440,9 +483,13 @@ def register_tools(app):
             if not hrv_data:
                 return f"No HRV data found for {date}."
 
-            # Extract the summary from hrvSummary key
-            summary = hrv_data.get("hrvSummary", {})
-            baseline = summary.get("baseline", {})
+            # Extract the summary from hrvSummary key.
+            # Use `x.get(key) or {}` rather than `x.get(key, {})`: Garmin sends
+            # an explicit null for sections the user has no data in, and a
+            # default only applies when the key is absent. Same pattern as
+            # get_training_status.
+            summary = hrv_data.get("hrvSummary") or {}
+            baseline = summary.get("baseline") or {}
 
             # Curate to essential fields only
             curated = {
@@ -573,34 +620,38 @@ def register_tools(app):
             date: Date in YYYY-MM-DD format
         """
         try:
-            status = garmin_client.get_training_status(date)
+            status = _as_dict(garmin_client.get_training_status(date))
             if not status:
                 return f"No training status data found for {date}."
 
             # Extract from nested structure
-            # Use `(x.get(key) or {})` instead of `x.get(key, {})` so that
-            # explicit null values in the API response are treated as missing
-            # rather than causing `NoneType has no attribute 'get'` errors.
-            recent_status = (status.get("mostRecentTrainingStatus") or {})
-            latest_data = (recent_status.get("latestTrainingStatusData") or {})
+            # Use `_as_dict()` for nested Garmin sections so null or non-dict
+            # values are treated as missing instead of causing attribute errors.
+            recent_status = _as_dict(status.get("mostRecentTrainingStatus"))
+            latest_data = _as_dict(recent_status.get("latestTrainingStatusData"))
 
             # Get first device data (usually the primary device)
             device_data = {}
-            for device_id, data in latest_data.items():
+            for data in latest_data.values():
+                if not isinstance(data, dict) or not data:
+                    continue
                 device_data = data
                 break
 
-            acwr_data = (device_data.get("acuteTrainingLoadDTO") or {})
+            acwr_data = _as_dict(device_data.get("acuteTrainingLoadDTO"))
 
             # VO2 Max data
-            vo2_data = (status.get("mostRecentVO2Max") or {}).get("generic") or {}
-            cycling_vo2_data = (status.get("mostRecentVO2Max") or {}).get("cycling") or {}
+            most_recent_vo2 = _as_dict(status.get("mostRecentVO2Max"))
+            vo2_data = _as_dict(most_recent_vo2.get("generic"))
+            cycling_vo2_data = _as_dict(most_recent_vo2.get("cycling"))
 
             # Training load balance
-            load_balance = (status.get("mostRecentTrainingLoadBalance") or {})
-            load_map = (load_balance.get("metricsTrainingLoadBalanceDTOMap") or {})
+            load_balance = _as_dict(status.get("mostRecentTrainingLoadBalance"))
+            load_map = _as_dict(load_balance.get("metricsTrainingLoadBalanceDTOMap"))
             load_data = {}
-            for device_id, data in load_map.items():
+            for data in load_map.values():
+                if not isinstance(data, dict) or not data:
+                    continue
                 load_data = data
                 break
 
@@ -713,10 +764,13 @@ def register_tools(app):
                 # Process speed history
                 speed_history = threshold.get("speed", [])
                 if speed_history:
+                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
                     curated["speed_history"] = [
                         {
                             "date": entry.get("from"),
-                            "speed_mps": entry.get("value"),
+                            "speed_mps": (
+                                1 / entry.get("value") if entry.get("value") else None
+                            ),
                             "series": entry.get("series"),
                         }
                         for entry in speed_history
@@ -750,9 +804,11 @@ def register_tools(app):
                 speed_hr = threshold.get("speed_and_heart_rate", {})
                 power = threshold.get("power", {})
 
+                raw_speed = speed_hr.get("speed")
                 curated = {
                     # Speed and heart rate data
-                    "lactate_threshold_speed_mps": speed_hr.get("speed"),
+                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
+                    "lactate_threshold_speed_mps": 1 / raw_speed if raw_speed else None,
                     "lactate_threshold_heart_rate_bpm": speed_hr.get("heartRate"),
                     "heart_rate_cycling_bpm": speed_hr.get("heartRateCycling"),
                     "speed_hr_date": speed_hr.get("calendarDate"),
@@ -1079,6 +1135,10 @@ def register_tools(app):
         Note: VO2 max estimates are smoothed and update gradually — daily changes of <0.5
         are within normal noise. Focus on the 4-6 week trend direction.
 
+        Garmin records a new VO2 max value only on days with a recompute (after an
+        activity). Days in between carry the last known value forward and are marked
+        with "carried_forward": true, matching the trend chart in Garmin Connect.
+
         If historical values are unavailable, the current profile estimate is returned
         separately and is not represented as a historical trend point.
 
@@ -1165,13 +1225,9 @@ def register_tools(app):
                 ),
             )
 
-        trend = []
-        last_vo2 = None
-        if selected_sport is not None:
-            for entry in histories[selected_sport]:
-                if entry["vo2_max"] != last_vo2:
-                    trend.append(entry)
-                    last_vo2 = entry["vo2_max"]
+        trend = _build_vo2_trend_series(
+            histories[selected_sport] if selected_sport is not None else [], end
+        )
 
         current_estimate = None
         current_sport = None
@@ -1289,5 +1345,215 @@ def register_tools(app):
             "period_avg_sleep_breaths_per_min": avg_sleep_overall,
             "trend": trend,
         }, indent=2)
+
+    @app.tool()
+    async def get_running_tolerance(date: str) -> str:
+        """Get Running Tolerance for a single day.
+
+        Returns Garmin's running load capacity model: how much running load the
+        athlete can currently absorb (tolerance), the intensity-adjusted load
+        their recent runs have produced (acute load), and the raw distance behind
+        that load. All three are expressed in km so they're directly comparable —
+        `load_ratio` (acute_load_km / distance_km) quantifies how much intensity
+        is inflating the cost of each kilometer run.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            data = garmin_client.get_running_tolerance(date, date, aggregation="daily")
+        except Exception as e:
+            return f"Error retrieving running tolerance data: {str(e)}"
+
+        if not data:
+            return "Your device does not support this metric."
+
+        entry = data[0]
+        tolerance = entry.get("acuteTolerance")
+        acute_load = entry.get("acuteImpactLoad")
+        distance = entry.get("acuteDistance")
+
+        curated: Dict[str, Any] = {"date": entry.get("calendarDate", date)}
+        if tolerance is not None:
+            curated["tolerance_km"] = round(tolerance / 1000, 2)
+        if acute_load is not None:
+            curated["acute_load_km"] = round(acute_load / 1000, 2)
+        if distance is not None:
+            curated["distance_km"] = round(distance / 1000, 2)
+        if acute_load is not None and distance:
+            curated["load_ratio"] = round(acute_load / distance, 2)
+        feedback = entry.get("runningToleranceFeedBackPhrase")
+        if feedback:
+            curated["feedback_phrase"] = feedback
+
+        return json.dumps(curated, indent=2)
+
+    @app.tool()
+    async def get_running_tolerance_trend(
+        start_date: str,
+        end_date: str,
+        aggregation: Literal["daily", "weekly"] = "weekly",
+    ) -> str:
+        """Get Running Tolerance trend over a date range.
+
+        Running Tolerance moves slowly — its value is in the trajectory, not any
+        single day. Returns, per period: tolerance_km (current load capacity),
+        acute_load_km (intensity-adjusted load), distance_km (actual distance
+        run), and load_ratio (acute_load_km / distance_km — how much intensity
+        inflates the cost of each kilometer). Weekly aggregation (default) gives
+        a compact multi-month view; daily gives day-to-day resolution for a
+        shorter window.
+
+        Recommended range: 4-12 weeks. Maximum: 90 days for daily aggregation,
+        366 days for weekly (this endpoint returns the whole range in one call,
+        so the limit protects output size, not request volume).
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            aggregation: "daily" or "weekly" (default "weekly")
+        """
+        try:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+        except ValueError as e:
+            return f"Invalid date format: {e}. Use YYYY-MM-DD."
+
+        days = (end - start).days + 1
+        if days < 1:
+            return "end_date must be on or after start_date."
+
+        max_days = 90 if aggregation == "daily" else 366
+        if days > max_days:
+            return (
+                f"Date range too large ({days} days). Maximum is {max_days} "
+                f"days for {aggregation} aggregation."
+            )
+
+        try:
+            data = garmin_client.get_running_tolerance(
+                start_date, end_date, aggregation=aggregation
+            )
+        except Exception as e:
+            return f"Error retrieving running tolerance trend: {str(e)}"
+
+        if not data:
+            return "Your device does not support this metric."
+
+        trend = []
+        for entry in data:
+            if aggregation == "daily":
+                tolerance = entry.get("acuteTolerance")
+                acute_load = entry.get("acuteImpactLoad")
+                distance = entry.get("acuteDistance")
+            else:
+                tolerance = entry.get("tolerance")
+                acute_load = entry.get("totalImpactLoad")
+                distance = entry.get("totalDistance")
+
+            point: Dict[str, Any] = {"date": entry.get("calendarDate")}
+            if tolerance is not None:
+                point["tolerance_km"] = round(tolerance / 1000, 2)
+            if acute_load is not None:
+                point["acute_load_km"] = round(acute_load / 1000, 2)
+            if distance is not None:
+                point["distance_km"] = round(distance / 1000, 2)
+            if acute_load is not None and distance:
+                point["load_ratio"] = round(acute_load / distance, 2)
+
+            if aggregation == "daily":
+                feedback = entry.get("runningToleranceFeedBackPhrase")
+                if feedback:
+                    point["feedback_phrase"] = feedback
+            else:
+                if entry.get("startOfWeek") is not None:
+                    point["start_of_week"] = entry.get("startOfWeek")
+                if entry.get("endOfWeek") is not None:
+                    point["end_of_week"] = entry.get("endOfWeek")
+                if entry.get("weekIndex") is not None:
+                    point["week_index"] = entry.get("weekIndex")
+
+            trend.append(point)
+
+        # The daily aggregation is not returned in chronological order by the API.
+        trend.sort(key=lambda p: p.get("date") or "")
+
+        tolerance_values = [p["tolerance_km"] for p in trend if "tolerance_km" in p]
+        first_tolerance = tolerance_values[0] if tolerance_values else None
+        latest_tolerance = tolerance_values[-1] if tolerance_values else None
+        change = (
+            round(latest_tolerance - first_tolerance, 2)
+            if first_tolerance is not None and latest_tolerance is not None
+            else None
+        )
+
+        return json.dumps({
+            "start_date": start_date,
+            "end_date": end_date,
+            "aggregation": aggregation,
+            "data_points": len(trend),
+            "first_tolerance_km": first_tolerance,
+            "latest_tolerance_km": latest_tolerance,
+            "tolerance_change_km": change,
+            "trend": trend,
+        }, indent=2)
+
+    @app.tool()
+    async def get_acclimation(date: str) -> str:
+        """Get heat and altitude acclimation status for a given date.
+
+        Garmin tracks how adapted the athlete currently is to training in heat
+        and at altitude. heat_acclimation_percent runs 0-100 and decays without
+        continued exposure; use it to judge readiness for a warm-weather race.
+
+        heat_trend reports Garmin's own label (e.g. ACCLIMATIZED). The
+        previous_* fields hold the prior reading so direction of travel is
+        visible without a second call.
+
+        VO2 max is not returned here; use get_training_status or get_vo2max_trend.
+
+        Args:
+            date: Date in YYYY-MM-DD format
+        """
+        try:
+            data = garmin_client.get_max_metrics(date)
+        except Exception as e:
+            return f"Error retrieving acclimation data: {str(e)}"
+
+        if isinstance(data, list):
+            data = data[0] if data else None
+        if not isinstance(data, dict):
+            return f"No acclimation data found for {date}."
+
+        acc = _as_dict(data.get("heatAltitudeAcclimation"))
+        if not acc:
+            return (
+                f"No acclimation data found for {date}. Garmin populates this only "
+                "after outdoor activities in heat or at altitude."
+            )
+
+        result: Dict[str, Any] = {"date": acc.get("calendarDate", date)}
+
+        for out_key, in_key in (
+            ("heat_acclimation_percent", "heatAcclimationPercentage"),
+            ("previous_heat_acclimation_percent", "previousHeatAcclimationPercentage"),
+            ("heat_trend", "heatTrend"),
+            ("heat_acclimation_date", "heatAcclimationDate"),
+            ("previous_heat_acclimation_date", "previousHeatAcclimationDate"),
+            ("altitude_acclimation_meters", "altitudeAcclimation"),
+            ("previous_altitude_acclimation_meters", "previousAltitudeAcclimation"),
+            ("altitude_trend", "altitudeTrend"),
+            ("current_altitude_meters", "currentAltitude"),
+        ):
+            value = acc.get(in_key)
+            if value is not None:
+                result[out_key] = value
+
+        heat = result.get("heat_acclimation_percent")
+        prev = result.get("previous_heat_acclimation_percent")
+        if isinstance(heat, (int, float)) and isinstance(prev, (int, float)):
+            result["heat_acclimation_change"] = round(heat - prev, 1)
+
+        return json.dumps(result, indent=2)
 
     return app
