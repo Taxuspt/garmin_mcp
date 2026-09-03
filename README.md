@@ -6,6 +6,10 @@ This Model Context Protocol (MCP) server connects to Garmin Connect and exposes 
 
 Garmin's API is accessed via the awesome [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library.
 
+> **Beta release:** `0.2.0-beta.1` adds the runtime, analysis, physiology, and
+> cycling-coach layers described below. Existing integrations should review
+> [the 0.2 upgrade guide](docs/UPGRADING-0.2.md) before enabling new writes.
+
 ## Features
 
 - List recent activities with pagination support
@@ -15,6 +19,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - View body composition data
 - Track training status and readiness
 - Access cycling FTP and lactate threshold metrics
+- Read and update generic or sport-specific heart-rate training zones
 - Manage gear and equipment, including free-text notes returned by `get_gear`
 - Access workouts and training plans
 - Inspect detailed workout step structures, including repeat groups and swim pace targets
@@ -22,10 +27,19 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 - Advanced cycling analytics: power zones, FIT file analysis, DI2 electronic shift intelligence
 - Training load trend (CTL/ATL/TSB), HRV trend, VO2 max trend, respiration rate trend
 - Power Duration Curve, climb detection with VAM, cardiac drift (aerobic decoupling), W/kg calculations
+- Pause-aware activity streams with bounded pagination and time-weighted resampling
+- Deterministic cycling decoupling, historical zone re-slicing, and polarization audits
+- Optional local physiology profile with evidence provenance, freshness, and conflict detection
+- Preview-first cycling workouts, training blocks, weekly adaptations, and safe FIT upload
+- Lazy Garmin login, bounded retries/cache, partial daily briefing, and MCP safety annotations
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+The default build currently registers **more than 168 tools**. The complete existing
+endpoint-oriented catalog remains exposed by default.
+The server adds intent-level tools where aggregation or deterministic domain
+logic materially reduces round trips; it does not hide the raw tools or replace
+them with a small façade.
 
 - ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
@@ -37,13 +51,29 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Challenges & Badges (10 tools)
 - ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
 - ✅ Women's Health (3 tools)
-- ✅ User Profile (3 tools)
-- ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
+- ✅ User Profile (5 tools) - includes configured HR-zone read/write with per-sport updates
+- ✅ High-Level Workout Builders - running, strength, HR-target cycling, and interval builders
 - ✅ Courses (5 tools) - list / get details / upload GPX as course / download GPX / delete course
-- ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
+- ✅ Activity Analysis - legacy FIT analysis plus streams, decoupling, zone re-slicing, and polarization
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
+- ✅ Calendar Events - expose races and events from the Garmin calendar
+- ✅ Physiology & Coach - optional evidence store, threshold candidates, profile sync, plans, and adaptations
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+
+### Heart Rate Zone Configuration
+
+`get_heart_rate_zones` reads the saved generic and sport-specific profiles.
+`set_heart_rate_zones` updates one profile with read-modify-write semantics and
+re-fetches it after saving. The write mutates account-level configuration and
+does not retroactively change zone boundaries baked into recorded activities.
+
+The verified Garmin request is `PUT /biometric-service/heartRateZones` with a
+JSON array containing the changed profile and `changeState: "CHANGED"`; Garmin
+returns `204 No Content`. A subsequent `GET` to the same endpoint returns the
+saved profiles. Garmin has no persisted `CUSTOM` training-method enum: custom
+BPM floors are sent exactly, while read-back reports `trainingMethod: "HR_MAX"`.
+The explicit floor values remain unchanged and authoritative.
 
 ### Gear Notes
 
@@ -66,12 +96,14 @@ Two tools let you download a raw activity file to disk:
 
 **First-run behavior:** if no directory is configured, `download_activity_file` returns `status: "needs_setup"`. The assistant will ask where you want to save files (suggesting the current directory as default), call `set_fit_download_dir` to persist your choice, and then retry the download automatically.
 
-### Intentionally Skipped Endpoints
+### High-volume activity data
 
-Some endpoints are not implemented due to performance or complexity considerations:
+`get_activity_details()` remains intentionally unexposed because its response is
+large and unstable. Use `get_activity_streams()` instead: select fields and a
+resolution, then follow its opaque cursor until `has_more` is false. Raw pages
+can be concatenated without silent truncation.
 
-**High Data Volume:**
-- `get_activity_details()` - Returns large GPS tracks and chart data (50KB-500KB). Use `get_activity()` for summaries instead.
+### Intentionally skipped or gated endpoints
 
 **Specialized Workout Formats:**
 - `upload_running_workout()`, `upload_cycling_workout()`, `upload_swimming_workout()` - Sport-specific workout uploads. Use `upload_workout()` for general workouts.
@@ -84,8 +116,8 @@ If you need any of these endpoints, please [open an issue](https://github.com/Ta
 
 ## Tool Filtering
 
-This server registers 110+ tools by default, which can be a lot of context for
-an LLM to carry in every session. You can expose only the tools you need with
+This server registers the full tool catalog by default, which can be a lot of
+context for an LLM to carry in every session. You can expose only the tools you need with
 two optional environment variables:
 
 | Env var | Effect |
@@ -104,6 +136,64 @@ Example — expose only sleep, stress, and recent activities:
   "GARMIN_ENABLED_TOOLS": "get_sleep_data,get_stress_summary,get_activities"
 }
 ```
+
+## Runtime, analysis, and coaching tools
+
+Starting the server and listing tools does not contact Garmin. Authentication
+is protected by a first-call lock, and `check_garmin_auth(verify=false)` performs
+only a local, secret-free diagnostic. Set `verify=true` to validate the session
+against Garmin. Read calls use endpoint-aware TTL caching and bounded retry for
+429/connection/timeout failures; write calls are never automatically retried.
+
+| Tool | Behavior |
+|---|---|
+| `get_briefing(date)` | At most eight logical reads; readiness, sleep, HRV, training state, recent activities, and changes fail independently. |
+| `get_activity_streams(...)` | `raw`, `1s`, `5s`, `30s`, or `60s`; reports coverage, pauses, gaps, and an opaque cursor. |
+| `analyze_decoupling(...)` | Time-weighted Pw:Hr, falling back to Pa:Hr; positive values mean declining efficiency. |
+| `reslice_zones(...)` | Recomputes active time from the raw timeline with either an inline or stored `ZoneModel`. |
+| `polarization_audit(...)` | Separately reports active-time and session-count low/black-hole/high distributions. |
+| `estimate_thresholds(...)` | Persists candidates with evidence, ranges, confidence, conflicts, and algorithm version; it never activates them. |
+| `sync_profile_to_garmin(...)` | Defaults to preview and supports accepted HR values/zones only. |
+| `plan_training_block(...)` / `adapt_week(...)` | Deterministic, versioned cycling rules; create drafts or pending patches without Garmin writes. |
+| `apply_training_block(...)` / `apply_week_adaptation(...)` | Default `dry_run=true`; commit requires interactive confirmation, tracks generated workout/calendar IDs, and compensates only objects created by that operation. |
+| `upload_fit(...)` | Stages a copy, validates it, reports progress, hashes it, defaults to preview, and requires interactive confirmation; the source file is never overwritten. |
+
+### Optional physiology store
+
+Set `GARMIN_DATA_DIR` to enable the private SQLite profile at startup, or call
+`configure_physiology_store` (the tool can elicit a directory when omitted).
+Without it, activity streams, decoupling, and inline zone re-slicing still work.
+The database uses explicit `PRAGMA user_version` migrations and stores health
+evidence, zone models, threshold estimates, analysis metadata, immutable plan
+revisions, workout links, adaptations, and audit records. Keep this directory
+private and out of source control.
+
+A `ZoneModel` contains `sport`, `metric`, ordered contiguous
+`zones[{name, lower_inclusive, upper_exclusive}]`, optional `vt1`/`vt2`, source,
+version, and observation timestamp. Overlaps and unexplained gaps are rejected.
+Threshold candidates require either one quality lab observation or at least two
+independent field observations. Heat is flagged and down-weighted, not converted
+with a fixed BPM correction. Conflicting HR evidence above `max(5 bpm, 3%)` or
+power evidence above `max(10 W, 5%)` is marked and never auto-accepted.
+
+### Confirmation boundary
+
+All new closed-loop writes default to `dry_run=true`. Passing `dry_run=false`
+also triggers a non-secret MCP confirmation elicitation bound to the prepared
+payload or immutable plan revision. The confirmation displays the exact
+current-to-target profile changes, workout steps and targets, or planned dates
+and workout signatures, together with the payload hash; if the connected client
+cannot obtain a human response, the tool returns `needs_confirmation` without writing. Thus an
+unattended scheduled job may call `adapt_week` to leave a pending patch but
+cannot complete an apply operation. The older `set_heart_rate_zones` retains its compatible
+`dry_run=false` default, while now accepting `dry_run=true` for inspection.
+Garmin FTP and power-zone writes remain unavailable until a real account/device
+round trip, read-back, sync, and rollback contract is fixture-backed. They are
+not inferred from undocumented endpoints.
+
+Vendor FIT transformations likewise fail closed with `status: needs_fixture`.
+Validated passthrough is supported today; Magene, iGPSPORT, Bryton, and Wahoo
+repair rules should be added only with a real, de-identified golden fixture.
 
 ## High-level workout tools
 
@@ -168,6 +258,31 @@ categories — anything else, including `OTHER` and `UNASSIGNED`, is rejected wi
 ```
 
 Returns: `{"status": "success", "workout_id": 1234567890, ...}`
+
+### Cycling builders
+
+`create_cycling_workout`, `create_hr_target_ride`, and
+`create_interval_workout` default to preview. They share one validator and
+support time/distance steps, HR zones or BPM ranges, FTP zones, absolute watts,
+recovery, and repeat groups.
+
+```json
+{
+  "name": "3 x 8 min threshold",
+  "work_seconds": 480,
+  "recovery_seconds": 240,
+  "repeats": 3,
+  "target_type": "power",
+  "target_min": 250,
+  "target_max": 270,
+  "dry_run": true
+}
+```
+
+Absolute cycling watts deliberately use target ID `2` / `power.zone` with
+step-level `targetValueOne` and `targetValueTwo`. Target ID `6` is pace/speed;
+payloads labeled `power.between` are rejected because Garmin otherwise stores
+them as a speed target on the device.
 
 ### `schedule_week`
 
@@ -290,6 +405,23 @@ bound order. Garmin silently discards values nested inside `targetType`, leaving
 a pace target with no active range. The upload tools repair that unambiguous
 nesting mistake, but reject the request if nested and step-level values conflict.
 
+For an absolute cycling power range, use ID `2` and keep watt bounds at step
+level. This is the same ID used by a named FTP zone (`zoneNumber` 1–7):
+
+```json
+{
+  "targetType": {
+    "workoutTargetTypeId": 2,
+    "workoutTargetTypeKey": "power.zone"
+  },
+  "targetValueOne": 250,
+  "targetValueTwo": 270
+}
+```
+
+Do not use `power.between`: its historical ID `6` mapping becomes a pace/speed
+target when Garmin reads the numeric ID.
+
 For a named Garmin HR zone, use the same target type with `zoneNumber` instead:
 
 ```json
@@ -314,7 +446,7 @@ The easiest way to add this server to Claude Desktop is via the `.dxt` Desktop E
 
 1. Download the latest `garmin-mcp.dxt` from the [Releases page](https://github.com/Taxuspt/garmin_mcp/releases).
 2. Drag the `.dxt` file into the Claude Desktop window, **or** double-click it, **or** go to **Settings → Extensions → Install Extension** and select the file.
-3. Claude Desktop will prompt you for optional configuration (token path, email, password).
+3. Claude Desktop will prompt only for the optional OAuth token directory. It does not request your Garmin email, password, or MFA code through extension configuration.
 
 ### First-time authentication
 
@@ -430,6 +562,10 @@ Your Garmin Connect credentials are read from environment variables:
 - `GARMIN_PASSWORD`: Your Garmin Connect password
 - `GARMIN_PASSWORD_FILE`: Path to a file containing your Garmin Connect password
 - `GARMIN_IS_CN`: Set to `true` to use Garmin Connect China (garmin.cn) instead of the international version (default: `false`)
+- `GARMIN_REQUEST_TIMEOUT_SECONDS`: Timeout for authenticated Garmin API requests (default: `15`). Login/MFA uses garminconnect's own built-in timeouts.
+- `GARMIN_REQUEST_BUDGET_PER_MINUTE`: Non-blocking rolling budget for real Garmin requests (default: `120`); cached reads consume no budget.
+- `GARMIN_DATA_DIR`: Opt in to the private physiology/coaching SQLite database. Unset keeps the server stateless.
+- `GARMIN_ALLOWED_UPLOAD_DIRS`: `os.pathsep`-separated allowlist of roots accepted by `upload_fit`. Optional for local stdio compatibility, but required for `streamable-http` and `sse`; remote transports fail closed when it is unset.
 - `GARMIN_FIT_DOWNLOAD_DIR`: Default directory for downloaded activity files. When set, skips the first-run setup prompt in `download_activity_file`.
 - `GARMIN_FIT_CONFIG`: Path to the persisted download-directory config file (default: `~/.garminconnect_fit_config.json`).
 
@@ -442,7 +578,6 @@ By default the server communicates over **stdio**, which is what Claude Desktop,
 - `GARMIN_MCP_TRANSPORT`: `stdio` (default), `streamable-http`, or `sse`
 - `GARMIN_MCP_HOST`: bind address for HTTP transports (default `127.0.0.1`; set to `0.0.0.0` only when the endpoint is fronted by an authenticating reverse proxy)
 - `GARMIN_MCP_PORT`: bind port for HTTP transports (default `8000`)
-- `GARMIN_MCP_CALL_TIMEOUT`: per-request timeout in seconds for calls to Garmin (default `90`). Garmin's API occasionally stalls a single request indefinitely; without this bound the call hangs until the MCP client's own timeout fires and reports the whole server as unresponsive. On timeout the tool returns a clear, retry-able error instead. Set to `0` to disable the bound.
 
 ```bash
 GARMIN_MCP_TRANSPORT=streamable-http garmin-mcp
@@ -452,8 +587,9 @@ When an HTTP transport is selected:
 
 - MCP clients connect to the **`/mcp`** path (e.g. `http://localhost:8000/mcp`).
 - A plain **`GET /healthz`** endpoint is exposed for liveness/readiness probes.
+- `upload_fit` will not read any server-local path unless `GARMIN_ALLOWED_UPLOAD_DIRS` explicitly allows it. For example, set `/srv/garmin-fit-inbox` as a dedicated staging root instead of exposing a home directory.
 
-The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
+The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost. This remains a local, single-account server: a reverse proxy alone does not provide tenant isolation or encrypted per-tenant token storage. Do not treat this transport as the hosted/OAuth edition described in the roadmap.
 
 ### Garmin Connect China (garmin.cn)
 

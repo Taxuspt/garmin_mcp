@@ -24,10 +24,8 @@ jobs:
 
     - name: Check for dependency vulnerabilities
       run: |
-        uv sync
-        uv pip list
-        echo "Checking for known security vulnerabilities..."
-        # Note: Add pip-audit or safety scan here if desired
+        uv sync --python 3.13
+        uv run --python 3.13 --with pip-audit pip-audit
 
     - name: Verify lock file is up to date
       run: |

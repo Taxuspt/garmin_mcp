@@ -3,7 +3,7 @@
 import pytest
 
 import garmin_mcp
-from garmin_mcp import _ToolFilter
+from garmin_mcp import _ToolFilter, _default_tool_annotations
 
 
 class FakeApp:
@@ -116,3 +116,20 @@ def test_passthrough_to_wrapped_app():
     app = FakeApp()
     filt = _ToolFilter(app, set(), set())
     assert filt.run() == "ran"
+
+
+def test_default_annotations_are_conservative_for_reads_and_deletes():
+    read = _default_tool_annotations("get_sleep_data")
+    analysis = _default_tool_annotations("analyze_decoupling")
+    delete = _default_tool_annotations("delete_workout")
+    unknown = _default_tool_annotations("perform_magic")
+
+    assert read.readOnlyHint is True
+    assert read.idempotentHint is True
+    assert read.destructiveHint is False
+    assert analysis.readOnlyHint is True
+    assert analysis.destructiveHint is False
+    assert delete.readOnlyHint is False
+    assert delete.destructiveHint is True
+    assert unknown.readOnlyHint is False
+    assert unknown.idempotentHint is False

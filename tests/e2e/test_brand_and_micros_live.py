@@ -18,14 +18,15 @@ Validation scenarios:
 import os
 import sys
 import time
+import uuid
+import warnings
 import pytest
 from urllib.parse import quote
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.live_write]
 
-_FOOD_NAME = "ZZ Live Brand Micros Test"
 _BRAND_1 = "TestBrand Alpha"
 _BRAND_2 = "TestBrand Beta"
 
@@ -65,6 +66,31 @@ def _find_by_id(garmin, name, food_id):
 
 def _delete_food(garmin, food_id):
     garmin.client.delete("connectapi", f"/nutrition-service/customFood/{food_id}", api=True)
+
+
+def _cleanup_unique_food(garmin, food_name, known_food_id=None):
+    """Delete only food created by this invocation's UUID-scoped name."""
+    food_ids = {str(known_food_id)} if known_food_id is not None else set()
+    failures = []
+    try:
+        for attempt in range(3):
+            for food in _search(garmin, food_name):
+                meta = food.get("foodMetaData", {})
+                if meta.get("foodName") == food_name and meta.get("foodId") is not None:
+                    food_ids.add(str(meta["foodId"]))
+            if food_ids or attempt == 2:
+                break
+            time.sleep(0.5)
+    except Exception as error:
+        failures.append(f"food lookup failed: {error}")
+
+    for food_id in food_ids:
+        try:
+            _delete_food(garmin, food_id)
+        except Exception as error:
+            failures.append(f"delete food {food_id} failed: {error}")
+    if failures:
+        warnings.warn("; ".join(failures), stacklevel=2)
 
 
 def _create(garmin, food_name, calories, brand_name=None, **micros):
@@ -152,21 +178,9 @@ def _update(garmin, food_id, serving_id, food_name, calories, brand_name=None, e
     )
 
 
-# ── pre-test cleanup ──────────────────────────────────────────────────────────
-
-@pytest.fixture(autouse=True, scope="module")
-def cleanup_before(garmin):
-    """Remove any leftover food from previous aborted runs."""
-    for f in _search(garmin, _FOOD_NAME):
-        if f.get("foodMetaData", {}).get("foodName") == _FOOD_NAME:
-            _delete_food(garmin, str(f["foodMetaData"]["foodId"]))
-            time.sleep(0.5)
-    yield
-
-
 # ── tests ─────────────────────────────────────────────────────────────────────
 
-def test_brand_and_micros_create_and_merge(garmin):
+def test_brand_and_micros_create_and_merge(garmin, nutrition_capability):
     """
     Single test exercises all four validation scenarios sequentially:
     1. Create with brand + all four micros → read back → assert all present
@@ -174,61 +188,65 @@ def test_brand_and_micros_create_and_merge(garmin):
     3. Update with new brand + changed vitaminD → assert change applied, others unchanged
     4. Cleanup
     """
-    # ── step 1: create ───────────────────────────────────────────────────────
-    food_id, serving_id = _create(
-        garmin, _FOOD_NAME, 200,
-        brand_name=_BRAND_1,
-        **_MICROS_1,
-    )
-    time.sleep(1)
+    food_name = f"ZZ Live Brand Micros {uuid.uuid4().hex}"
+    food_id = None
+    try:
+        # ── step 1: create ───────────────────────────────────────────────────
+        with nutrition_capability.require("custom-food write"):
+            food_id, serving_id = _create(
+                garmin, food_name, 200,
+                brand_name=_BRAND_1,
+                **_MICROS_1,
+            )
+        time.sleep(1)
 
-    rec = _find_by_id(garmin, _FOOD_NAME, food_id)
-    assert rec is not None, "Food not found after create"
-    meta = rec.get("foodMetaData", {})
-    nc = (rec.get("nutritionContents") or [{}])[0]
+        rec = _find_by_id(garmin, food_name, food_id)
+        assert rec is not None, "Food not found after create"
+        meta = rec.get("foodMetaData", {})
+        nc = (rec.get("nutritionContents") or [{}])[0]
 
-    assert meta.get("brandName") == _BRAND_1, f"brandName after create: {meta.get('brandName')!r}"
-    assert nc.get("transFat") == 1.5, f"transFat after create: {nc.get('transFat')!r}"
-    assert nc.get("calcium") == 130, f"calcium after create: {nc.get('calcium')!r}"
-    assert nc.get("iron") == 4, f"iron after create: {nc.get('iron')!r}"
-    assert nc.get("vitaminD") == 2.5, f"vitaminD after create: {nc.get('vitaminD')!r}"
+        assert meta.get("brandName") == _BRAND_1
+        assert nc.get("transFat") == 1.5
+        assert nc.get("calcium") == 130
+        assert nc.get("iron") == 4
+        assert nc.get("vitaminD") == 2.5
 
-    # ── step 2: merge check — update ONLY calories, omit brand + all micros ──
-    _update(garmin, food_id, serving_id, _FOOD_NAME, 250)  # no brand, no micros supplied
-    time.sleep(1)
+        # ── step 2: merge check — omit brand and all micros ──────────────────
+        _update(garmin, food_id, serving_id, food_name, 250)
+        time.sleep(1)
 
-    rec2 = _find_by_id(garmin, _FOOD_NAME, food_id)
-    assert rec2 is not None, "Food not found after merge update"
-    meta2 = rec2.get("foodMetaData", {})
-    nc2 = (rec2.get("nutritionContents") or [{}])[0]
+        rec2 = _find_by_id(garmin, food_name, food_id)
+        assert rec2 is not None, "Food not found after merge update"
+        meta2 = rec2.get("foodMetaData", {})
+        nc2 = (rec2.get("nutritionContents") or [{}])[0]
 
-    assert meta2.get("brandName") == _BRAND_1, \
-        f"brandName wiped by merge update: {meta2.get('brandName')!r}"
-    assert nc2.get("transFat") == 1.5, f"transFat wiped: {nc2.get('transFat')!r}"
-    assert nc2.get("calcium") == 130, f"calcium wiped: {nc2.get('calcium')!r}"
-    assert nc2.get("iron") == 4, f"iron wiped: {nc2.get('iron')!r}"
-    assert nc2.get("vitaminD") == 2.5, f"vitaminD wiped: {nc2.get('vitaminD')!r}"
+        assert meta2.get("brandName") == _BRAND_1
+        assert nc2.get("transFat") == 1.5
+        assert nc2.get("calcium") == 130
+        assert nc2.get("iron") == 4
+        assert nc2.get("vitaminD") == 2.5
 
-    # ── step 3: update-set check — change brand + one micro ──────────────────
-    _update(garmin, food_id, serving_id, _FOOD_NAME, 250,
-            brand_name=_BRAND_2, **_MICROS_3)
-    time.sleep(1)
+        # ── step 3: update-set check — change brand + one micro ──────────────
+        _update(
+            garmin,
+            food_id,
+            serving_id,
+            food_name,
+            250,
+            brand_name=_BRAND_2,
+            **_MICROS_3,
+        )
+        time.sleep(1)
 
-    rec3 = _find_by_id(garmin, _FOOD_NAME, food_id)
-    assert rec3 is not None, "Food not found after update-set"
-    meta3 = rec3.get("foodMetaData", {})
-    nc3 = (rec3.get("nutritionContents") or [{}])[0]
+        rec3 = _find_by_id(garmin, food_name, food_id)
+        assert rec3 is not None, "Food not found after update-set"
+        meta3 = rec3.get("foodMetaData", {})
+        nc3 = (rec3.get("nutritionContents") or [{}])[0]
 
-    assert meta3.get("brandName") == _BRAND_2, \
-        f"brandName not updated: {meta3.get('brandName')!r}"
-    assert nc3.get("vitaminD") == 10.0, f"vitaminD not updated: {nc3.get('vitaminD')!r}"
-    # untouched micros from step 1 must survive
-    assert nc3.get("transFat") == 1.5, f"transFat lost in step 3: {nc3.get('transFat')!r}"
-    assert nc3.get("calcium") == 130, f"calcium lost in step 3: {nc3.get('calcium')!r}"
-    assert nc3.get("iron") == 4, f"iron lost in step 3: {nc3.get('iron')!r}"
-
-    # ── step 4: cleanup ───────────────────────────────────────────────────────
-    _delete_food(garmin, food_id)
-    time.sleep(1)
-    assert _find_by_id(garmin, _FOOD_NAME, food_id) is None, \
-        f"Food {food_id} still present after delete"
+        assert meta3.get("brandName") == _BRAND_2
+        assert nc3.get("vitaminD") == 10.0
+        assert nc3.get("transFat") == 1.5
+        assert nc3.get("calcium") == 130
+        assert nc3.get("iron") == 4
+    finally:
+        _cleanup_unique_food(garmin, food_name, food_id)

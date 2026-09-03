@@ -9,6 +9,7 @@ import threading
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
@@ -31,6 +32,12 @@ from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
 from garmin_mcp import calendar_events
+from garmin_mcp import activity_streams
+from garmin_mcp import physiology
+from garmin_mcp import fit_upload
+from garmin_mcp import coaching
+from garmin_mcp import runtime_tools
+from garmin_mcp.runtime import GarminClientProvider, GarminGateway
 
 
 def is_interactive_terminal() -> bool:
@@ -108,34 +115,24 @@ def _parse_tool_set(value):
     return {name.strip().lower() for name in value.split(",") if name.strip()}
 
 
-def _resolve_tool_filters():
-    """Read and validate tool filter environment variables at server startup."""
-    enabled_value = os.getenv("GARMIN_ENABLED_TOOLS")
-    enabled_tools = _parse_tool_set(enabled_value)
-    if enabled_value and enabled_value.strip() and not enabled_tools:
+def _resolve_tool_filters() -> tuple[set[str], set[str]]:
+    """Read tool filters at startup and reject a nonblank empty allowlist."""
+    raw_enabled = os.getenv("GARMIN_ENABLED_TOOLS")
+    enabled = _parse_tool_set(raw_enabled)
+    if raw_enabled and raw_enabled.strip() and not enabled:
         raise ValueError(
             "Invalid GARMIN_ENABLED_TOOLS: expected at least one tool name"
         )
-    disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
-    return enabled_tools, disabled_tools
+    return enabled, _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
 
-# Default per-call timeout (seconds). Garmin's API occasionally stalls a single
-# request indefinitely; without a bound the blocking client call hangs until the
-# MCP client's own timeout (~4 min) fires, reporting the whole server as
-# unresponsive (see issue #248). 90s sits comfortably above a normal slow call
-# yet well below that ceiling. Override with GARMIN_MCP_CALL_TIMEOUT; set 0 to
-# disable the bound entirely.
 _DEFAULT_CALL_TIMEOUT = 90.0
 
 
 def _resolve_call_timeout() -> float:
-    """Read GARMIN_MCP_CALL_TIMEOUT; fall back to the default on bad/absent input.
-
-    A value <= 0 disables the timeout (returns 0.0).
-    """
+    """Read the legacy outer call timeout; non-positive values disable it."""
     raw = os.getenv("GARMIN_MCP_CALL_TIMEOUT")
     if raw is None or not raw.strip():
         return _DEFAULT_CALL_TIMEOUT
@@ -152,22 +149,12 @@ def _resolve_call_timeout() -> float:
 
 
 class _GarminProxy:
-    """Wraps the Garmin client to bound call duration and clarify runtime errors.
+    """Wraps the Garmin client to translate known runtime exceptions into clear messages.
 
-    Two jobs:
-
-    1. Timeout: each client call runs on a daemon worker thread and is abandoned
-       if it does not return within the configured timeout (issue #248 — an
-       occasional Garmin request stalls forever and the blocking call would
-       otherwise hang the whole server until the MCP client gives up minutes
-       later). A stalled call raises a clear, retry-able error instead; the
-       abandoned daemon thread dies with the process and never blocks shutdown.
-       Such stalls are rare and transient, so a fresh thread per call is cheap
-       relative to the network round-trip it guards.
-
-    2. Error translation: token expiry or rate-limiting during a tool call would
-       otherwise surface a raw library traceback. Known Garmin exceptions become
-       user-friendly messages instead.
+    Without this, token expiry or rate-limiting during a tool call surfaces raw
+    library tracebacks to the MCP client. The proxy intercepts each attribute
+    access and, if the result is callable, wraps the call so that known Garmin
+    exceptions become user-friendly strings rather than server errors.
     """
 
     _MESSAGES = {
@@ -207,9 +194,6 @@ class _GarminProxy:
             if not self._timeout:
                 return _invoke(*args, **kwargs)
 
-            # Run on a daemon thread and join with a timeout. The worker's
-            # return value or exception is captured and replayed in the caller
-            # so translated Garmin errors propagate unchanged.
             outcome = {}
 
             def _worker():
@@ -227,9 +211,9 @@ class _GarminProxy:
                 raise TimeoutError(
                     f"Garmin request '{name}' did not return within "
                     f"{self._timeout:g}s and was abandoned. This is usually a "
-                    f"transient stall on Garmin's side — please try again. "
-                    f"(Adjust with GARMIN_MCP_CALL_TIMEOUT, or set it to 0 to "
-                    f"disable the limit.)"
+                    "transient stall on Garmin's side — please try again. "
+                    "(Adjust with GARMIN_MCP_CALL_TIMEOUT, or set it to 0 to "
+                    "disable the limit.)"
                 )
             if "error" in outcome:
                 raise outcome["error"]
@@ -239,17 +223,7 @@ class _GarminProxy:
 
 
 class _ThreadFilteredStream:
-    """Wraps a stream so only ``owner_thread``'s writes reach it.
-
-    Installed as ``sys.stdout`` before the background Garmin login thread
-    starts (issue #255): the login call may still emit stray progress
-    output, and since ``sys.stdout`` is a single process-wide object, an
-    unfiltered write from that thread would land in the middle of the
-    JSON-RPC messages the main thread writes once ``app.run()`` starts,
-    corrupting the stdio framing. Writes from any other thread are silently
-    discarded, matching the previous (single-threaded) behavior of
-    swallowing that output entirely.
-    """
+    """Allow writes only from the owner thread, preserving MCP stdio framing."""
 
     def __init__(self, real_stream, owner_thread):
         self._real_stream = real_stream
@@ -268,16 +242,7 @@ class _ThreadFilteredStream:
 
 
 class _PendingGarminClient:
-    """Stands in for the real Garmin client until a background login finishes.
-
-    Passed as the ``client`` argument to ``_GarminProxy``, so ``_GarminProxy``
-    itself needs no changes: every attribute it looks up on ``self._client``
-    comes through here first. Before login finishes, that lookup blocks (up
-    to ``timeout`` seconds, ``0``/``None`` disables the bound) instead of
-    returning immediately -- this is what lets ``main()`` call ``app.run()``
-    right away instead of waiting on Garmin login before the MCP handshake
-    can be answered (issue #255).
-    """
+    """Compatibility helper for callers using upstream's background-login gate."""
 
     def __init__(self, timeout):
         self._timeout = timeout
@@ -286,12 +251,10 @@ class _PendingGarminClient:
         self._login_error = None
 
     def start(self, login_fn):
-        """Run ``login_fn`` on a background daemon thread; store its outcome."""
-
         def _worker():
             try:
                 client = login_fn()
-            except BaseException as exc:  # noqa: BLE001 - stored, not raised here
+            except BaseException as exc:  # noqa: BLE001 - replayed on access
                 self._login_error = exc
             else:
                 if client is None:
@@ -299,18 +262,8 @@ class _PendingGarminClient:
                         "Garmin login failed. Run 'garmin-mcp-auth' to "
                         "authenticate, then restart the server."
                     )
-                    print(
-                        "Garmin Connect client failed to initialize (see "
-                        "errors above). Tool calls will fail until this is "
-                        "fixed; run 'garmin-mcp-auth' and restart the server.",
-                        file=sys.stderr,
-                    )
                 else:
                     self._client = client
-                    print(
-                        "Garmin Connect client initialized successfully.",
-                        file=sys.stderr,
-                    )
             finally:
                 self._ready.set()
 
@@ -345,6 +298,38 @@ def _parse_transport_config() -> tuple[str, str, int]:
     return transport, http_host, http_port
 
 
+def _parse_request_timeout_config() -> float:
+    """Read the positive timeout applied to authenticated Garmin API calls."""
+    raw = os.getenv("GARMIN_REQUEST_TIMEOUT_SECONDS", "15").strip()
+    try:
+        timeout = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_TIMEOUT_SECONDS {raw!r}; expected a positive number"
+        ) from exc
+    if timeout <= 0:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_TIMEOUT_SECONDS {raw!r}; expected a positive number"
+        )
+    return timeout
+
+
+def _parse_request_budget_config() -> int:
+    """Read the rolling one-minute remote request budget."""
+    raw = os.getenv("GARMIN_REQUEST_BUDGET_PER_MINUTE", "120").strip()
+    try:
+        budget = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_BUDGET_PER_MINUTE {raw!r}; expected a positive integer"
+        ) from exc
+    if budget <= 0:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_BUDGET_PER_MINUTE {raw!r}; expected a positive integer"
+        )
+    return budget
+
+
 class _ToolFilter:
     """Wraps a FastMCP app to conditionally register tools by function name.
 
@@ -366,7 +351,6 @@ class _ToolFilter:
         return name not in self._disabled
 
     def tool(self, *args, **kwargs):
-        decorator = self._app.tool(*args, **kwargs)
         # Prefer the explicit registered name if given (@app.tool(name="x")),
         # so the env-var filter matches what the user actually configures.
         explicit = kwargs.get("name") or (
@@ -377,6 +361,10 @@ class _ToolFilter:
             name = explicit or getattr(fn, "__name__", "")
             self._seen.add(name.lower())
             if self._allowed(name):
+                registration_kwargs = dict(kwargs)
+                if registration_kwargs.get("annotations") is None:
+                    registration_kwargs["annotations"] = _default_tool_annotations(name)
+                decorator = self._app.tool(*args, **registration_kwargs)
                 return decorator(fn)
             return fn  # skip registration; tool never reaches the LLM
 
@@ -390,6 +378,39 @@ class _ToolFilter:
     def __getattr__(self, item):
         return getattr(self._app, item)
 # ---------------------------------------------------------------------------
+
+
+def _default_tool_annotations(name: str) -> ToolAnnotations:
+    """Infer conservative MCP safety hints for centrally registered tools.
+
+    These annotations help clients present an appropriate confirmation UI; they
+    are not an authorization boundary. Unknown names are classified as writes.
+    """
+    lower = name.lower()
+    local_mutations = {"set_fit_download_dir"}
+    read_only = (
+        lower.startswith(
+            (
+                "get_",
+                "count_",
+                "search_",
+                "check_",
+                "analyze_",
+                "reslice_",
+                "polarization_",
+                "inspect_",
+            )
+        )
+        and lower != "download_activity_file"
+    ) or lower == "download_workout"
+    destructive = lower.startswith(("delete_", "remove_", "unschedule_"))
+    idempotent = read_only or lower.startswith(("set_", "update_"))
+    return ToolAnnotations(
+        readOnlyHint=read_only,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=lower not in local_mutations,
+    )
 
 
 def init_api(email, password):
@@ -417,21 +438,20 @@ def init_api(email, password):
         # with open(dir_path, "r") as token_file:
         #     tokenstore = token_file.read()
 
-        # Suppress stderr during token validation to hide noisy library
-        # warnings. stdout is deliberately NOT swapped here: by the time
-        # init_api() runs, sys.stdout is a _ThreadFilteredStream installed
-        # in main() before this call's background thread was started, which
-        # already discards any stray write from this thread on its own. A
-        # second swap here would instead risk swallowing real MCP protocol
-        # output written concurrently by the server's own thread (#255).
+        # Suppress stderr AND stdout during token validation.
+        # garminconnect may print progress dots (e.g. ".") to stdout; any write
+        # to stdout before the MCP server starts corrupts the JSON-RPC framing.
         old_stderr = sys.stderr
+        old_stdout = sys.stdout
         sys.stderr = io.StringIO()
+        sys.stdout = io.StringIO()
 
         try:
             garmin = Garmin(is_cn=is_cn)
             garmin.login(tokenstore)
         finally:
             sys.stderr = old_stderr
+            sys.stdout = old_stdout
 
     except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
@@ -458,10 +478,13 @@ def init_api(email, password):
             garmin = Garmin(
                 email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True
             )
-            # sys.stdout is a _ThreadFilteredStream (installed in main());
-            # any stray progress output from this call is already discarded
-            # without a local swap here (see the token-load path above).
-            result1, result2 = garmin.login()
+            # Suppress stdout so library progress dots don't corrupt MCP framing.
+            _saved_stdout = sys.stdout
+            sys.stdout = io.StringIO()
+            try:
+                result1, result2 = garmin.login()
+            finally:
+                sys.stdout = _saved_stdout
             if result1 == "needs_mfa":
                 mfa_code = get_mfa()
                 garmin.resume_login(result2, mfa_code)
@@ -545,13 +568,6 @@ def main():
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
 
-    # Garmin login (init_api) runs on a background thread below so it can't
-    # block the MCP handshake (issue #255). That thread may still emit
-    # stray writes to stdout; route sys.stdout so only this thread's writes
-    # reach the real stream, protecting the JSON-RPC framing this thread
-    # writes once app.run() starts.
-    sys.stdout = _ThreadFilteredStream(sys.stdout, threading.current_thread())
-
     # --- Transport configuration --------------------------------------------
     # By default the server speaks stdio (Claude Desktop, MCP Inspector, etc.).
     # Set GARMIN_MCP_TRANSPORT=streamable-http (or sse) to serve over HTTP.
@@ -561,19 +577,26 @@ def main():
     try:
         enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
+        request_timeout = _parse_request_timeout_config()
+        request_budget = _parse_request_budget_config()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
 
-    # Start Garmin login in the background so it never blocks the MCP
-    # handshake (issue #255). Tool calls block on it individually instead,
-    # through _GarminProxy -> _PendingGarminClient, once they're actually
-    # invoked. 90s comfortably covers a normal slow login while still
-    # failing well before a client's own initialize timeout would matter
-    # again on a later call.
-    pending_client = _PendingGarminClient(timeout=90.0)
-    pending_client.start(lambda: init_api(email, password))
-    garmin_client = _GarminProxy(pending_client)
+    # Configure a genuinely lazy client. Starting the MCP server and listing its
+    # tools performs no Garmin login; the provider initializes once on the first
+    # tool call that actually needs Garmin data.
+    provider = GarminClientProvider(
+        lambda: init_api(email, password),
+        token_path=tokenstore,
+        is_cn=is_cn,
+        request_timeout_seconds=request_timeout,
+    )
+    gateway = GarminGateway(provider, request_budget_per_minute=request_budget)
+
+    # Preserve the existing user-friendly runtime exception messages while the
+    # gateway adds caching, bounded GET retries, and write invalidation.
+    garmin_client = _GarminProxy(gateway)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)
@@ -592,6 +615,41 @@ def main():
     courses.configure(garmin_client)
     activity_analysis.configure(garmin_client)
     calendar_events.configure(garmin_client)
+    physiology.configure(garmin_client)
+
+    def resolve_zone_model(model_id: str):
+        store = physiology.get_store()
+        return store.get_zone_model(model_id) if store is not None else None
+
+    def persist_activity_analysis(payload):
+        """Best-effort bridge from provider-neutral analytics to optional SQLite."""
+        store = physiology.get_store()
+        if store is None:
+            return None
+        athlete_id = store.ensure_athlete("garmin", "local")
+        row, created = store.put_analysis_result(
+            athlete_id=athlete_id,
+            analysis_type=str(payload["analysis_type"]),
+            activity_id=payload.get("activity_id"),
+            result=payload["result"],
+            algorithm_version=str(payload["algorithm_version"]),
+            input_hash=str(payload["input_hash"]),
+        )
+        return {"id": row["id"], "created": created}
+
+    activity_streams.configure(
+        garmin_client,
+        model_resolver=resolve_zone_model,
+        analysis_sink=persist_activity_analysis,
+    )
+    fit_upload.configure(garmin_client)
+    coaching.configure(garmin_client)
+    runtime_tools.configure(
+        provider,
+        gateway,
+        token_path=tokenstore,
+        is_cn=is_cn,
+    )
 
     # Create the MCP app, wrapped so the env-var filter can drop tools.
     # host/port only matter for the HTTP transports; stdio ignores them.
@@ -619,6 +677,11 @@ def main():
     app = courses.register_tools(app)
     app = activity_analysis.register_tools(app)
     app = calendar_events.register_tools(app)
+    app = activity_streams.register_tools(app)
+    app = physiology.register_tools(app)
+    app = fit_upload.register_tools(app)
+    app = coaching.register_tools(app)
+    app = runtime_tools.register_tools(app)
 
     # Register resources (workout templates)
     app = workout_templates.register_resources(app)

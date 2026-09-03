@@ -23,3 +23,7 @@ playground/*
 scratch/*
 tests/fixtures/captured/*
 !tests/fixtures/captured/poc_walk_run.json
+
+# Opt-in local physiology database (sensitive health data)
+physiology.sqlite3
+physiology.sqlite3-*

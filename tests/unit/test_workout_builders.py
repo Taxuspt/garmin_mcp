@@ -8,6 +8,7 @@ from garmin_mcp.workout_builders import (
     build_z2_walk_json,
     build_strength_json,
     build_run_json,
+    build_cycling_json,
 )
 
 SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "captured")
@@ -240,3 +241,57 @@ def test_strength_rejects_empty_category():
                 name="Bad",
                 exercises=[{"name": "Back Squat", "sets": 1, "reps": 1, "category": bad}],
             )
+
+
+def test_build_cycling_json_absolute_watts_use_power_zone_id_two():
+    result = build_cycling_json(
+        "2x8 threshold",
+        [
+            {"type": "warmup", "duration_seconds": 600},
+            {
+                "type": "repeat",
+                "repeats": 2,
+                "steps": [
+                    {
+                        "type": "interval",
+                        "duration_seconds": 480,
+                        "power_min": 240,
+                        "power_max": 260,
+                    },
+                    {"type": "recovery", "duration_seconds": 240},
+                ],
+            },
+        ],
+    )
+    repeat = result["workoutSegments"][0]["workoutSteps"][1]
+    assert repeat["type"] == "RepeatGroupDTO"
+    assert repeat["numberOfIterations"] == 2
+    work = repeat["workoutSteps"][0]
+    assert work["targetType"] == {
+        "workoutTargetTypeId": 2,
+        "workoutTargetTypeKey": "power.zone",
+    }
+    assert work["targetValueOne"] == 240.0
+    assert work["targetValueTwo"] == 260.0
+    assert "zoneNumber" not in work
+
+
+def test_build_cycling_json_rejects_mixed_target_families():
+    with pytest.raises(ValueError, match="only one"):
+        build_cycling_json(
+            "bad",
+            [{
+                "type": "interval",
+                "duration_seconds": 60,
+                "hr_zone": "Z2",
+                "power_zone": 2,
+            }],
+        )
+
+
+def test_build_cycling_json_requires_exactly_one_end_condition():
+    with pytest.raises(ValueError, match="exactly one"):
+        build_cycling_json(
+            "bad",
+            [{"type": "interval", "duration_seconds": 60, "distance_m": 500}],
+        )

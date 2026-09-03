@@ -11,7 +11,7 @@ This repository uses GitHub Actions for continuous integration and security chec
 - Pushes to `main` or `master`
 
 **What it does:**
-- Tests the codebase across Python versions 3.10, 3.11, 3.12, and 3.13
+- Tests the codebase across supported Python versions 3.12 and 3.13
 - Runs all integration and unit tests
 - Uses uv for fast dependency management
 - Provides a test summary
@@ -52,6 +52,25 @@ This repository uses GitHub Actions for continuous integration and security chec
 1. `dependency-check` - Security and dependency validation
 2. `code-quality` - Code syntax and import checks
 
+The dependency job runs `pip-audit` against the resolved project environment;
+known vulnerabilities fail the workflow rather than being reported as an
+informational package list.
+
+### 4. GHCR multi-architecture image (`ghcr.yml`)
+
+**Triggers:**
+- Version tags matching `v*`
+- Manual dispatch
+
+**What it does:**
+- Builds `linux/amd64` and `linux/arm64` from the checked-in Dockerfile
+- Publishes semver tags to `ghcr.io/<owner>/<repository>`
+- Attaches provenance and an SBOM
+
+The published server remains local/single-account by default. A remotely
+reachable transport still needs authentication, tenant isolation, and encrypted
+token storage before it should be exposed beyond a trusted network.
+
 ## Running Tests Locally
 
 To run the same tests that CI runs:
@@ -70,6 +89,22 @@ uv lock --check
 ## Skipped Tests
 
 The workflows skip end-to-end (e2e) tests because they require valid Garmin credentials. E2E tests are located in `tests/e2e/` and should be run manually with proper authentication.
+
+Real-account suites are separated by effect:
+
+```bash
+# Read-only account contracts
+uv run pytest -m "e2e and live_read"
+
+# Mutating contracts; these create dedicated test objects and clean in finally
+uv run pytest -m "e2e and live_write"
+
+# Explicit de-identified GET fixture refresh jobs
+uv run pytest -m "e2e and fixture_refresh"
+```
+
+Do not combine live writes with ordinary CI. International and China-region
+live matrices should use separate credentials and reports.
 
 ## Badge Status
 

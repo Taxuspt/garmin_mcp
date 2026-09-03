@@ -29,6 +29,39 @@ _HEART_RATE_ZONE_METHODS = {
     "BPM": "CUSTOM_BPM",
 }
 
+_HEART_RATE_READBACK_FIELDS = (
+    "maxHeartRateUsed",
+    "restingHeartRateUsed",
+    "restingHrAutoUpdateUsed",
+    "lactateThresholdHeartRateUsed",
+    "trainingMethod",
+    "zone1Floor",
+    "zone2Floor",
+    "zone3Floor",
+    "zone4Floor",
+    "zone5Floor",
+)
+
+
+class HeartRateZoneReadbackMismatch(RuntimeError):
+    """Garmin returned a zone profile that differs from the committed payload."""
+
+    def __init__(
+        self,
+        *,
+        target: Dict[str, Any],
+        confirmed: Dict[str, Any],
+        mismatches: Dict[str, Dict[str, Any]],
+    ) -> None:
+        fields = ", ".join(sorted(mismatches))
+        super().__init__(
+            "Garmin heart-rate-zone read-back did not match the committed "
+            f"payload for: {fields}"
+        )
+        self.target = target
+        self.confirmed = confirmed
+        self.mismatches = mismatches
+
 
 def _normalize_hr_zone_sport(sport: str) -> str:
     """Convert a caller-friendly sport name to Garmin's uppercase sport key."""
@@ -103,6 +136,117 @@ def _get_heart_rate_zone_configs() -> List[Dict[str, Any]]:
     if not isinstance(zones, list):
         raise ValueError("Garmin returned an unexpected heart-rate-zone response")
     return zones
+
+
+def prepare_heart_rate_zone_update(
+    *,
+    sport: str,
+    max_hr: Optional[int] = None,
+    resting_hr: Optional[int] = None,
+    lactate_threshold_hr: Optional[int] = None,
+    calculation_method: Optional[str] = None,
+    zone_boundaries: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """Build and validate a read-modify-write payload without mutating Garmin."""
+    supplied = (
+        max_hr,
+        resting_hr,
+        lactate_threshold_hr,
+        calculation_method,
+        zone_boundaries,
+    )
+    if all(value is None for value in supplied):
+        raise ValueError(
+            "No fields to update — supply at least one of max_hr, resting_hr, "
+            "lactate_threshold_hr, calculation_method, or zone_boundaries."
+        )
+
+    sport_key = _normalize_hr_zone_sport(sport)
+    zones = _get_heart_rate_zone_configs()
+    saved = next((zone for zone in zones if zone.get("sport") == sport_key), None)
+    inherited_from = None
+    if saved is None:
+        saved = next((zone for zone in zones if zone.get("sport") == "DEFAULT"), None)
+        if saved is None:
+            raise ValueError(
+                f"Could not read current heart-rate zones for {sport_key}, and no "
+                "DEFAULT profile is available to inherit — cannot apply update."
+            )
+        inherited_from = "DEFAULT"
+
+    current = dict(saved)
+    payload = dict(saved)
+    payload["sport"] = sport_key
+    if max_hr is not None:
+        payload["maxHeartRateUsed"] = max_hr
+    if resting_hr is not None:
+        payload["restingHeartRateUsed"] = resting_hr
+        payload["restingHrAutoUpdateUsed"] = False
+    if lactate_threshold_hr is not None:
+        payload["lactateThresholdHeartRateUsed"] = lactate_threshold_hr
+
+    normalized_method = None
+    if calculation_method is not None:
+        normalized_method = _normalize_hr_zone_method(calculation_method)
+        payload["trainingMethod"] = (
+            "HR_MAX" if normalized_method == "CUSTOM_BPM" else normalized_method
+        )
+    if zone_boundaries is not None:
+        if len(zone_boundaries) != 5:
+            raise ValueError("zone_boundaries must contain exactly five BPM floors")
+        for zone, floor in enumerate(zone_boundaries, start=1):
+            payload[f"zone{zone}Floor"] = floor
+
+    if zone_boundaries is not None and normalized_method != "CUSTOM_BPM":
+        raise ValueError("manual zone_boundaries require calculation_method='custom_bpm'")
+    if normalized_method == "CUSTOM_BPM" and zone_boundaries is None:
+        raise ValueError("calculation_method='custom_bpm' requires all five zone_boundaries")
+
+    payload["changeState"] = "CHANGED"
+    _validate_heart_rate_zone_config(payload)
+    return {
+        "sport": sport_key,
+        "current": current,
+        "payload": payload,
+        "inherited_from": inherited_from,
+    }
+
+
+def apply_heart_rate_zone_update(prepared: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply a payload created by :func:`prepare_heart_rate_zone_update` and read it back."""
+    sport_key = prepared.get("sport")
+    payload = prepared.get("payload")
+    if not isinstance(sport_key, str) or not isinstance(payload, dict):
+        raise ValueError("prepared update must contain sport and payload")
+    if payload.get("sport") != sport_key:
+        raise ValueError("prepared payload sport does not match the requested sport")
+    _validate_heart_rate_zone_config(payload)
+    garmin_client.client.request(
+        "PUT",
+        "connectapi",
+        _HEART_RATE_ZONES_URL,
+        json=[payload],
+        api=True,
+    )
+    confirmed_zones = _get_heart_rate_zone_configs()
+    confirmed = next((zone for zone in confirmed_zones if zone.get("sport") == sport_key), None)
+    if confirmed is None:
+        raise RuntimeError(
+            f"Garmin accepted the update request, but no {sport_key} heart-rate "
+            "zone profile was present on read-back."
+        )
+    mismatches = {
+        field: {"target": payload.get(field), "confirmed": confirmed.get(field)}
+        for field in _HEART_RATE_READBACK_FIELDS
+        if payload.get(field) != confirmed.get(field)
+    }
+    if mismatches:
+        raise HeartRateZoneReadbackMismatch(
+            target=payload,
+            confirmed=confirmed,
+            mismatches=mismatches,
+        )
+    return confirmed
 
 
 def configure(client):
@@ -189,6 +333,7 @@ def register_tools(app):
         lactate_threshold_hr: Optional[int] = None,
         calculation_method: Optional[str] = None,
         zone_boundaries: Optional[List[int]] = None,
+        dry_run: bool = False,
     ) -> str:
         """Set an account-level heart-rate training-zone configuration for one sport.
 
@@ -223,6 +368,8 @@ def register_tools(app):
             calculation_method: max_hr, hrr/karvonen, lthr, or custom_bpm.
             zone_boundaries: Five strictly increasing BPM floors [Z1, Z2, Z3,
                              Z4, Z5]. Every floor must be at most max_hr.
+            dry_run: When true, validate and return current/target payloads without
+                     writing Garmin. Defaults to false for backward compatibility.
         """
         supplied = (
             max_hr,
@@ -238,75 +385,26 @@ def register_tools(app):
             )
 
         try:
-            sport_key = _normalize_hr_zone_sport(sport)
-            zones = _get_heart_rate_zone_configs()
-            current = next((zone for zone in zones if zone.get("sport") == sport_key), None)
-
-            if current is None:
-                default = next((zone for zone in zones if zone.get("sport") == "DEFAULT"), None)
-                if default is None:
-                    return (
-                        f"Could not read current heart-rate zones for {sport_key}, and no "
-                        "DEFAULT profile is available to inherit — cannot apply update."
-                    )
-                current = dict(default)
-                current["sport"] = sport_key
-            else:
-                current = dict(current)
-
-            if max_hr is not None:
-                current["maxHeartRateUsed"] = max_hr
-            if resting_hr is not None:
-                current["restingHeartRateUsed"] = resting_hr
-                current["restingHrAutoUpdateUsed"] = False
-            if lactate_threshold_hr is not None:
-                current["lactateThresholdHeartRateUsed"] = lactate_threshold_hr
-            normalized_method = None
-            if calculation_method is not None:
-                normalized_method = _normalize_hr_zone_method(calculation_method)
-                current["trainingMethod"] = (
-                    "HR_MAX" if normalized_method == "CUSTOM_BPM" else normalized_method
-                )
-            if zone_boundaries is not None:
-                if len(zone_boundaries) != 5:
-                    raise ValueError("zone_boundaries must contain exactly five BPM floors")
-                for zone, floor in enumerate(zone_boundaries, start=1):
-                    current[f"zone{zone}Floor"] = floor
-
-            if zone_boundaries is not None and normalized_method != "CUSTOM_BPM":
-                raise ValueError(
-                    "manual zone_boundaries require calculation_method='custom_bpm'"
-                )
-            if normalized_method == "CUSTOM_BPM" and zone_boundaries is None:
-                raise ValueError(
-                    "calculation_method='custom_bpm' requires all five zone_boundaries"
-                )
-
-            current["changeState"] = "CHANGED"
-            _validate_heart_rate_zone_config(current)
-
-            # Garmin's endpoint accepts an array of changed sport profiles and
-            # responds with 204 No Content. Client.request is used rather than
-            # put(..., api=True), which would try to JSON-decode that empty body.
-            garmin_client.client.request(
-                "PUT",
-                "connectapi",
-                _HEART_RATE_ZONES_URL,
-                json=[current],
-                api=True,
+            prepared = prepare_heart_rate_zone_update(
+                sport=sport,
+                max_hr=max_hr,
+                resting_hr=resting_hr,
+                lactate_threshold_hr=lactate_threshold_hr,
+                calculation_method=calculation_method,
+                zone_boundaries=zone_boundaries,
             )
-
-            confirmed_zones = _get_heart_rate_zone_configs()
-            confirmed = next(
-                (zone for zone in confirmed_zones if zone.get("sport") == sport_key),
-                None,
-            )
-            if confirmed is None:
-                return (
-                    f"Garmin accepted the update request, but no {sport_key} heart-rate "
-                    "zone profile was present on read-back."
+            if dry_run:
+                return json.dumps(
+                    {
+                        "dry_run": True,
+                        "sport": prepared["sport"],
+                        "current": prepared["current"],
+                        "payload": [prepared["payload"]],
+                        "write_performed": False,
+                    },
+                    indent=2,
                 )
-            return json.dumps(confirmed, indent=2)
+            return json.dumps(apply_heart_rate_zone_update(prepared), indent=2)
         except ValueError as e:
             return f"Invalid heart-rate zone settings: {str(e)}"
         except Exception as e:

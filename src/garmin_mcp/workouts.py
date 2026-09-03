@@ -4,6 +4,7 @@ Workout-related functions for Garmin Connect MCP Server
 import json
 import re
 import datetime
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Union
 
 _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
@@ -15,6 +16,60 @@ def _validate_date(value: str, field: str = "date") -> str:
 
 # The garmin_client will be set by the main file
 garmin_client = None
+
+
+def _schedule_response_id(result: Any) -> Optional[str]:
+    """Extract a calendar-entry ID from JSON or a requests-like response."""
+    if not isinstance(result, (Mapping, list, tuple)):
+        json_loader = getattr(result, "json", None)
+        if callable(json_loader):
+            try:
+                decoded = json_loader()
+            except Exception:
+                return None
+            if isinstance(decoded, (Mapping, list, tuple)):
+                return _schedule_response_id(decoded)
+        return None
+    if isinstance(result, Mapping):
+        for key in (
+            "workoutScheduleId",
+            "scheduledWorkoutId",
+            "scheduled_workout_id",
+            "scheduleId",
+        ):
+            if result.get(key) is not None:
+                return str(result[key])
+        if result.get("id") is not None and not any(
+            key in result for key in ("workoutId", "workout_id")
+        ):
+            return str(result["id"])
+        values = result.values()
+    else:
+        values = result
+    for value in values:
+        found = _schedule_response_id(value)
+        if found is not None:
+            return found
+    return None
+
+
+def _is_missing_schedule_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "404" in message or "no workout found for workout schedule" in message
+
+
+def _scheduled_workout_absent(scheduled_workout_id: Any) -> Optional[bool]:
+    """Return authoritative absence when the installed client supports GET-by-ID."""
+    getter = getattr(garmin_client, "get_scheduled_workout_by_id", None)
+    if not callable(getter):
+        return None
+    try:
+        getter(scheduled_workout_id)
+    except Exception as exc:
+        if _is_missing_schedule_error(exc):
+            return True
+        return None
+    return False
 
 END_CONDITION_TYPE_IDS = {
     "lap.button": 1,
@@ -41,10 +96,11 @@ KNOWN_TARGET_TYPE_IDS = {
     1: frozenset(["no.target"]),
     2: frozenset(["power.zone"]),
     4: frozenset(["heart.rate.zone"]),
-    # ID 6 is sport-context-dependent:
-    #   - running / swimming: "pace.zone"
-    #   - cycling: "power.between" (absolute watt range, uses targetValueOne/targetValueTwo)
-    6: frozenset(["pace.zone", "power.between"]),
+    # Garmin treats the numeric ID as authoritative.  ID 6 is pace/speed even
+    # when callers label it ``power.between``; on-device that mistake renders a
+    # watt value as metres/second.  ID 2 carries both named FTP zones (via
+    # zoneNumber) and custom watt ranges (via targetValueOne/Two).
+    6: frozenset(["pace.zone"]),
 }
 
 # Reverse map: workoutTargetTypeKey -> workoutTargetTypeId (each key maps to exactly one ID).
@@ -286,6 +342,14 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
     if isinstance(target_type, dict):
         target_key = target_type.get('workoutTargetTypeKey')
         target_id = target_type.get('workoutTargetTypeId')
+
+        if target_key == "power.between":
+            raise ValueError(
+                f"{path}.{target_field} uses unsupported 'power.between'; "
+                "Garmin stores target ID 6 as pace/speed. Use target ID 2 / "
+                "'power.zone' with step-level targetValueOne and "
+                "targetValueTwo for an absolute watt range"
+            )
 
         if target_id is not None:
             try:
@@ -825,17 +889,17 @@ def register_tools(app):
         Garmin treats workoutTargetTypeId as authoritative, so mismatches are rejected
         before upload.  Known mappings:
         - workoutTargetTypeId 1  -> "no.target"
-        - workoutTargetTypeId 2  -> "power.zone"  (cycling power zone 1-7, use zoneNumber)
+        - workoutTargetTypeId 2  -> "power.zone"  (zoneNumber 1-7, or custom watt bounds)
         - workoutTargetTypeId 4  -> "heart.rate.zone"
-        - workoutTargetTypeId 6  -> "pace.zone" (running/swim) OR "power.between" (cycling)
+        - workoutTargetTypeId 6  -> "pace.zone" (running/swim/cycling speed target)
 
         IMPORTANT: For cycling power targets use the correct target type:
         - Power zone (zone 1-7 based on FTP %): use workoutTargetTypeId 2, key "power.zone",
           and "zoneNumber" (1-7).
-        - Absolute watt range (e.g. 200-250 W): use workoutTargetTypeId 6, key "power.between",
+        - Absolute watt range (e.g. 200-250 W): use workoutTargetTypeId 2, key "power.zone",
           and "targetValueOne" (low watts) / "targetValueTwo" (high watts).
-        Using workoutTargetTypeId 2 with key "power.between" is a silent Garmin bug: the
-        workout uploads but Garmin stores it as "power.zone" and the intent is lost.
+        Never use workoutTargetTypeId 6 / "power.between": ID 6 is a pace target and
+        Garmin will display the watt bounds as nonsensical speed values.
 
         Use {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"} with
         targetValueOne/targetValueTwo for custom heart-rate ranges.
@@ -950,7 +1014,7 @@ def register_tools(app):
         "workoutTargetTypeKey": "heart.rate.zone"} with targetValueOne/targetValueTwo.
         Target values belong on the workout step, alongside targetType, not inside it.
         For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
-        For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
+        For cycling absolute watt range targets, also use workoutTargetTypeId 2, key "power.zone",
         with targetValueOne (low watts) and targetValueTwo (high watts).
         Target type IDs and keys must match Garmin's canonical mapping.
 
@@ -1196,12 +1260,16 @@ def register_tools(app):
             response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
 
             if response.status_code == 200:
-                return json.dumps({
+                entry = {
                     "status": "success",
                     "workout_id": workout_id,
                     "scheduled_date": calendar_date,
                     "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
-                }, indent=2)
+                }
+                scheduled_id = _schedule_response_id(response)
+                if scheduled_id is not None:
+                    entry["scheduled_workout_id"] = scheduled_id
+                return json.dumps(entry, indent=2)
             else:
                 return json.dumps({
                     "status": "failed",
@@ -1318,6 +1386,9 @@ def register_tools(app):
                         "scheduled_date": calendar_date,
                         "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
                     }
+                    scheduled_id = _schedule_response_id(response)
+                    if scheduled_id is not None:
+                        entry["scheduled_workout_id"] = scheduled_id
                     if workout_name:
                         entry["workout_name"] = workout_name
                     results.append(entry)
@@ -1370,12 +1441,31 @@ def register_tools(app):
             # signal failure rather than checking a status code — same pattern
             # as delete_workout.
             garmin_client.unschedule_workout(scheduled_workout_id)
-            return json.dumps({
+            absent = _scheduled_workout_absent(scheduled_workout_id)
+            result = {
                 "status": "success",
                 "scheduled_workout_id": scheduled_workout_id,
                 "message": f"Scheduled workout {scheduled_workout_id} removed from calendar"
-            }, indent=2)
+            }
+            if absent is not None:
+                result["read_back_absent"] = absent
+            if absent is False:
+                result["warning"] = (
+                    "Garmin still returns this calendar entry; retry this exact "
+                    "idempotent unschedule before deleting its workout template."
+                )
+            return json.dumps(result, indent=2)
         except Exception as e:
+            if _is_missing_schedule_error(e):
+                return json.dumps({
+                    "status": "success",
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "idempotent": True,
+                    "read_back_absent": True,
+                    "message": (
+                        f"Scheduled workout {scheduled_workout_id} was already absent"
+                    ),
+                }, indent=2)
             return json.dumps({
                 "status": "failed",
                 "scheduled_workout_id": scheduled_workout_id,

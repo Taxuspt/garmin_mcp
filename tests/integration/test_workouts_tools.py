@@ -696,8 +696,7 @@ async def test_upload_workout_rejects_target_type_mismatch(app_with_workouts, mo
     )
 
     assert "targetType mismatch" in result[0][0].text
-    # ID 6 is valid for 'pace.zone' (running) and 'power.between' (cycling), not 'heart.rate'
-    assert "workoutTargetTypeId 6 is one of" in result[0][0].text
+    assert "workoutTargetTypeId 6 is 'pace.zone'" in result[0][0].text
     assert "not 'heart.rate'" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
@@ -856,8 +855,7 @@ async def test_upload_workout_rejects_secondary_target_type_mismatch(app_with_wo
     )
 
     assert "secondaryTargetType mismatch" in result[0][0].text
-    # ID 6 is valid for 'pace.zone' (running) and 'power.between' (cycling), not 'heart.rate'
-    assert "workoutTargetTypeId 6 is one of" in result[0][0].text
+    assert "workoutTargetTypeId 6 is 'pace.zone'" in result[0][0].text
     assert "not 'heart.rate'" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
@@ -939,17 +937,13 @@ def _cycling_workout_with_steps(steps, name="Cycling Validation Workout"):
 
 
 @pytest.mark.asyncio
-async def test_upload_cycling_workout_power_between_accepted(app_with_workouts, mock_garmin_client):
-    """Cycling absolute watt range (power.between) uses workoutTargetTypeId 6.
-
-    Fix for Issue #155: power.between must use ID 6, not ID 2.
-    ID 6 is valid for both 'pace.zone' (running) and 'power.between' (cycling).
-    """
+async def test_upload_cycling_workout_absolute_watts_accepted(app_with_workouts, mock_garmin_client):
+    """Cycling absolute watts use ID 2/power.zone with custom bounds."""
     import json as json_module
 
     mock_garmin_client.upload_workout.return_value = {
         "workoutId": 200001,
-        "workoutName": "Cycling Power Between Test",
+        "workoutName": "Cycling Absolute Power Test",
     }
     workout_data = _cycling_workout_with_steps(
         [{
@@ -958,11 +952,11 @@ async def test_upload_cycling_workout_power_between_accepted(app_with_workouts, 
             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
             "endConditionValue": 600.0,
-            "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "power.between"},
+            "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
             "targetValueOne": 200,
             "targetValueTwo": 250,
         }],
-        name="Cycling Power Between Test",
+        name="Cycling Absolute Power Test",
     )
 
     result = await app_with_workouts.call_tool(
@@ -976,8 +970,8 @@ async def test_upload_cycling_workout_power_between_accepted(app_with_workouts, 
 
     called_data = mock_garmin_client.upload_workout.call_args[0][0]
     step = called_data["workoutSegments"][0]["workoutSteps"][0]
-    assert step["targetType"]["workoutTargetTypeId"] == 6
-    assert step["targetType"]["workoutTargetTypeKey"] == "power.between"
+    assert step["targetType"]["workoutTargetTypeId"] == 2
+    assert step["targetType"]["workoutTargetTypeKey"] == "power.zone"
     assert step["targetValueOne"] == 200
     assert step["targetValueTwo"] == 250
 
@@ -1048,9 +1042,8 @@ async def test_upload_cycling_workout_wrong_id_for_power_between_rejected(
         {"workout_data": workout_data}
     )
 
-    assert "targetType mismatch" in result[0][0].text
-    # ID 2 maps to 'power.zone' only (single key) so the error names it directly
-    assert "workoutTargetTypeId 2 is 'power.zone', not 'power.between'" in result[0][0].text
+    assert "unsupported 'power.between'" in result[0][0].text
+    assert "target ID 2 / 'power.zone'" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
 
@@ -1060,7 +1053,7 @@ async def test_upload_cycling_workout_wrong_id_for_power_zone_rejected(
 ):
     """Using workoutTargetTypeId 6 with key 'power.zone' is a mismatch.
 
-    ID 6 is valid for 'pace.zone' and 'power.between' only, not 'power.zone'.
+    ID 6 is pace.zone only, not power.zone.
     """
     workout_data = _cycling_workout_with_steps(
         [{
@@ -1081,17 +1074,16 @@ async def test_upload_cycling_workout_wrong_id_for_power_zone_rejected(
     )
 
     assert "targetType mismatch" in result[0][0].text
-    # ID 6 has two valid keys (pace.zone, power.between) so the error lists both
-    assert "workoutTargetTypeId 6 is one of" in result[0][0].text
+    assert "workoutTargetTypeId 6 is 'pace.zone'" in result[0][0].text
     assert "not 'power.zone'" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_upload_cycling_workout_power_between_in_repeat_group(
+async def test_upload_cycling_workout_absolute_watts_in_repeat_group(
     app_with_workouts, mock_garmin_client
 ):
-    """power.between targets inside RepeatGroupDTO steps are accepted."""
+    """ID 2 custom watt targets inside RepeatGroupDTO steps are accepted."""
     import json as json_module
 
     mock_garmin_client.upload_workout.return_value = {
@@ -1121,7 +1113,7 @@ async def test_upload_cycling_workout_power_between_in_repeat_group(
                         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                         "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
                         "endConditionValue": 300.0,
-                        "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "power.between"},
+                        "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
                         "targetValueOne": 250,
                         "targetValueTwo": 300,
                     },
@@ -1157,8 +1149,8 @@ async def test_upload_cycling_workout_power_between_in_repeat_group(
 
     called_data = mock_garmin_client.upload_workout.call_args[0][0]
     interval_step = called_data["workoutSegments"][0]["workoutSteps"][1]["workoutSteps"][0]
-    assert interval_step["targetType"]["workoutTargetTypeId"] == 6
-    assert interval_step["targetType"]["workoutTargetTypeKey"] == "power.between"
+    assert interval_step["targetType"]["workoutTargetTypeId"] == 2
+    assert interval_step["targetType"]["workoutTargetTypeKey"] == "power.zone"
     assert interval_step["targetValueOne"] == 250
     assert interval_step["targetValueTwo"] == 300
 
@@ -2211,6 +2203,7 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
 
     schedule_response = MagicMock()
     schedule_response.status_code = 200
+    schedule_response.json.return_value = {"workoutScheduleId": 7654321}
     mock_garmin_client.client.post.return_value = schedule_response
 
     inline_data = {"workoutName": "Easy Run", "sportType": {"sportTypeId": 1, "sportTypeKey": "running"}}
@@ -2229,6 +2222,7 @@ async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_cl
     assert entry["workout_id"] == 999001
     assert entry["scheduled_date"] == "2024-02-01"
     assert entry["workout_name"] == "Easy Run"
+    assert entry["scheduled_workout_id"] == "7654321"
     mock_garmin_client.upload_workout.assert_called_once_with(inline_data)
     mock_garmin_client.client.post.assert_called_once_with(
         "connectapi", "workout-service/schedule/999001", json={"date": "2024-02-01"}
@@ -2564,6 +2558,9 @@ async def test_unschedule_workout_success(app_with_workouts, mock_garmin_client)
     # The SDK's unschedule_workout returns {} (a dict), not a Response;
     # success is signalled by the absence of an exception.
     mock_garmin_client.unschedule_workout.return_value = {}
+    mock_garmin_client.get_scheduled_workout_by_id.side_effect = Exception(
+        "API Error 404 - No workout found for workout schedule"
+    )
 
     scheduled_workout_id = 1677275789
     result = await app_with_workouts.call_tool(
@@ -2574,6 +2571,7 @@ async def test_unschedule_workout_success(app_with_workouts, mock_garmin_client)
     assert result is not None
     result_data = json_module.loads(result[0][0].text)
     assert result_data["status"] == "success"
+    assert result_data["read_back_absent"] is True
     assert result_data["scheduled_workout_id"] == scheduled_workout_id
     assert "removed from calendar" in result_data["message"]
     mock_garmin_client.unschedule_workout.assert_called_once_with(scheduled_workout_id)
