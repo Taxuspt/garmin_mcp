@@ -8,6 +8,7 @@ import base64
 
 import requests
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
@@ -29,6 +30,12 @@ from garmin_mcp import nutrition
 from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
+from garmin_mcp import activity_streams
+from garmin_mcp import physiology
+from garmin_mcp import fit_upload
+from garmin_mcp import coaching
+from garmin_mcp import runtime_tools
+from garmin_mcp.runtime import GarminClientProvider, GarminGateway
 
 
 def is_interactive_terminal() -> bool:
@@ -173,6 +180,38 @@ def _parse_transport_config() -> tuple[str, str, int]:
     return transport, http_host, http_port
 
 
+def _parse_request_timeout_config() -> float:
+    """Read the positive timeout applied to authenticated Garmin API calls."""
+    raw = os.getenv("GARMIN_REQUEST_TIMEOUT_SECONDS", "15").strip()
+    try:
+        timeout = float(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_TIMEOUT_SECONDS {raw!r}; expected a positive number"
+        ) from exc
+    if timeout <= 0:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_TIMEOUT_SECONDS {raw!r}; expected a positive number"
+        )
+    return timeout
+
+
+def _parse_request_budget_config() -> int:
+    """Read the rolling one-minute remote request budget."""
+    raw = os.getenv("GARMIN_REQUEST_BUDGET_PER_MINUTE", "120").strip()
+    try:
+        budget = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_BUDGET_PER_MINUTE {raw!r}; expected a positive integer"
+        ) from exc
+    if budget <= 0:
+        raise ValueError(
+            f"Invalid GARMIN_REQUEST_BUDGET_PER_MINUTE {raw!r}; expected a positive integer"
+        )
+    return budget
+
+
 class _ToolFilter:
     """Wraps a FastMCP app to conditionally register tools by function name.
 
@@ -194,7 +233,6 @@ class _ToolFilter:
         return name not in self._disabled
 
     def tool(self, *args, **kwargs):
-        decorator = self._app.tool(*args, **kwargs)
         # Prefer the explicit registered name if given (@app.tool(name="x")),
         # so the env-var filter matches what the user actually configures.
         explicit = kwargs.get("name") or (
@@ -205,6 +243,10 @@ class _ToolFilter:
             name = explicit or getattr(fn, "__name__", "")
             self._seen.add(name.lower())
             if self._allowed(name):
+                registration_kwargs = dict(kwargs)
+                if registration_kwargs.get("annotations") is None:
+                    registration_kwargs["annotations"] = _default_tool_annotations(name)
+                decorator = self._app.tool(*args, **registration_kwargs)
                 return decorator(fn)
             return fn  # skip registration; tool never reaches the LLM
 
@@ -218,6 +260,39 @@ class _ToolFilter:
     def __getattr__(self, item):
         return getattr(self._app, item)
 # ---------------------------------------------------------------------------
+
+
+def _default_tool_annotations(name: str) -> ToolAnnotations:
+    """Infer conservative MCP safety hints for centrally registered tools.
+
+    These annotations help clients present an appropriate confirmation UI; they
+    are not an authorization boundary. Unknown names are classified as writes.
+    """
+    lower = name.lower()
+    local_mutations = {"set_fit_download_dir"}
+    read_only = (
+        lower.startswith(
+            (
+                "get_",
+                "count_",
+                "search_",
+                "check_",
+                "analyze_",
+                "reslice_",
+                "polarization_",
+                "inspect_",
+            )
+        )
+        and lower != "download_activity_file"
+    ) or lower == "download_workout"
+    destructive = lower.startswith(("delete_", "remove_", "unschedule_"))
+    idempotent = read_only or lower.startswith(("set_", "update_"))
+    return ToolAnnotations(
+        readOnlyHint=read_only,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=lower not in local_mutations,
+    )
 
 
 def init_api(email, password):
@@ -383,20 +458,26 @@ def main():
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     try:
         transport, http_host, http_port = _parse_transport_config()
+        request_timeout = _parse_request_timeout_config()
+        request_budget = _parse_request_budget_config()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
 
-    # Initialize Garmin client
-    garmin_client = init_api(email, password)
-    if not garmin_client:
-        print("Failed to initialize Garmin Connect client. Exiting.", file=sys.stderr)
-        return
+    # Configure a genuinely lazy client. Starting the MCP server and listing its
+    # tools performs no Garmin login; the provider initializes once on the first
+    # tool call that actually needs Garmin data.
+    provider = GarminClientProvider(
+        lambda: init_api(email, password),
+        token_path=tokenstore,
+        is_cn=is_cn,
+        request_timeout_seconds=request_timeout,
+    )
+    gateway = GarminGateway(provider, request_budget_per_minute=request_budget)
 
-    print("Garmin Connect client initialized successfully.", file=sys.stderr)
-
-    # Wrap client so runtime auth/rate-limit errors surface as clear messages
-    garmin_client = _GarminProxy(garmin_client)
+    # Preserve the existing user-friendly runtime exception messages while the
+    # gateway adds caching, bounded GET retries, and write invalidation.
+    garmin_client = _GarminProxy(gateway)
 
     # Configure all modules with the Garmin client
     activity_management.configure(garmin_client)
@@ -414,6 +495,41 @@ def main():
     workout_builders.configure(garmin_client)
     courses.configure(garmin_client)
     activity_analysis.configure(garmin_client)
+    physiology.configure(garmin_client)
+
+    def resolve_zone_model(model_id: str):
+        store = physiology.get_store()
+        return store.get_zone_model(model_id) if store is not None else None
+
+    def persist_activity_analysis(payload):
+        """Best-effort bridge from provider-neutral analytics to optional SQLite."""
+        store = physiology.get_store()
+        if store is None:
+            return None
+        athlete_id = store.ensure_athlete("garmin", "local")
+        row, created = store.put_analysis_result(
+            athlete_id=athlete_id,
+            analysis_type=str(payload["analysis_type"]),
+            activity_id=payload.get("activity_id"),
+            result=payload["result"],
+            algorithm_version=str(payload["algorithm_version"]),
+            input_hash=str(payload["input_hash"]),
+        )
+        return {"id": row["id"], "created": created}
+
+    activity_streams.configure(
+        garmin_client,
+        model_resolver=resolve_zone_model,
+        analysis_sink=persist_activity_analysis,
+    )
+    fit_upload.configure(garmin_client)
+    coaching.configure(garmin_client)
+    runtime_tools.configure(
+        provider,
+        gateway,
+        token_path=tokenstore,
+        is_cn=is_cn,
+    )
 
     # Create the MCP app, wrapped so the env-var filter can drop tools.
     # host/port only matter for the HTTP transports; stdio ignores them.
@@ -440,6 +556,11 @@ def main():
     app = workout_builders.register_tools(app)
     app = courses.register_tools(app)
     app = activity_analysis.register_tools(app)
+    app = activity_streams.register_tools(app)
+    app = physiology.register_tools(app)
+    app = fit_upload.register_tools(app)
+    app = coaching.register_tools(app)
+    app = runtime_tools.register_tools(app)
 
     # Register resources (workout templates)
     app = workout_templates.register_resources(app)
