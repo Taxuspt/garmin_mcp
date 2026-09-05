@@ -89,6 +89,12 @@ def register_tools(app):
         Returns a summary of daily health and activity data including steps,
         calories, heart rate, stress, body battery, and sleep metrics.
 
+        Note: bmr_calories is Garmin's bmrKilocalories field -- per Garmin's
+        own documentation this is RMR (BMR plus sedentary-to-light movement),
+        not true basal metabolic rate. For the current date, all calorie and
+        duration fields are a partial-day accumulator (elapsed hours so far),
+        not a full-day total.
+
         Args:
             date: Date in YYYY-MM-DD format
         """
@@ -158,6 +164,89 @@ def register_tools(app):
             return json.dumps(summary, indent=2)
         except Exception as e:
             return f"Error retrieving stats: {str(e)}"
+
+    @app.tool()
+    async def get_stats_range(start_date: str, end_date: str) -> str:
+        """Get lightweight per-day calorie and step totals for a date range.
+
+        Returns total/active/resting calories and steps for each day between
+        start_date and end_date, inclusive, instead of the full get_stats
+        payload per day. Use this for multi-day analysis (e.g. comparing
+        measured intake/expenditure against Garmin's calorie model) instead
+        of calling get_stats once per day.
+
+        resting_calories is Garmin's bmrKilocalories field -- per Garmin's
+        own documentation this is RMR (BMR plus sedentary-to-light movement),
+        not true basal metabolic rate.
+
+        is_partial is true for the current date, whose accumulator only
+        covers elapsed hours so far -- treating it as a full day will
+        overstate a mean. Days with no device data (e.g. before the account
+        existed, or future dates within the range) return has_data: false
+        and null values rather than zeros, so a missing day never silently
+        enters an average as zero.
+
+        Maximum range: 28 days per call (Garmin's own limit for this endpoint).
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        MAX_DAYS = 28
+        try:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+        except ValueError as e:
+            return f"Invalid date format: {e}. Use YYYY-MM-DD."
+
+        days_requested = (end - start).days + 1
+        if days_requested < 1:
+            return "end_date must be on or after start_date."
+        if days_requested > MAX_DAYS:
+            return f"Date range too large ({days_requested} days). Maximum is {MAX_DAYS} days."
+
+        url = f"/usersummary-service/stats/daily/{start_date}/{end_date}"
+        try:
+            calories_resp = garmin_client.connectapi(url, params={"statsType": "CALORIES"})
+            steps_resp = garmin_client.connectapi(url, params={"statsType": "STEPS"})
+        except Exception as e:
+            return f"Error retrieving stats range: {str(e)}"
+
+        calories_by_date = {
+            entry.get("calendarDate"): entry.get("values") or {}
+            for entry in (calories_resp or {}).get("values") or []
+        }
+        steps_by_date = {
+            entry.get("calendarDate"): entry.get("values") or {}
+            for entry in (steps_resp or {}).get("values") or []
+        }
+
+        today = datetime.date.today().isoformat()
+        daily = []
+        current = start
+        while current <= end:
+            date_str = current.isoformat()
+            cal = calories_by_date.get(date_str)
+            steps = steps_by_date.get(date_str)
+            daily.append({
+                "date": date_str,
+                "total_calories": (cal or {}).get("totalCalories"),
+                "active_calories": (cal or {}).get("activeCalories"),
+                "resting_calories": (cal or {}).get("restingCalories"),
+                "steps": (steps or {}).get("totalSteps"),
+                "has_data": cal is not None or steps is not None,
+                "is_partial": date_str == today,
+            })
+            current += datetime.timedelta(days=1)
+
+        if not any(d["has_data"] for d in daily):
+            return f"No stats found between {start_date} and {end_date}."
+
+        return json.dumps({
+            "start_date": start_date,
+            "end_date": end_date,
+            "days": daily,
+        }, indent=2)
 
     @app.tool()
     async def get_user_summary(date: str) -> str:
