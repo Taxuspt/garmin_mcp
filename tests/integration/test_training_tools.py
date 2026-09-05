@@ -1136,6 +1136,100 @@ async def test_get_progress_summary_handles_null_stats(app_with_training, mock_g
 
 
 @pytest.mark.asyncio
+async def test_get_progress_summary_converts_calories_from_garmin_units(
+    app_with_training, mock_garmin_client
+):
+    """Garmin's fitnessstats endpoint stores "calories" pre-scaled by ~4.19
+    (verified against real activity kcal totals); the tool must undo that
+    scaling so callers get true kcal, not the raw Garmin figure.
+
+    Also covers count_of_activities: the raw field disagrees with the sum
+    of per-type counts, so the tool recomputes it instead of passing it
+    through; and the raw `date` field (which echoes today regardless of
+    the queried range) must not appear in curated output.
+    """
+    mock_garmin_client.get_progress_summary_between_dates.return_value = [
+        {
+            "date": "2024-06-01",  # today, per Garmin's behavior -- must be dropped
+            "countOfActivities": 1,  # disagrees with per-type counts below
+            "stats": {
+                "running": {
+                    "calories": {
+                        "count": 1,
+                        "min": 3703.9776799999995,
+                        "max": 3703.9776799999995,
+                        "avg": 3703.9776799999995,
+                        "sum": 3703.9776799999995,
+                    }
+                },
+                "fitness_equipment": {
+                    "calories": {
+                        "count": 2,
+                        "min": 276.54132,
+                        "max": 1508.4071999999999,
+                        "avg": 892.47426,
+                        "sum": 1784.94852,
+                    }
+                },
+            },
+        }
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_progress_summary_between_dates",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15", "metric": "calories"},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "date" not in data
+    assert data["count_of_activities"] == 3  # 1 running + 2 fitness_equipment
+
+    running = data["stats_by_activity_type"]["running"]
+    assert running["sum"] == pytest.approx(884.0, abs=0.01)
+    assert running["min"] == pytest.approx(884.0, abs=0.01)
+    assert running["max"] == pytest.approx(884.0, abs=0.01)
+    assert running["avg"] == pytest.approx(884.0, abs=0.01)
+
+    equipment = data["stats_by_activity_type"]["fitness_equipment"]
+    assert equipment["min"] == pytest.approx(66.0, abs=0.01)
+    assert equipment["max"] == pytest.approx(360.0, abs=0.01)
+    assert equipment["sum"] == pytest.approx(426.0, abs=0.01)
+
+
+@pytest.mark.asyncio
+async def test_get_progress_summary_leaves_non_calorie_metrics_unconverted(
+    app_with_training, mock_garmin_client
+):
+    """The calorie unit fix must be scoped to metric="calories" only."""
+    mock_garmin_client.get_progress_summary_between_dates.return_value = [
+        {
+            "date": "2024-06-01",
+            "countOfActivities": 1,
+            "stats": {
+                "running": {
+                    "duration": {
+                        "count": 1,
+                        "min": 4450.452,
+                        "max": 4450.452,
+                        "avg": 4450.452,
+                        "sum": 4450.452,
+                    }
+                }
+            },
+        }
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_progress_summary_between_dates",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15", "metric": "duration"},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["stats_by_activity_type"]["running"]["sum"] == 4450.452
+    assert data["count_of_activities"] == 1
+
+
+@pytest.mark.asyncio
 async def test_get_acclimation_returns_heat_data(app_with_training, mock_garmin_client):
     """Test get_acclimation returns curated heat/altitude acclimation data."""
     mock_garmin_client.get_max_metrics.return_value = [
