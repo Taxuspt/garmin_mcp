@@ -26,6 +26,22 @@ def _as_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# The fitnessstats "calories" metric is stored pre-multiplied by this factor
+# (verified empirically: activity kcal totals from get_activity/get_stats
+# times exactly 4.19 reproduce the raw sum/avg/min/max here). It doesn't match
+# either standard kJ/kcal constant (4.184 thermochemical, 4.1868 IT), so this
+# is a Garmin-side unit quirk specific to this endpoint's "calories" field,
+# not a general kJ conversion.
+_PROGRESS_CALORIES_FACTOR = 4.19
+
+
+def _convert_progress_metric(metric: str, value: Optional[float]) -> Optional[float]:
+    """Convert a raw progress-summary stat value to its documented unit."""
+    if value is None or metric != "calories":
+        return value
+    return value / _PROGRESS_CALORIES_FACTOR
+
+
 def _extract_vo2_measurements(data: Any) -> Dict[str, float]:
     """Find all VO2 max values by sport in known Garmin response shapes."""
     if isinstance(data, list):
@@ -207,7 +223,11 @@ def register_tools(app):
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
-            metric: Metric to get progress for (e.g., "elevationGain", "duration", "distance", "movingDuration")
+            metric: Metric to get progress for (e.g., "elevationGain", "duration", "distance", "movingDuration", "calories")
+
+        Note: "calories" values are returned in kcal. Garmin's underlying
+        endpoint stores this metric pre-scaled by ~4.19; this tool undoes
+        that scaling before returning.
         """
         try:
             summary_data = garmin_client.get_progress_summary_between_dates(
@@ -223,13 +243,15 @@ def register_tools(app):
             else:
                 return f"Unexpected response format from API"
 
-            # Curate to essential fields only
+            # Curate to essential fields only. `date` and `countOfActivities`
+            # from the raw response are dropped/replaced below: Garmin's
+            # fitnessstats endpoint echoes today's date regardless of the
+            # queried range, and its countOfActivities matches neither the
+            # true activity count nor the per-type counts in `stats`.
             curated = {
                 "metric": metric,
                 "start_date": start_date,
                 "end_date": end_date,
-                "date": data.get("date"),
-                "count_of_activities": data.get("countOfActivities"),
                 "stats_by_activity_type": {},
             }
 
@@ -243,11 +265,15 @@ def register_tools(app):
                     if metric_data and metric_data.get("count", 0) > 0:
                         curated["stats_by_activity_type"][activity_type] = {
                             "count": metric_data.get("count"),
-                            "sum": metric_data.get("sum"),
-                            "avg": metric_data.get("avg"),
-                            "min": metric_data.get("min"),
-                            "max": metric_data.get("max"),
+                            "sum": _convert_progress_metric(metric, metric_data.get("sum")),
+                            "avg": _convert_progress_metric(metric, metric_data.get("avg")),
+                            "min": _convert_progress_metric(metric, metric_data.get("min")),
+                            "max": _convert_progress_metric(metric, metric_data.get("max")),
                         }
+
+            curated["count_of_activities"] = sum(
+                v["count"] for v in curated["stats_by_activity_type"].values()
+            )
 
             # Remove None values
             curated = {k: v for k, v in curated.items() if v is not None}
