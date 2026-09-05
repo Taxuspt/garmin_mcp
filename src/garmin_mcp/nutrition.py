@@ -1,6 +1,7 @@
 """
 Nutrition/food logging functions for Garmin Connect MCP Server
 """
+import datetime
 import json
 from typing import Optional
 
@@ -45,6 +46,76 @@ def register_tools(app):
             return json.dumps(data, indent=2)
         except Exception as e:
             return f"Error retrieving food log data: {str(e)}"
+
+    @app.tool()
+    async def get_nutrition_summary_between_dates(start_date: str, end_date: str) -> str:
+        """Get per-day nutrition totals for every day in a date range.
+
+        Returns one lightweight entry per day (date, calories, carbs, protein,
+        fat, item_count) instead of the full per-item food log that
+        get_nutrition_daily_food_log returns for a single date. Use this for
+        multi-day intake analysis (e.g. mean intake for a TDEE estimate)
+        instead of calling get_nutrition_daily_food_log once per day.
+
+        item_count is the number of logged food items that day. A day with
+        item_count == 0 has no logged food at all, and a low but nonzero
+        item_count may mean only part of the day was logged (e.g. breakfast
+        only). Both cases read as low intake in the totals alone -- exclude
+        low-item_count days explicitly before averaging intake or deriving
+        TDEE; don't infer "unlogged" from a low calorie total.
+
+        Maximum range: 61 days per call (Garmin's own limit for this endpoint).
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        MAX_DAYS = 61
+        try:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+        except ValueError as e:
+            return f"Invalid date format: {e}. Use YYYY-MM-DD."
+
+        days = (end - start).days + 1
+        if days < 1:
+            return "end_date must be on or after start_date."
+        if days > MAX_DAYS:
+            return f"Date range too large ({days} days). Maximum is {MAX_DAYS} days."
+
+        try:
+            data = garmin_client.connectapi(
+                "/nutrition-service/food/logs/range",
+                params={"startDate": start_date, "endDate": end_date},
+            )
+        except Exception as e:
+            return f"Error retrieving nutrition summary: {str(e)}"
+
+        summaries = (data or {}).get("dailyNutritionSummaries") or []
+        if not summaries:
+            return f"No nutrition data found between {start_date} and {end_date}."
+
+        daily = []
+        for day in summaries:
+            content = day.get("dailyNutritionContent") or {}
+            item_count = sum(
+                len(meal.get("loggedFoods") or [])
+                for meal in (day.get("mealDetails") or [])
+            )
+            daily.append({
+                "date": day.get("mealDate"),
+                "calories": content.get("calories"),
+                "carbs": content.get("carbs"),
+                "protein": content.get("protein"),
+                "fat": content.get("fat"),
+                "item_count": item_count,
+            })
+
+        return json.dumps({
+            "start_date": start_date,
+            "end_date": end_date,
+            "days": daily,
+        }, indent=2)
 
     @app.tool()
     async def get_nutrition_daily_meals(date: str) -> str:

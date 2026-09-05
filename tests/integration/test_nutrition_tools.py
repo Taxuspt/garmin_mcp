@@ -2,7 +2,7 @@
 Integration tests for nutrition module MCP tools
 
 Tests tools from:
-- nutrition (8 tools: 5 read + 2 write + 1 metadata)
+- nutrition (9 tools: 6 read + 2 write + 1 metadata)
 """
 import json
 import pytest
@@ -68,6 +68,116 @@ async def test_get_nutrition_daily_food_log_error(app_with_nutrition, mock_garmi
         {"date": "2024-01-15"}
     )
     assert "Error retrieving food log data" in result[0][0].text
+
+
+# get_nutrition_summary_between_dates tests
+
+@pytest.mark.asyncio
+async def test_get_nutrition_summary_between_dates(app_with_nutrition, mock_garmin_client):
+    """Curates per-day totals and derives item_count from mealDetails.
+
+    Response shape mirrors what Garmin's /nutrition-service/food/logs/range
+    actually returns: a logged day carries dailyNutritionContent and
+    non-empty loggedFoods; a fully unlogged day has no dailyNutritionContent
+    key at all (not null -- absent) and every meal's loggedFoods is [].
+    """
+    mock_garmin_client.connectapi.return_value = {
+        "dailyNutritionSummaries": [
+            {
+                "mealDate": "2024-01-14",
+                "mealDetails": [
+                    {"mealName": "BREAKFAST", "loggedFoods": []},
+                    {"mealName": "LUNCH", "loggedFoods": []},
+                ],
+            },
+            {
+                "mealDate": "2024-01-15",
+                "dailyNutritionContent": {
+                    "calories": 1499,
+                    "carbs": 107.0,
+                    "fat": 63.0,
+                    "protein": 142.0,
+                },
+                "mealDetails": [
+                    {"mealName": "BREAKFAST", "loggedFoods": [{"foodMetaData": {}}]},
+                    {
+                        "mealName": "LUNCH",
+                        "loggedFoods": [{"foodMetaData": {}}, {"foodMetaData": {}}],
+                    },
+                ],
+            },
+        ]
+    }
+
+    result = await app_with_nutrition.call_tool(
+        "get_nutrition_summary_between_dates",
+        {"start_date": "2024-01-14", "end_date": "2024-01-15"},
+    )
+
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/nutrition-service/food/logs/range",
+        params={"startDate": "2024-01-14", "endDate": "2024-01-15"},
+    )
+    data = json.loads(result[0][0].text)
+    assert data["start_date"] == "2024-01-14"
+    assert data["end_date"] == "2024-01-15"
+
+    unlogged, logged = data["days"]
+    assert unlogged["date"] == "2024-01-14"
+    assert unlogged["item_count"] == 0
+    assert unlogged["calories"] is None
+
+    assert logged["date"] == "2024-01-15"
+    assert logged["item_count"] == 3
+    assert logged["calories"] == 1499
+    assert logged["carbs"] == 107.0
+    assert logged["protein"] == 142.0
+    assert logged["fat"] == 63.0
+
+
+@pytest.mark.asyncio
+async def test_get_nutrition_summary_between_dates_rejects_oversized_range(
+    app_with_nutrition, mock_garmin_client
+):
+    """The tool enforces Garmin's own 61-day cap before making a request."""
+    result = await app_with_nutrition.call_tool(
+        "get_nutrition_summary_between_dates",
+        {"start_date": "2024-01-01", "end_date": "2024-04-01"},
+    )
+    assert "too large" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_nutrition_summary_between_dates_rejects_inverted_range(
+    app_with_nutrition, mock_garmin_client
+):
+    result = await app_with_nutrition.call_tool(
+        "get_nutrition_summary_between_dates",
+        {"start_date": "2024-01-15", "end_date": "2024-01-01"},
+    )
+    assert "end_date must be on or after start_date" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_nutrition_summary_between_dates_empty(app_with_nutrition, mock_garmin_client):
+    mock_garmin_client.connectapi.return_value = {"dailyNutritionSummaries": []}
+    result = await app_with_nutrition.call_tool(
+        "get_nutrition_summary_between_dates",
+        {"start_date": "2024-01-14", "end_date": "2024-01-15"},
+    )
+    assert "No nutrition data found" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_get_nutrition_summary_between_dates_error(app_with_nutrition, mock_garmin_client):
+    mock_garmin_client.connectapi.side_effect = Exception("API error")
+    result = await app_with_nutrition.call_tool(
+        "get_nutrition_summary_between_dates",
+        {"start_date": "2024-01-14", "end_date": "2024-01-15"},
+    )
+    assert "Error retrieving nutrition summary" in result[0][0].text
 
 
 # get_nutrition_daily_meals tests
