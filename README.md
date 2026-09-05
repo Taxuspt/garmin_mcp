@@ -35,7 +35,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Gear Management (5 tools)
 - ✅ Weight Tracking (5 tools)
 - ✅ Challenges & Badges (10 tools)
-- ✅ Nutrition (8 tools) - food logs, meals, custom foods, and food logging
+- ✅ Nutrition (9 tools) - food logs, meals, custom foods, food logging, and multi-day intake summaries
 - ✅ Women's Health (3 tools)
 - ✅ User Profile (3 tools)
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
