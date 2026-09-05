@@ -3,6 +3,7 @@ Integration tests for health_wellness module MCP tools
 
 Tests all 22 health and wellness tools using FastMCP integration with mocked Garmin API responses.
 """
+import datetime
 import json
 
 import pytest
@@ -60,6 +61,114 @@ async def test_get_stats_tool(app_with_health_wellness, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.get_stats.assert_called_once_with("2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_stats_range_tool(app_with_health_wellness, mock_garmin_client):
+    """Curates calories + steps into one per-day entry and flags today as partial.
+
+    Response shapes mirror what Garmin's /usersummary-service/stats/daily
+    actually returns: one CALORIES call and one STEPS call, each with a
+    "values" list keyed by calendarDate; a day with no device data (e.g. a
+    future date) is simply absent from that list rather than null/zeroed.
+    """
+    today = datetime.date.today().isoformat()
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    calories_resp = {
+        "values": [
+            {
+                "calendarDate": yesterday,
+                "values": {"restingCalories": 2081, "totalCalories": 2656, "activeCalories": 575},
+            },
+            {
+                "calendarDate": today,
+                "values": {"restingCalories": 1393, "totalCalories": 1900, "activeCalories": 507},
+            },
+        ]
+    }
+    steps_resp = {
+        "values": [
+            {"calendarDate": yesterday, "values": {"totalSteps": 9238}},
+            # today has no STEPS entry yet -- still has_data via calories
+        ]
+    }
+    mock_garmin_client.connectapi.side_effect = [calories_resp, steps_resp]
+
+    result = await app_with_health_wellness.call_tool(
+        "get_stats_range",
+        {"start_date": yesterday, "end_date": today},
+    )
+
+    data = json.loads(result[0][0].text)
+    days = {d["date"]: d for d in data["days"]}
+
+    past_day = days[yesterday]
+    assert past_day["total_calories"] == 2656
+    assert past_day["active_calories"] == 575
+    assert past_day["resting_calories"] == 2081
+    assert past_day["steps"] == 9238
+    assert past_day["has_data"] is True
+    assert past_day["is_partial"] is False
+
+    today_entry = days[today]
+    assert today_entry["total_calories"] == 1900
+    assert today_entry["steps"] is None  # no STEPS entry for today yet
+    assert today_entry["has_data"] is True
+    assert today_entry["is_partial"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_stats_range_no_data_day(app_with_health_wellness, mock_garmin_client):
+    """A day absent from both CALORIES and STEPS responses is has_data: false with nulls."""
+    mock_garmin_client.connectapi.side_effect = [
+        {"values": [{"calendarDate": "2024-01-14", "values": {"restingCalories": 2081, "totalCalories": 2656, "activeCalories": 575}}]},
+        {"values": [{"calendarDate": "2024-01-14", "values": {"totalSteps": 9238}}]},
+    ]
+
+    result = await app_with_health_wellness.call_tool(
+        "get_stats_range",
+        {"start_date": "2024-01-14", "end_date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    days = {d["date"]: d for d in data["days"]}
+    missing_day = days["2024-01-15"]
+    assert missing_day["has_data"] is False
+    assert missing_day["total_calories"] is None
+    assert missing_day["active_calories"] is None
+    assert missing_day["resting_calories"] is None
+    assert missing_day["steps"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_stats_range_rejects_oversized_range(app_with_health_wellness, mock_garmin_client):
+    """The tool enforces Garmin's own 28-day cap before making a request."""
+    result = await app_with_health_wellness.call_tool(
+        "get_stats_range",
+        {"start_date": "2024-01-01", "end_date": "2024-03-01"},
+    )
+    assert "too large" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_stats_range_rejects_inverted_range(app_with_health_wellness, mock_garmin_client):
+    result = await app_with_health_wellness.call_tool(
+        "get_stats_range",
+        {"start_date": "2024-01-15", "end_date": "2024-01-01"},
+    )
+    assert "end_date must be on or after start_date" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_stats_range_error(app_with_health_wellness, mock_garmin_client):
+    mock_garmin_client.connectapi.side_effect = Exception("API error")
+    result = await app_with_health_wellness.call_tool(
+        "get_stats_range",
+        {"start_date": "2024-01-14", "end_date": "2024-01-15"},
+    )
+    assert "Error retrieving stats range" in result[0][0].text
 
 
 @pytest.mark.asyncio
