@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from garminconnect import (
     GarminConnectAuthenticationError,
     GarminConnectConnectionError,
+    GarminConnectNotFoundError,
     GarminConnectTooManyRequestsError,
 )
 
@@ -37,17 +38,31 @@ class TestGarminProxy:
     def test_auth_error_message_is_actionable(self):
         proxy = self._proxy(get_activities=GarminConnectAuthenticationError("expired"))
         exc = pytest.raises(GarminConnectAuthenticationError, proxy.get_activities)
+        assert str(exc.value).startswith("Garmin authentication failed: expired.")
         assert "Re-run 'garmin-mcp-auth'" in str(exc.value)
 
     def test_rate_limit_error_message_is_actionable(self):
         proxy = self._proxy(get_activities=GarminConnectTooManyRequestsError("429"))
         exc = pytest.raises(GarminConnectTooManyRequestsError, proxy.get_activities)
+        assert str(exc.value).startswith("Garmin rate limit hit: 429.")
         assert "Wait a few minutes" in str(exc.value)
 
     def test_connection_error_message_is_actionable(self):
         proxy = self._proxy(get_steps_data=GarminConnectConnectionError("timeout"))
         exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
+        assert str(exc.value).startswith("Garmin Connect request failed: timeout.")
         assert "unreachable" in str(exc.value)
+
+    def test_not_found_error_is_not_reported_as_unreachable(self):
+        proxy = self._proxy(get_activity=GarminConnectNotFoundError("404 for id 1"))
+        exc = pytest.raises(GarminConnectNotFoundError, proxy.get_activity)
+        assert str(exc.value).startswith("Garmin Connect resource not found: 404 for id 1.")
+        assert "unreachable" not in str(exc.value)
+
+    def test_empty_original_message_still_gets_hint(self):
+        proxy = self._proxy(get_steps_data=GarminConnectConnectionError())
+        exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
+        assert str(exc.value).startswith("Garmin Connect request failed: unknown error. ")
 
     def test_unknown_exception_is_re_raised_unchanged(self):
         proxy = self._proxy(get_activities=ValueError("unexpected"))
