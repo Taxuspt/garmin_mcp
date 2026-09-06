@@ -11,7 +11,7 @@ This repository uses GitHub Actions for continuous integration and security chec
 - Pushes to `main` or `master`
 
 **What it does:**
-- Tests the codebase across Python versions 3.10, 3.11, 3.12, and 3.13
+- Tests the codebase across Python versions 3.12 and 3.13
 - Runs all integration and unit tests
 - Uses uv for fast dependency management
 - Provides a test summary

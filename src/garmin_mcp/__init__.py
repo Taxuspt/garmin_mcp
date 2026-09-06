@@ -10,7 +10,7 @@ import threading
 import requests
 from mcp.server.fastmcp import FastMCP
 
-from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
+from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectNotFoundError, GarminConnectTooManyRequestsError
 
 # Import all modules
 from garmin_mcp import token_utils
@@ -171,7 +171,8 @@ class _GarminProxy:
     """
 
     # (prefix, hint): the original exception text is inserted between them so
-    # the real cause is never hidden behind the generic hint.
+    # the real cause is never hidden behind the generic hint. Subclasses must
+    # come before their base class because the first matching entry wins.
     _MESSAGES = {
         GarminConnectAuthenticationError: (
             "Garmin authentication failed",
@@ -180,6 +181,10 @@ class _GarminProxy:
         GarminConnectTooManyRequestsError: (
             "Garmin rate limit hit",
             "Wait a few minutes before retrying.",
+        ),
+        GarminConnectNotFoundError: (
+            "Garmin Connect resource not found",
+            "Check that the ID or date you passed exists.",
         ),
         GarminConnectConnectionError: (
             "Garmin Connect request failed",

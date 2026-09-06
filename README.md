@@ -25,7 +25,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.11):
 
 - ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
 - ✅ Health & Wellness (31 tools) - includes custom lightweight summary tools
