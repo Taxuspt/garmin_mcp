@@ -166,20 +166,24 @@ class _GarminProxy:
        relative to the network round-trip it guards.
 
     2. Error translation: token expiry or rate-limiting during a tool call would
-       otherwise surface a raw library traceback. Known Garmin exceptions become
-       user-friendly messages instead.
+       otherwise surface a raw library traceback. Known Garmin exceptions are
+       re-raised with an actionable hint appended to the original message.
     """
 
+    # (prefix, hint): the original exception text is inserted between them so
+    # the real cause is never hidden behind the generic hint.
     _MESSAGES = {
         GarminConnectAuthenticationError: (
-            "Garmin authentication expired. "
-            "Re-run 'garmin-mcp-auth' to refresh your tokens and restart the server."
+            "Garmin authentication failed",
+            "Re-run 'garmin-mcp-auth' to refresh your tokens and restart the server.",
         ),
         GarminConnectTooManyRequestsError: (
-            "Garmin rate limit hit. Wait a few minutes before retrying."
+            "Garmin rate limit hit",
+            "Wait a few minutes before retrying.",
         ),
         GarminConnectConnectionError: (
-            "Garmin Connect is unreachable. Check your network connection or try again later."
+            "Garmin Connect request failed",
+            "Garmin Connect may be unreachable; check your network connection or try again later.",
         ),
     }
 
@@ -196,10 +200,10 @@ class _GarminProxy:
             try:
                 return attr(*args, **kwargs)
             except tuple(self._MESSAGES) as exc:
-                for exc_type, msg in self._MESSAGES.items():
+                for exc_type, (prefix, hint) in self._MESSAGES.items():
                     if isinstance(exc, exc_type):
-                        error_details = str(exc)
-                        full_msg = f"{msg} (Details: {error_details})" if error_details else msg
+                        details = str(exc).strip().rstrip(".") or "unknown error"
+                        full_msg = f"{prefix}: {details}. {hint}"
                         raise type(exc)(full_msg) from None
                 raise
 
