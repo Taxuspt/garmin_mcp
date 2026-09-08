@@ -170,6 +170,23 @@ def test_strength_multi_set_repeat_group_shape():
     assert rest["endConditionValue"] == 90.0
 
 
+def test_strength_single_set_identical_exercises_keep_middle_rest():
+    result = build_strength_json(
+        name="Duplicates",
+        exercises=[
+            {"name": "Plank Hold", "sets": 1, "reps": 1, "rest_seconds": 45},
+            {"name": "Plank Hold", "sets": 1, "reps": 1, "rest_seconds": 45},
+        ],
+    )
+    steps = result["workoutSegments"][0]["workoutSteps"]
+    # Two identical exercises must still be told apart by position, not value:
+    # a value comparison against exercises[-1] would make the first Plank Hold
+    # match the last one and lose its rest step.
+    assert len(steps) == 3
+    assert [s["type"] for s in steps] == ["ExecutableStepDTO"] * 3
+    assert steps[1]["stepType"]["stepTypeKey"] == "recovery"
+
+
 def test_strength_multi_set_without_rest_has_no_recovery_step():
     result = build_strength_json(
         name="No rest",
