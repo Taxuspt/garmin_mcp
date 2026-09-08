@@ -1086,7 +1086,7 @@ def register_tools(app):
                 if data:
                     hrv_summary = data.get("hrvSummary", {})
                     entry: Dict[str, Any] = {"date": date_str}
-                    last_night = hrv_summary.get("lastNight")
+                    last_night = hrv_summary.get("lastNightAvg")
                     weekly_avg = hrv_summary.get("weeklyAvg")
                     status = hrv_summary.get("status")
                     feedback = hrv_summary.get("feedbackPhrase")
@@ -1110,7 +1110,7 @@ def register_tools(app):
         if not trend:
             return f"No HRV data found between {start_date} and {end_date}."
 
-        # Compute 7-day rolling average from the collected data
+        # Compute the period average from the available nightly values
         hrv_values = [e.get("last_night_avg_hrv_ms") for e in trend if e.get("last_night_avg_hrv_ms") is not None]
         rolling_avg = None
         if hrv_values:
