@@ -2,6 +2,7 @@
 Nutrition/food logging functions for Garmin Connect MCP Server
 """
 import json
+from copy import deepcopy
 from typing import Optional
 
 from garminconnect import GarminConnectConnectionError
@@ -99,9 +100,10 @@ def register_tools(app):
         and writes the merged result back.  Only the fields you provide are
         changed; omitted fields keep their existing values.
 
-        Garmin stores macros as grams.  The calorie goal should match
-        4*carbs + 4*protein + 9*fat to within a small rounding margin — Garmin
-        accepts minor mismatches but will silently correct large discrepancies.
+        Macro arguments retain their existing names and are passed through to
+        Garmin's macroGoals without unit conversion. The endpoint's macro units
+        have not been independently verified. Returned goals come from Garmin's
+        response, or a settings read-back when the update has no response body.
 
         Args:
             date: Date in YYYY-MM-DD format (settings are typically set once and
@@ -118,23 +120,39 @@ def register_tools(app):
             current = garmin_client.connectapi(url)
             if not current:
                 return f"Could not read current nutrition settings for {date} — cannot apply update."
+            current = deepcopy(current)
             if calorie_goal is not None:
-                current["activeDailyCalories"] = calorie_goal
-            if carbs_grams is not None:
-                current["activeDailyCarbohydrateGrams"] = carbs_grams
-            if fat_grams is not None:
-                current["activeDailyFatGrams"] = fat_grams
-            if protein_grams is not None:
-                current["activeDailyProteinGrams"] = protein_grams
+                current["calorieGoal"] = calorie_goal
+            macro_overrides = {
+                "carbs": carbs_grams,
+                "fat": fat_grams,
+                "protein": protein_grams,
+            }
+            if any(value is not None for value in macro_overrides.values()):
+                macros = current.get("macroGoals")
+                if macros is None:
+                    macros = {}
+                if not isinstance(macros, dict):
+                    return "Could not read current macro goals — cannot apply update."
+                macros.update({key: value for key, value in macro_overrides.items() if value is not None})
+                current["macroGoals"] = macros
             resp = garmin_client.client.put("connectapi", url, json=current, api=True)
-            result = resp if resp else current
+            result = resp
+            if not result:
+                try:
+                    result = garmin_client.connectapi(url)
+                except Exception as e:
+                    return f"Nutrition update submitted, but could not verify stored settings: {e}"
+            if not isinstance(result, dict) or not result:
+                return "Nutrition update submitted, but could not verify stored settings."
+            result_macros = result.get("macroGoals") or {}
             return json.dumps({
                 "status": "updated",
                 "date": date,
-                "calorie_goal": result.get("activeDailyCalories"),
-                "carbs_grams": result.get("activeDailyCarbohydrateGrams"),
-                "fat_grams": result.get("activeDailyFatGrams"),
-                "protein_grams": result.get("activeDailyProteinGrams"),
+                "calorie_goal": result.get("calorieGoal"),
+                "carbs_grams": result_macros.get("carbs"),
+                "fat_grams": result_macros.get("fat"),
+                "protein_grams": result_macros.get("protein"),
             }, indent=2)
         except Exception as e:
             return f"Error updating nutrition settings: {str(e)}"
