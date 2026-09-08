@@ -89,6 +89,65 @@ def _extract_sleep_summary(sleep_data: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in summary.items() if v is not None}
 
 
+def _iter_date_chunks(
+    start: datetime.date, end: datetime.date, max_days: int
+) -> List[tuple]:
+    """Split [start, end] into consecutive inclusive windows of at most max_days."""
+    chunks = []
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(end, chunk_start + datetime.timedelta(days=max_days - 1))
+        chunks.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + datetime.timedelta(days=1)
+    return chunks
+
+
+def _fetch_daily_calories(
+    client: Any, start: datetime.date, end: datetime.date
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch per-day total calories from Garmin, chunked under its 28-day cap.
+
+    Returns a dict keyed by ISO date string; a date absent from the result had
+    no data in Garmin (future date, or before the account existed).
+    """
+    STATS_CHUNK_DAYS = 28
+    by_date: Dict[str, Dict[str, Any]] = {}
+    for chunk_start, chunk_end in _iter_date_chunks(start, end, STATS_CHUNK_DAYS):
+        url = f"/usersummary-service/stats/daily/{chunk_start.isoformat()}/{chunk_end.isoformat()}"
+        resp = client.connectapi(url, params={"statsType": "CALORIES"})
+        for entry in (resp or {}).get("values") or []:
+            date_str = entry.get("calendarDate")
+            if date_str:
+                by_date[date_str] = entry.get("values") or {}
+    return by_date
+
+
+def _fetch_daily_intake(
+    client: Any, start: datetime.date, end: datetime.date
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch per-day logged calories and item count from Garmin's nutrition range endpoint.
+
+    Returns a dict keyed by ISO date string; a date with item_count 0 had no
+    logged food.
+    """
+    resp = client.connectapi(
+        "/nutrition-service/food/logs/range",
+        params={"startDate": start.isoformat(), "endDate": end.isoformat()},
+    )
+    by_date: Dict[str, Dict[str, Any]] = {}
+    for day in (resp or {}).get("dailyNutritionSummaries") or []:
+        date_str = day.get("mealDate")
+        if not date_str:
+            continue
+        content = day.get("dailyNutritionContent") or {}
+        item_count = sum(
+            len(meal.get("loggedFoods") or [])
+            for meal in (day.get("mealDetails") or [])
+        )
+        by_date[date_str] = {"calories": content.get("calories"), "item_count": item_count}
+    return by_date
+
+
 def register_tools(app):
     """Register all health and wellness tools with the MCP server app"""
 
@@ -257,6 +316,179 @@ def register_tools(app):
             "end_date": end_date,
             "days": daily,
         }, indent=2)
+
+    @app.tool()
+    async def get_energy_balance(start_date: str, end_date: str) -> str:
+        """Estimate measured TDEE from logged intake, Garmin's claimed expenditure,
+        and body-composition change over a date range.
+
+        Combines three signals Garmin exposes separately -- mean logged intake
+        (nutrition log), mean claimed expenditure (Garmin's total_calories from
+        daily stats), and body-composition change (weight and body-fat % from
+        smart-scale readings) -- into a measured TDEE independent of Garmin's
+        calorie model: measured_tdee = mean_intake + implied_deficit, where
+        implied_deficit comes from how much fat and fat-free mass was gained
+        or lost, using the standard energy-density approximations
+        7700 kcal/kg fat and 1800 kcal/kg fat-free mass. These are body
+        composition literature estimates, not Garmin-provided or measured
+        values -- treat the result as a rough estimate, not a lab measurement.
+
+        Exclusions applied automatically, matching get_nutrition_summary_between_dates
+        and get_stats_range:
+        - Intake: days with no logged food are excluded from the mean, not
+          counted as zero.
+        - Expenditure: days with no device data, and the current (partial) day,
+          are excluded from the mean.
+        - Body composition: only scale readings with both weight and body-fat
+          percentage are used (skips weight-only manual entries); the earliest
+          and latest such reading in range are compared.
+
+        Needs at least 2 qualifying body-composition readings to derive a TDEE.
+        With 0 or 1, returns the intake/expenditure means and whatever body
+        composition data exists, but omits the derived TDEE -- a single scale
+        reading fluctuates from water weight alone. Prefer windows of 3+ weeks;
+        shorter windows are noisier.
+
+        Maximum range: 61 days per call.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        MAX_DAYS = 61
+        FAT_KCAL_PER_KG = 7700
+        LEAN_MASS_KCAL_PER_KG = 1800
+        try:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+        except ValueError as e:
+            return f"Invalid date format: {e}. Use YYYY-MM-DD."
+
+        days_requested = (end - start).days + 1
+        if days_requested < 1:
+            return "end_date must be on or after start_date."
+        if days_requested > MAX_DAYS:
+            return f"Date range too large ({days_requested} days). Maximum is {MAX_DAYS} days."
+
+        try:
+            intake_by_date = _fetch_daily_intake(garmin_client, start, end)
+            expenditure_by_date = _fetch_daily_calories(garmin_client, start, end)
+            body_comp = garmin_client.get_body_composition(start_date, end_date)
+        except Exception as e:
+            return f"Error retrieving energy balance data: {str(e)}"
+
+        today = datetime.date.today().isoformat()
+
+        logged_calories = [
+            v["calories"] for v in intake_by_date.values()
+            if v.get("item_count", 0) > 0 and v.get("calories") is not None
+        ]
+        intake_days_included = len(logged_calories)
+        mean_intake = sum(logged_calories) / intake_days_included if intake_days_included else None
+
+        expenditure_values = [
+            v["totalCalories"] for date_str, v in expenditure_by_date.items()
+            if date_str != today and v.get("totalCalories") is not None
+        ]
+        expenditure_days_included = len(expenditure_values)
+        mean_expenditure = (
+            sum(expenditure_values) / expenditure_days_included if expenditure_days_included else None
+        )
+
+        # Only readings with both weight and body fat % are usable; compare
+        # the earliest to the latest such reading in range.
+        readings = []
+        for entry in (body_comp or {}).get("dateWeightList") or []:
+            date_str = entry.get("calendarDate")
+            weight_g = entry.get("weight")
+            body_fat_pct = entry.get("bodyFat")
+            if date_str and weight_g is not None and body_fat_pct is not None:
+                readings.append((date_str, weight_g, body_fat_pct))
+        readings.sort(key=lambda r: r[0])
+
+        result: Dict[str, Any] = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "days_requested": days_requested,
+            "intake": {
+                "mean_calories_per_day": round(mean_intake, 1) if mean_intake is not None else None,
+                "days_included": intake_days_included,
+                "days_excluded_unlogged": days_requested - intake_days_included,
+            },
+            "expenditure_garmin": {
+                "mean_total_calories_per_day": round(mean_expenditure, 1) if mean_expenditure is not None else None,
+                "days_included": expenditure_days_included,
+                "days_excluded": days_requested - expenditure_days_included,
+            },
+        }
+
+        if len(readings) >= 2:
+            first_date, first_weight_g, first_bf = readings[0]
+            last_date, last_weight_g, last_bf = readings[-1]
+            span_days = (
+                datetime.date.fromisoformat(last_date) - datetime.date.fromisoformat(first_date)
+            ).days
+
+            first_weight_kg = first_weight_g / 1000
+            last_weight_kg = last_weight_g / 1000
+            first_fat_kg = first_weight_kg * first_bf / 100
+            last_fat_kg = last_weight_kg * last_bf / 100
+            fat_change_kg = last_fat_kg - first_fat_kg
+            lean_change_kg = (last_weight_kg - last_fat_kg) - (first_weight_kg - first_fat_kg)
+
+            result["body_composition"] = {
+                "first_reading_date": first_date,
+                "first_weight_kg": round(first_weight_kg, 2),
+                "first_body_fat_percent": first_bf,
+                "last_reading_date": last_date,
+                "last_weight_kg": round(last_weight_kg, 2),
+                "last_body_fat_percent": last_bf,
+                "weight_change_kg": round(last_weight_kg - first_weight_kg, 2),
+                "fat_mass_change_kg": round(fat_change_kg, 3),
+                "lean_mass_change_kg": round(lean_change_kg, 3),
+            }
+
+            if span_days >= 1 and mean_intake is not None:
+                implied_deficit = -(
+                    fat_change_kg * FAT_KCAL_PER_KG + lean_change_kg * LEAN_MASS_KCAL_PER_KG
+                ) / span_days
+                measured_tdee = mean_intake + implied_deficit
+                result["derived"] = {
+                    "implied_deficit_kcal_per_day": round(implied_deficit, 1),
+                    "measured_tdee_kcal_per_day": round(measured_tdee, 1),
+                    "garmin_tdee_kcal_per_day": (
+                        round(mean_expenditure, 1) if mean_expenditure is not None else None
+                    ),
+                    "difference_kcal_per_day": (
+                        round(mean_expenditure - measured_tdee, 1)
+                        if mean_expenditure is not None else None
+                    ),
+                }
+                result["assumptions"] = {
+                    "fat_kcal_per_kg": FAT_KCAL_PER_KG,
+                    "lean_mass_kcal_per_kg": LEAN_MASS_KCAL_PER_KG,
+                    "note": "Standard energy-density approximations from body-composition "
+                            "literature, not Garmin-provided or measured constants.",
+                }
+            else:
+                result["derived_note"] = (
+                    "Body composition readings found but a TDEE could not be derived "
+                    "(no qualifying intake days, or both readings fell on the same date)."
+                )
+        elif readings:
+            result["body_composition_note"] = (
+                f"Only 1 qualifying body-composition reading (weight + body fat %) in range, "
+                f"on {readings[0][0]}. Need at least 2 to derive a change."
+            )
+        else:
+            result["body_composition_note"] = (
+                "No body-composition readings with both weight and body fat % in range."
+            )
+
+        if intake_days_included == 0 and expenditure_days_included == 0 and not readings:
+            return f"No usable data found between {start_date} and {end_date}."
+
+        return json.dumps(result, indent=2)
 
     @app.tool()
     async def get_user_summary(date: str) -> str:

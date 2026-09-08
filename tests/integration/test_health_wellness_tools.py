@@ -171,6 +171,183 @@ async def test_get_stats_range_error(app_with_health_wellness, mock_garmin_clien
     assert "Error retrieving stats range" in result[0][0].text
 
 
+def _energy_balance_intake_resp(days):
+    """Build a /nutrition-service/food/logs/range-shaped response.
+
+    days: list of (mealDate, calories_or_None, item_count) -- calories_or_None
+    is None for an unlogged day, matching Garmin's real behavior of omitting
+    dailyNutritionContent entirely rather than sending a null/zero.
+    """
+    summaries = []
+    for date_str, calories, item_count in days:
+        entry = {"mealDate": date_str, "mealDetails": [{"loggedFoods": [{}] * item_count}]}
+        if calories is not None:
+            entry["dailyNutritionContent"] = {"calories": calories}
+        summaries.append(entry)
+    return {"dailyNutritionSummaries": summaries}
+
+
+def _energy_balance_calories_resp(days):
+    """Build a /usersummary-service/stats/daily-shaped CALORIES response.
+
+    days: list of (calendarDate, totalCalories) tuples.
+    """
+    return {
+        "values": [
+            {"calendarDate": date_str, "values": {"totalCalories": total}}
+            for date_str, total in days
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_derives_tdee(app_with_health_wellness, mock_garmin_client):
+    """Full happy path: 2 qualifying body-comp readings yield a derived TDEE.
+
+    Numbers are simplified round figures chosen so the deficit math is easy
+    to hand-check: losing 1 kg fat and gaining 0 kg lean over 10 days at
+    7700 kcal/kg implies a 770 kcal/day deficit; mean intake 2000 -> measured
+    TDEE 2770.
+    """
+    intake_resp = _energy_balance_intake_resp([
+        ("2024-01-01", None, 0),  # unlogged -- excluded from mean
+        ("2024-01-02", 2000, 5),
+        ("2024-01-03", 2000, 4),
+    ])
+    calories_resp = _energy_balance_calories_resp([
+        ("2024-01-01", 2500),
+        ("2024-01-02", 2500),
+        # 2024-01-03 absent -- no device data that day, excluded from mean
+    ])
+    mock_garmin_client.connectapi.side_effect = [intake_resp, calories_resp]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": "2024-01-01", "weight": 80000.0, "bodyFat": 20.0},
+            {"calendarDate": "2024-01-11", "weight": 79000.0, "bodyFat": 18.75},
+            # weight-only manual entry -- skipped, no bodyFat
+            {"calendarDate": "2024-01-05", "weight": 79500.0, "bodyFat": None},
+        ]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-03"},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["intake"]["days_included"] == 2
+    assert data["intake"]["days_excluded_unlogged"] == 1
+    assert data["intake"]["mean_calories_per_day"] == 2000.0
+
+    assert data["expenditure_garmin"]["days_included"] == 2
+    assert data["expenditure_garmin"]["days_excluded"] == 1
+    assert data["expenditure_garmin"]["mean_total_calories_per_day"] == 2500.0
+
+    bc = data["body_composition"]
+    assert bc["first_reading_date"] == "2024-01-01"
+    assert bc["last_reading_date"] == "2024-01-11"
+    assert bc["weight_change_kg"] == -1.0
+    # fat: 80*0.20=16.0 -> 79*0.1875=14.8125, change -1.1875
+    assert bc["fat_mass_change_kg"] == pytest.approx(-1.1875, abs=0.001)
+    # lean: 64.0 -> 64.1875, change +0.1875
+    assert bc["lean_mass_change_kg"] == pytest.approx(0.1875, abs=0.001)
+
+    derived = data["derived"]
+    # implied_deficit = -((-1.1875*7700) + (0.1875*1800)) / 10 = (9143.75 - 337.5)/10 = 880.625
+    assert derived["implied_deficit_kcal_per_day"] == pytest.approx(880.625, abs=0.1)
+    assert derived["measured_tdee_kcal_per_day"] == pytest.approx(2880.625, abs=0.1)
+    assert derived["garmin_tdee_kcal_per_day"] == 2500.0
+    assert "assumptions" in data
+    assert data["assumptions"]["fat_kcal_per_kg"] == 7700
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_single_body_comp_reading(app_with_health_wellness, mock_garmin_client):
+    """With only 1 qualifying reading, no TDEE is derived -- just a note."""
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([("2024-01-01", 2000, 3)]),
+        _energy_balance_calories_resp([("2024-01-01", 2500)]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [{"calendarDate": "2024-01-01", "weight": 80000.0, "bodyFat": 20.0}]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-01"},
+    )
+    data = json.loads(result[0][0].text)
+    assert "derived" not in data
+    assert "body_composition_note" in data
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_chunks_expenditure_over_28_days(
+    app_with_health_wellness, mock_garmin_client
+):
+    """A range longer than the stats endpoint's 28-day cap is split into chunks."""
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([]),
+        _energy_balance_calories_resp([("2024-01-01", 2500)]),  # chunk 1
+        _energy_balance_calories_resp([("2024-02-05", 2600)]),  # chunk 2
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-02-05"},  # 36 days
+    )
+    data = json.loads(result[0][0].text)
+    assert mock_garmin_client.connectapi.call_count == 3
+    assert data["expenditure_garmin"]["days_included"] == 2
+    assert data["expenditure_garmin"]["mean_total_calories_per_day"] == 2550.0
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_rejects_oversized_range(app_with_health_wellness, mock_garmin_client):
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-04-01"},
+    )
+    assert "too large" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_rejects_inverted_range(app_with_health_wellness, mock_garmin_client):
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-15", "end_date": "2024-01-01"},
+    )
+    assert "end_date must be on or after start_date" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_no_usable_data(app_with_health_wellness, mock_garmin_client):
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([]),
+        _energy_balance_calories_resp([]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-03"},
+    )
+    assert "No usable data found" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_error(app_with_health_wellness, mock_garmin_client):
+    mock_garmin_client.connectapi.side_effect = Exception("API error")
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-03"},
+    )
+    assert "Error retrieving energy balance data" in result[0][0].text
+
+
 @pytest.mark.asyncio
 async def test_get_user_summary_tool(app_with_health_wellness, mock_garmin_client):
     """Test get_user_summary tool returns user summary data"""
