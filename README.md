@@ -230,6 +230,22 @@ Use ID `6` for heart rate:
 }
 ```
 
+For a zone-based heart-rate end condition, use `endConditionZone` (1-5) on the
+same `endCondition` object and omit `endConditionValue`. If both are sent,
+Garmin keeps the zone and drops the value (verified against the production API
+on 2026-09-01):
+
+```json
+{
+  "endCondition": {
+    "conditionTypeId": 6,
+    "conditionTypeKey": "heart.rate",
+    "endConditionZone": 2
+  }
+}
+```
+
+
 Common end-condition IDs:
 
 | ID | Key |
