@@ -752,6 +752,69 @@ async def test_get_sleep_summary_handles_null_sleep_scores(app_with_health_welln
 
 
 @pytest.mark.asyncio
+async def test_get_sleep_summary_handles_null_sleep_phases(app_with_health_wellness, mock_garmin_client):
+    """A night with a total duration but null phase breakdowns must not crash.
+
+    The phase keys are always written into `summary` (as None when Garmin omits
+    the breakdown), so `summary.get('deep_sleep_seconds', 0)` never falls back
+    to the 0 default and the percentage math raised
+    "unsupported operand type(s) for /: 'NoneType' and 'int'".
+    """
+    mock_garmin_client.get_sleep_data.return_value = {
+        "dailySleepDTO": {
+            "sleepTimeSeconds": 28800,
+            "deepSleepSeconds": None,
+            "lightSleepSeconds": None,
+            "remSleepSeconds": None,
+            "awakeSleepSeconds": None,
+            "sleepScores": {"overall": {"value": 85, "qualifierKey": "GOOD"}},
+        },
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary",
+        {"date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    assert "Error" not in text
+    data = json.loads(text)
+    # The night still reports what Garmin did send ...
+    assert data["sleep_seconds"] == 28800
+    assert data["sleep_hours"] == 8.0
+    assert data["sleep_score"] == 85
+    # ... and unmeasured phases are omitted rather than reported as 0%.
+    assert "deep_sleep_percent" not in data
+    assert "light_sleep_percent" not in data
+    assert "rem_sleep_percent" not in data
+
+
+@pytest.mark.asyncio
+async def test_get_sleep_summary_handles_partial_sleep_phases(app_with_health_wellness, mock_garmin_client):
+    """A night with only some phases measured reports percentages for those."""
+    mock_garmin_client.get_sleep_data.return_value = {
+        "dailySleepDTO": {
+            "sleepTimeSeconds": 28800,
+            "deepSleepSeconds": 7200,
+            "lightSleepSeconds": None,
+            "remSleepSeconds": None,
+            "awakeSleepSeconds": 0,
+        },
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_sleep_summary",
+        {"date": "2024-01-15"},
+    )
+    text = result[0][0].text
+    assert "NoneType" not in text
+    data = json.loads(text)
+    assert data["deep_sleep_percent"] == 25.0
+    assert "light_sleep_percent" not in data
+    assert "rem_sleep_percent" not in data
+
+
+@pytest.mark.asyncio
 async def test_get_body_battery_handles_null_activity_events(app_with_health_wellness, mock_garmin_client):
     """A day whose bodyBatteryActivityEvent is an explicit null must not crash.
 

@@ -64,12 +64,22 @@ def _extract_sleep_summary(sleep_data: Dict[str, Any]) -> Dict[str, Any]:
     if 'avgOvernightHrv' in sleep_data:
         summary['avg_overnight_hrv'] = sleep_data.get('avgOvernightHrv')
 
-    # Calculate sleep phase percentages if total sleep time is available
-    total_sleep = summary.get('sleep_seconds', 0)
+    # Calculate sleep phase percentages if total sleep time is available.
+    # The phase keys above are written unconditionally, so a `.get(key, 0)`
+    # default never fires: Garmin can report a total duration while leaving the
+    # breakdown as an explicit null, which raised "unsupported operand type(s)
+    # for /: 'NoneType' and 'int'". Skip unmeasured phases instead of defaulting
+    # them to 0, so an absent breakdown is not reported as 0%.
+    total_sleep = summary.get('sleep_seconds')
     if total_sleep and total_sleep > 0:
-        summary['deep_sleep_percent'] = round((summary.get('deep_sleep_seconds', 0) / total_sleep) * 100, 1)
-        summary['light_sleep_percent'] = round((summary.get('light_sleep_seconds', 0) / total_sleep) * 100, 1)
-        summary['rem_sleep_percent'] = round((summary.get('rem_sleep_seconds', 0) / total_sleep) * 100, 1)
+        for phase_key, percent_key in (
+            ('deep_sleep_seconds', 'deep_sleep_percent'),
+            ('light_sleep_seconds', 'light_sleep_percent'),
+            ('rem_sleep_seconds', 'rem_sleep_percent'),
+        ):
+            phase_seconds = summary.get(phase_key)
+            if phase_seconds is not None:
+                summary[percent_key] = round((phase_seconds / total_sleep) * 100, 1)
 
     # Convert sleep duration to hours for convenience
     if total_sleep:
