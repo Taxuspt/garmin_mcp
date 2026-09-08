@@ -427,6 +427,80 @@ For Codex and other clients, see the examples below.
 
 ---
 
+### Using more than one Garmin account
+
+A single server process is bound to one Garmin account. To use several accounts
+at once, run **one server instance per account**, each with its own token
+directory, selected with the `GARMINTOKENS` environment variable.
+
+`GARMINTOKENS` defaults to `~/.garminconnect`. Point it somewhere else and the
+server reads and writes tokens there instead, leaving the default store
+untouched.
+
+#### Step 1: Authenticate each account into its own directory
+
+```bash
+garmin-mcp-auth --token-path ~/.garminconnect-alice
+garmin-mcp-auth --token-path ~/.garminconnect-bob
+```
+
+`--token-path` also accepts `$GARMINTOKENS`, so `GARMINTOKENS=~/.garminconnect-alice garmin-mcp-auth`
+is equivalent.
+
+#### Step 2: Declare one server per account
+
+```json
+{
+  "mcpServers": {
+    "garmin-alice": {
+      "command": "uvx",
+      "args": ["--python", "3.12", "--from", "git+https://github.com/Taxuspt/garmin_mcp", "garmin-mcp"],
+      "env": {
+        "GARMINTOKENS": "${HOME}/.garminconnect-alice"
+      }
+    },
+    "garmin-bob": {
+      "command": "uvx",
+      "args": ["--python", "3.12", "--from", "git+https://github.com/Taxuspt/garmin_mcp", "garmin-mcp"],
+      "env": {
+        "GARMINTOKENS": "${HOME}/.garminconnect-bob"
+      }
+    }
+  }
+}
+```
+
+Each server logs the directory it authenticates from on startup, so you can
+confirm the wiring:
+
+```
+Trying to login to Garmin Connect using token data from directory '/home/you/.garminconnect-alice'...
+```
+
+#### Notes
+
+- **No silent fallback.** If `GARMINTOKENS` points at a directory with no valid
+  tokens, startup fails with `GarminConnectAuthenticationError` rather than
+  falling back to the default store. A misconfigured second server cannot
+  silently reuse the first account's session.
+- **`${HOME}` is expanded** even when an MCP client passes it through
+  unresolved, and `~` works on Windows via `USERPROFILE`.
+- **Restrict write tools on secondary accounts.** Tools such as
+  `upload_workout` and `schedule_workout` write to whichever account the server
+  is bound to. Pair `GARMINTOKENS` with `GARMIN_ENABLED_TOOLS` (see
+  [Tool Filtering](#tool-filtering)) to make an account read-only:
+
+  ```json
+  "env": {
+    "GARMINTOKENS": "${HOME}/.garminconnect-bob",
+    "GARMIN_ENABLED_TOOLS": "get_activities,get_activities_by_date,get_activity,get_activity_splits"
+  }
+  ```
+- **Token directories hold long-lived credentials.** They are created with
+  owner-only permissions; keep them out of shared or synced folders.
+
+---
+
 ### Development Setup
 
 1. Install the required packages on a new environment:
