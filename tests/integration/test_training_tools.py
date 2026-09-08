@@ -1195,3 +1195,50 @@ async def test_get_acclimation_exception(app_with_training, mock_garmin_client):
     )
 
     assert "Error" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_hrv_trend_uses_reported_nightly_averages(app_with_training, mock_garmin_client):
+    """Garmin's lastNightAvg drives both daily values and the period mean."""
+    mock_garmin_client.get_hrv_data.side_effect = [
+        {"hrvSummary": {"lastNightAvg": 54, "lastNight": 999, "weeklyAvg": 60}},
+        {"hrvSummary": {"lastNightAvg": 70, "lastNight5MinHigh": 107}},
+    ]
+    result = await app_with_training.call_tool(
+        "get_hrv_trend", {"start_date": "2026-09-04", "end_date": "2026-09-05"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["days_with_data"] == 2
+    assert [day["last_night_avg_hrv_ms"] for day in data["trend"]] == [54, 70]
+    assert data["period_avg_hrv_ms"] == 62
+    assert data["trend"][0]["weekly_avg_hrv_ms"] == 60
+    assert data["trend"][1]["last_night_5min_high_hrv_ms"] == 107
+
+
+@pytest.mark.asyncio
+async def test_hrv_trend_averages_only_available_nights(app_with_training, mock_garmin_client):
+    mock_garmin_client.get_hrv_data.side_effect = [
+        {"hrvSummary": {"lastNightAvg": 54}},
+        None,
+        {"hrvSummary": {"lastNightAvg": None, "weeklyAvg": 60}},
+        Exception("unavailable"),
+        {"hrvSummary": {"lastNightAvg": 71}},
+    ]
+    result = await app_with_training.call_tool(
+        "get_hrv_trend", {"start_date": "2026-09-01", "end_date": "2026-09-05"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["days_with_data"] == 3
+    assert data["period_avg_hrv_ms"] == 62.5
+    assert "last_night_avg_hrv_ms" not in data["trend"][1]
+
+
+@pytest.mark.asyncio
+async def test_hrv_trend_without_nightly_values(app_with_training, mock_garmin_client):
+    mock_garmin_client.get_hrv_data.return_value = {"hrvSummary": {"weeklyAvg": 60}}
+    result = await app_with_training.call_tool(
+        "get_hrv_trend", {"start_date": "2026-09-05", "end_date": "2026-09-05"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["period_avg_hrv_ms"] is None
+    assert data["trend"] == [{"date": "2026-09-05", "weekly_avg_hrv_ms": 60}]
