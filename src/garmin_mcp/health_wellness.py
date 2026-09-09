@@ -148,6 +148,36 @@ def _fetch_daily_intake(
     return by_date
 
 
+def _linear_fit(xs: List[float], ys: List[float]) -> Optional[Dict[str, float]]:
+    """Ordinary least-squares fit of ys against xs. Returns slope, intercept,
+    and (when there are more than 2 points) the standard error of the slope.
+
+    Used to derive a body-composition trend from all qualifying readings in
+    a window instead of just the earliest and latest -- the latter is fully
+    determined by two individual measurements and inherits all their noise.
+    """
+    n = len(xs)
+    if n < 2:
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    if sxx == 0:
+        return None
+    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    slope = sxy / sxx
+    intercept = mean_y - slope * mean_x
+
+    se_slope = None
+    if n > 2:
+        sse = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
+        dof = n - 2
+        if dof > 0:
+            se_slope = (sse / dof / sxx) ** 0.5
+
+    return {"slope": slope, "intercept": intercept, "se_slope": se_slope, "n": n}
+
+
 def register_tools(app):
     """Register all health and wellness tools with the MCP server app"""
 
@@ -319,35 +349,54 @@ def register_tools(app):
 
     @app.tool()
     async def get_energy_balance(start_date: str, end_date: str) -> str:
-        """Estimate measured TDEE from logged intake, Garmin's claimed expenditure,
-        and body-composition change over a date range.
+        """Estimate a composition-derived TDEE from logged intake, Garmin's
+        claimed expenditure, and body-composition change over a date range.
 
         Combines three signals Garmin exposes separately -- mean logged intake
         (nutrition log), mean claimed expenditure (Garmin's total_calories from
-        daily stats), and body-composition change (weight and body-fat % from
-        smart-scale readings) -- into a measured TDEE independent of Garmin's
-        calorie model: measured_tdee = mean_intake + implied_deficit, where
-        implied_deficit comes from how much fat and fat-free mass was gained
-        or lost, using the standard energy-density approximations
+        daily stats), and a body-composition trend (weight and body-fat % from
+        smart-scale readings) -- into composition_derived_tdee, an estimate
+        independent of Garmin's calorie model:
+        composition_derived_tdee = mean_intake + implied_deficit, where
+        implied_deficit comes from the fitted rate of fat and fat-free mass
+        change, using the standard energy-density approximations
         7700 kcal/kg fat and 1800 kcal/kg fat-free mass. These are body
         composition literature estimates, not Garmin-provided or measured
         values -- treat the result as a rough estimate, not a lab measurement.
+        difference_kcal_per_day (Garmin's claim minus this estimate) has at
+        least two explanations -- Garmin overestimating expenditure, or
+        under-logged intake, which is common -- and this tool cannot
+        distinguish between them.
+
+        The body-composition trend is fit by least-squares regression across
+        every qualifying scale reading in range, not just the first and last --
+        an endpoint-to-endpoint difference is fully determined by two
+        individual measurements and inherits all of their noise (a 0.5%
+        body-fat wobble, well within normal scale repeatability, can swing a
+        two-point estimate by over a hundred kcal/day). With more than 2
+        readings, a standard error on the implied deficit is also returned;
+        treat a deficit within roughly one standard error of zero as
+        indistinguishable from no change. Short windows dominated by
+        water/glycogen shifts (which carry little caloric weight, unlike true
+        lean tissue) bias the fat-free-mass term; prefer windows of 3+ weeks
+        with several readings.
 
         Exclusions applied automatically, matching get_nutrition_summary_between_dates
         and get_stats_range:
-        - Intake: days with no logged food are excluded from the mean, not
-          counted as zero.
-        - Expenditure: days with no device data, and the current (partial) day,
-          are excluded from the mean.
+        - Intake: days with no logged food (item_count 0) are excluded from
+          the mean, not counted as zero. Days with a low but nonzero
+          item_count remain included (excluding them requires judgment this
+          tool doesn't make unilaterally) but are called out in
+          low_item_count_dates so low-confidence days are visible rather than
+          silently blended into the mean.
+        - Expenditure: days with no device data, and the current (partial)
+          day, are excluded from the mean.
         - Body composition: only scale readings with both weight and body-fat
-          percentage are used (skips weight-only manual entries); the earliest
-          and latest such reading in range are compared.
+          percentage are used (skips weight-only manual entries).
 
-        Needs at least 2 qualifying body-composition readings to derive a TDEE.
-        With 0 or 1, returns the intake/expenditure means and whatever body
-        composition data exists, but omits the derived TDEE -- a single scale
-        reading fluctuates from water weight alone. Prefer windows of 3+ weeks;
-        shorter windows are noisier.
+        Needs at least 2 qualifying body-composition readings to derive a
+        trend. With 0 or 1, returns the intake/expenditure means and whatever
+        body composition data exists, but omits the derived TDEE.
 
         Maximum range: 61 days per call.
 
@@ -358,6 +407,7 @@ def register_tools(app):
         MAX_DAYS = 61
         FAT_KCAL_PER_KG = 7700
         LEAN_MASS_KCAL_PER_KG = 1800
+        LOW_ITEM_COUNT_THRESHOLD = 3
         try:
             start = datetime.date.fromisoformat(start_date)
             end = datetime.date.fromisoformat(end_date)
@@ -379,12 +429,18 @@ def register_tools(app):
 
         today = datetime.date.today().isoformat()
 
-        logged_calories = [
-            v["calories"] for v in intake_by_date.values()
+        logged_days = [
+            (date_str, v["calories"]) for date_str, v in intake_by_date.items()
             if v.get("item_count", 0) > 0 and v.get("calories") is not None
         ]
-        intake_days_included = len(logged_calories)
-        mean_intake = sum(logged_calories) / intake_days_included if intake_days_included else None
+        intake_days_included = len(logged_days)
+        mean_intake = (
+            sum(c for _, c in logged_days) / intake_days_included if intake_days_included else None
+        )
+        low_item_count_dates = sorted(
+            date_str for date_str, v in intake_by_date.items()
+            if 0 < v.get("item_count", 0) < LOW_ITEM_COUNT_THRESHOLD
+        )
 
         expenditure_values = [
             v["totalCalories"] for date_str, v in expenditure_by_date.items()
@@ -395,8 +451,7 @@ def register_tools(app):
             sum(expenditure_values) / expenditure_days_included if expenditure_days_included else None
         )
 
-        # Only readings with both weight and body fat % are usable; compare
-        # the earliest to the latest such reading in range.
+        # Only readings with both weight and body fat % are usable.
         readings = []
         for entry in (body_comp or {}).get("dateWeightList") or []:
             date_str = entry.get("calendarDate")
@@ -414,6 +469,7 @@ def register_tools(app):
                 "mean_calories_per_day": round(mean_intake, 1) if mean_intake is not None else None,
                 "days_included": intake_days_included,
                 "days_excluded_unlogged": days_requested - intake_days_included,
+                "low_item_count_dates": low_item_count_dates,
             },
             "expenditure_garmin": {
                 "mean_total_calories_per_day": round(mean_expenditure, 1) if mean_expenditure is not None else None,
@@ -423,62 +479,99 @@ def register_tools(app):
         }
 
         if len(readings) >= 2:
-            first_date, first_weight_g, first_bf = readings[0]
-            last_date, last_weight_g, last_bf = readings[-1]
-            span_days = (
-                datetime.date.fromisoformat(last_date) - datetime.date.fromisoformat(first_date)
-            ).days
+            first_date = readings[0][0]
+            last_date = readings[-1][0]
+            day_zero = datetime.date.fromisoformat(first_date)
+            xs = [(datetime.date.fromisoformat(d) - day_zero).days for d, _, _ in readings]
+            weight_kg_series = [w / 1000 for _, w, _ in readings]
+            fat_kg_series = [
+                (w / 1000) * bf / 100 for _, w, bf in readings
+            ]
+            span_days = xs[-1] - xs[0]
 
-            first_weight_kg = first_weight_g / 1000
-            last_weight_kg = last_weight_g / 1000
-            first_fat_kg = first_weight_kg * first_bf / 100
-            last_fat_kg = last_weight_kg * last_bf / 100
-            fat_change_kg = last_fat_kg - first_fat_kg
-            lean_change_kg = (last_weight_kg - last_fat_kg) - (first_weight_kg - first_fat_kg)
+            weight_fit = _linear_fit(xs, weight_kg_series)
+            fat_fit = _linear_fit(xs, fat_kg_series)
 
             result["body_composition"] = {
+                "readings_used": len(readings),
                 "first_reading_date": first_date,
-                "first_weight_kg": round(first_weight_kg, 2),
-                "first_body_fat_percent": first_bf,
                 "last_reading_date": last_date,
-                "last_weight_kg": round(last_weight_kg, 2),
-                "last_body_fat_percent": last_bf,
-                "weight_change_kg": round(last_weight_kg - first_weight_kg, 2),
-                "fat_mass_change_kg": round(fat_change_kg, 3),
-                "lean_mass_change_kg": round(lean_change_kg, 3),
+                "first_weight_kg": round(weight_kg_series[0], 2),
+                "last_weight_kg": round(weight_kg_series[-1], 2),
             }
 
-            if span_days >= 1 and mean_intake is not None:
-                implied_deficit = -(
-                    fat_change_kg * FAT_KCAL_PER_KG + lean_change_kg * LEAN_MASS_KCAL_PER_KG
-                ) / span_days
-                measured_tdee = mean_intake + implied_deficit
-                result["derived"] = {
-                    "implied_deficit_kcal_per_day": round(implied_deficit, 1),
-                    "measured_tdee_kcal_per_day": round(measured_tdee, 1),
-                    "garmin_tdee_kcal_per_day": (
-                        round(mean_expenditure, 1) if mean_expenditure is not None else None
-                    ),
-                    "difference_kcal_per_day": (
-                        round(mean_expenditure - measured_tdee, 1)
-                        if mean_expenditure is not None else None
-                    ),
-                }
-                result["assumptions"] = {
-                    "fat_kcal_per_kg": FAT_KCAL_PER_KG,
-                    "lean_mass_kcal_per_kg": LEAN_MASS_KCAL_PER_KG,
-                    "note": "Standard energy-density approximations from body-composition "
-                            "literature, not Garmin-provided or measured constants.",
-                }
+            if weight_fit and fat_fit and span_days >= 1:
+                fat_change_kg = fat_fit["slope"] * span_days
+                weight_change_kg = weight_fit["slope"] * span_days
+                lean_change_kg = weight_change_kg - fat_change_kg
+                result["body_composition"].update({
+                    "weight_change_kg": round(weight_change_kg, 2),
+                    "fat_mass_change_kg": round(fat_change_kg, 3),
+                    "lean_mass_change_kg": round(lean_change_kg, 3),
+                })
+
+                if mean_intake is not None:
+                    implied_deficit = -(
+                        fat_fit["slope"] * FAT_KCAL_PER_KG + (weight_fit["slope"] - fat_fit["slope"]) * LEAN_MASS_KCAL_PER_KG
+                    )
+                    measured_tdee = mean_intake + implied_deficit
+
+                    derived: Dict[str, Any] = {
+                        "implied_deficit_kcal_per_day": round(implied_deficit, 1),
+                        "composition_derived_tdee_kcal_per_day": round(measured_tdee, 1),
+                        "garmin_tdee_kcal_per_day": (
+                            round(mean_expenditure, 1) if mean_expenditure is not None else None
+                        ),
+                        "difference_kcal_per_day": (
+                            round(mean_expenditure - measured_tdee, 1)
+                            if mean_expenditure is not None else None
+                        ),
+                    }
+
+                    if weight_fit["se_slope"] is not None and fat_fit["se_slope"] is not None:
+                        # lean_slope = weight_slope - fat_slope, so its error
+                        # (assuming independence) combines both in quadrature.
+                        se_lean_slope = (weight_fit["se_slope"] ** 2 + fat_fit["se_slope"] ** 2) ** 0.5
+                        se_deficit = (
+                            (fat_fit["se_slope"] * FAT_KCAL_PER_KG) ** 2
+                            + (se_lean_slope * LEAN_MASS_KCAL_PER_KG) ** 2
+                        ) ** 0.5
+                        derived["implied_deficit_uncertainty_kcal_per_day"] = round(se_deficit, 1)
+                    else:
+                        derived["implied_deficit_uncertainty_kcal_per_day"] = None
+                        derived["uncertainty_note"] = (
+                            "Only 2 readings -- no residual variance to estimate uncertainty from. "
+                            "More readings in range would let this be quantified."
+                        )
+
+                    derived["note"] = (
+                        "composition_derived_tdee is a model estimate, not ground truth. "
+                        "difference_kcal_per_day is not attributable to Garmin's model or to "
+                        "under-logged intake without independent validation of either."
+                    )
+                    result["derived"] = derived
+                    result["assumptions"] = {
+                        "fat_kcal_per_kg": FAT_KCAL_PER_KG,
+                        "lean_mass_kcal_per_kg": LEAN_MASS_KCAL_PER_KG,
+                        "note": "Standard energy-density approximations from body-composition "
+                                "literature, not Garmin-provided or measured constants. Fat-free "
+                                "mass change over short windows is often water/glycogen rather than "
+                                "structural tissue, which carries little caloric weight -- this "
+                                "biases lean_mass_kcal_per_kg high for short windows.",
+                    }
+                else:
+                    result["derived_note"] = (
+                        "Body composition trend fit but no qualifying intake days to derive a TDEE from."
+                    )
             else:
                 result["derived_note"] = (
-                    "Body composition readings found but a TDEE could not be derived "
-                    "(no qualifying intake days, or both readings fell on the same date)."
+                    "Body composition readings found but a trend could not be fit "
+                    "(readings span zero days)."
                 )
         elif readings:
             result["body_composition_note"] = (
                 f"Only 1 qualifying body-composition reading (weight + body fat %) in range, "
-                f"on {readings[0][0]}. Need at least 2 to derive a change."
+                f"on {readings[0][0]}. Need at least 2 to fit a trend."
             )
         else:
             result["body_composition_note"] = (
