@@ -171,6 +171,428 @@ async def test_get_stats_range_error(app_with_health_wellness, mock_garmin_clien
     assert "Error retrieving stats range" in result[0][0].text
 
 
+def _energy_balance_intake_resp(days):
+    """Build a /nutrition-service/food/logs/range-shaped response.
+
+    days: list of (mealDate, calories_or_None, item_count) -- calories_or_None
+    is None for an unlogged day, matching Garmin's real behavior of omitting
+    dailyNutritionContent entirely rather than sending a null/zero.
+    """
+    summaries = []
+    for date_str, calories, item_count in days:
+        entry = {"mealDate": date_str, "mealDetails": [{"loggedFoods": [{}] * item_count}]}
+        if calories is not None:
+            entry["dailyNutritionContent"] = {"calories": calories}
+        summaries.append(entry)
+    return {"dailyNutritionSummaries": summaries}
+
+
+def _energy_balance_calories_resp(days):
+    """Build a /usersummary-service/stats/daily-shaped CALORIES response.
+
+    days: list of (calendarDate, totalCalories) tuples.
+    """
+    return {
+        "values": [
+            {"calendarDate": date_str, "values": {"totalCalories": total}}
+            for date_str, total in days
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_derives_tdee(app_with_health_wellness, mock_garmin_client):
+    """Full happy path: 2 qualifying body-comp readings 24 days apart (clears
+    the >=21-day span gate) yield a derived TDEE.
+
+    Values verified by an independent script, not hand arithmetic (weight
+    80.0->79.0 kg, body fat 20.0%->18.75%):
+      fat_kg: 16.0 -> 14.8125 (change -1.1875), lean_kg: 64.0 -> 64.1875
+      (change +0.1875) -- both span-independent for exactly 2 readings.
+      implied_deficit = -(-1.1875/24*7700 + 0.1875/24*1800) = 366.927
+      measured_tdee = 2000 + 366.927 = 2366.927
+    """
+    intake_resp = _energy_balance_intake_resp([
+        ("2024-01-01", None, 0),  # unlogged -- excluded from mean
+        ("2024-01-02", 2000, 5),
+        ("2024-01-03", 2000, 4),
+    ])
+    calories_resp = _energy_balance_calories_resp([
+        ("2024-01-01", 2500),
+        ("2024-01-02", 2500),
+        # 2024-01-03 absent -- no device data that day, excluded from mean
+    ])
+    mock_garmin_client.connectapi.side_effect = [intake_resp, calories_resp]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": "2024-01-01", "weight": 80000.0, "bodyFat": 20.0},
+            {"calendarDate": "2024-01-25", "weight": 79000.0, "bodyFat": 18.75},
+            # weight-only manual entry -- skipped, no bodyFat
+            {"calendarDate": "2024-01-05", "weight": 79500.0, "bodyFat": None},
+        ]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-03"},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["intake"]["days_included"] == 2
+    assert data["intake"]["days_excluded_unlogged"] == 1
+    assert data["intake"]["mean_calories_per_day"] == 2000.0
+    assert data["intake"]["low_item_count_dates"] == []
+
+    assert data["expenditure_garmin"]["days_included"] == 2
+    assert data["expenditure_garmin"]["days_excluded"] == 1
+    assert data["expenditure_garmin"]["mean_total_calories_per_day"] == 2500.0
+
+    bc = data["body_composition"]
+    assert bc["first_reading_date"] == "2024-01-01"
+    assert bc["last_reading_date"] == "2024-01-25"
+    assert bc["days_between_readings"] == 24
+    assert bc["observed_first_weight_kg"] == 80.0
+    assert bc["observed_last_weight_kg"] == 79.0
+    assert bc["observed_first_body_fat_percent"] == 20.0
+    assert bc["observed_last_body_fat_percent"] == 18.75
+    # Exactly 2 readings -- the fitted line passes through both exactly.
+    assert bc["fitted_first_weight_kg"] == 80.0
+    assert bc["fitted_last_weight_kg"] == 79.0
+    assert bc["weight_change_kg"] == -1.0
+    assert bc["fat_mass_change_kg"] == pytest.approx(-1.1875, abs=0.001)
+    assert bc["lean_mass_change_kg"] == pytest.approx(0.1875, abs=0.001)
+    assert "gate_note" not in data
+
+    derived = data["derived"]
+    assert derived["implied_deficit_kcal_per_day"] == pytest.approx(366.927, abs=0.1)
+    assert derived["composition_derived_tdee_kcal_per_day"] == pytest.approx(2366.927, abs=0.1)
+    assert derived["garmin_tdee_kcal_per_day"] == 2500.0
+    # Exactly 2 readings -- no residual variance to estimate uncertainty from.
+    assert derived["implied_deficit_uncertainty_kcal_per_day"] is None
+    assert "assumptions" in data
+    assert data["assumptions"]["fat_kcal_per_kg"] == 7700
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_excludes_partial_and_no_data_days(
+    app_with_health_wellness, mock_garmin_client
+):
+    """The current (partial) day and a day with no device data are both
+    excluded from the expenditure mean -- exercises the two branches of
+    get_stats_range's has_data/is_partial exclusion logic that the earlier
+    fixed-2024-date tests never touched (since "today" never equals a
+    hardcoded past date).
+    """
+    today = datetime.date.today().isoformat()
+    no_device_data_date = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    complete_date = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
+
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([
+            (complete_date, 2000, 5),
+            (no_device_data_date, 2000, 5),
+            (today, 2000, 5),
+        ]),
+        # no_device_data_date has no entry at all -- absent from Garmin's response
+        _energy_balance_calories_resp([
+            (complete_date, 2600),
+            (today, 9999),  # partial-day accumulator -- must not enter the mean
+        ]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": complete_date, "end_date": today},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["expenditure_garmin"]["days_included"] == 1
+    assert data["expenditure_garmin"]["days_excluded"] == 2
+    assert data["expenditure_garmin"]["mean_total_calories_per_day"] == 2600.0
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_surfaces_low_item_count_days(
+    app_with_health_wellness, mock_garmin_client
+):
+    """Partially-logged days (nonzero but low item_count) stay in the intake
+    mean but are called out in low_item_count_dates, per the tool's own
+    documented contract -- they are not silently excluded or blended in
+    without a trace.
+    """
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([
+            ("2024-01-01", 2000, 5),
+            ("2024-01-02", 800, 1),  # breakfast-only -- low confidence, still counted
+            ("2024-01-03", None, 0),  # fully unlogged -- excluded entirely
+        ]),
+        _energy_balance_calories_resp([]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-03"},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert data["intake"]["days_included"] == 2  # both logged days, including the low-count one
+    assert data["intake"]["days_excluded_unlogged"] == 1
+    assert data["intake"]["low_item_count_dates"] == ["2024-01-02"]
+    assert data["intake"]["mean_calories_per_day"] == 1400.0  # (2000+800)/2, unaffected
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_fits_trend_across_multiple_readings(
+    app_with_health_wellness, mock_garmin_client
+):
+    """With more than 2 body-composition readings, the trend is fit by
+    least-squares regression across all of them, and an uncertainty band on
+    the deficit is returned -- both were previously impossible with the
+    endpoint-difference approach.
+    """
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([("2024-01-01", 2000, 5)]),
+        _energy_balance_calories_resp([("2024-01-01", 2600)]),
+    ]
+    # Weight declines perfectly linearly across 5 readings 6 days apart
+    # (span 24 days, clearing the >=21-day gate and keeping readings spread
+    # out rather than clustered), at a constant body-fat % -- fat_kg
+    # (weight_kg * constant) is then also exactly linear, so the fit has
+    # zero residual and the standard error should come out as (numerically)
+    # zero, not just "small". A varying body-fat % would make fat_kg a
+    # product of two linear terms -- which is quadratic, not linear -- and
+    # give a nonzero residual on its own, which would defeat the point of
+    # this specific check.
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": "2024-01-01", "weight": 80000.0, "bodyFat": 20.0},
+            {"calendarDate": "2024-01-07", "weight": 79500.0, "bodyFat": 20.0},
+            {"calendarDate": "2024-01-13", "weight": 79000.0, "bodyFat": 20.0},
+            {"calendarDate": "2024-01-19", "weight": 78500.0, "bodyFat": 20.0},
+            {"calendarDate": "2024-01-25", "weight": 78000.0, "bodyFat": 20.0},
+        ]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-25"},
+    )
+    data = json.loads(result[0][0].text)
+
+    bc = data["body_composition"]
+    assert bc["readings_used"] == 5
+    assert bc["days_between_readings"] == 24
+    assert "gate_note" not in data
+    # weight declines exactly 500g / 6 days -> 2.0 kg over the 24-day span
+    assert bc["weight_change_kg"] == pytest.approx(-2.0, abs=0.01)
+    assert bc["fitted_first_weight_kg"] == pytest.approx(80.0, abs=0.01)
+    assert bc["fitted_last_weight_kg"] == pytest.approx(78.0, abs=0.01)
+
+    derived = data["derived"]
+    # A perfectly linear fit has zero residual, so the standard error is 0,
+    # not None -- distinct from the exactly-2-readings case.
+    assert derived["implied_deficit_uncertainty_kcal_per_day"] == pytest.approx(0.0, abs=0.01)
+    assert "uncertainty_note" not in derived
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_gates_out_short_span(app_with_health_wellness, mock_garmin_client):
+    """3 readings spanning only 18 days (offsets 0, 17, 18) is the exact
+    pathological case from the review that found this gate necessary: two
+    readings a day apart near the far end, one anchor at the start. Without
+    a gate, this produced a physiologically nonsensical TDEE with a
+    deceptively tight uncertainty band, because the close pair's near-zero
+    residual made the fit look precise. body_composition is still returned
+    (it's directly checkable against the raw readings) but derived is not.
+    """
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([("2024-01-01", 2000, 5)]),
+        _energy_balance_calories_resp([("2024-01-01", 2600)]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": "2024-01-01", "weight": 90000.0, "bodyFat": 28.0},
+            {"calendarDate": "2024-01-18", "weight": 91000.0, "bodyFat": 27.5},
+            {"calendarDate": "2024-01-19", "weight": 89670.0, "bodyFat": 28.3},
+        ]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-19"},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "body_composition" in data
+    assert data["body_composition"]["readings_used"] == 3
+    assert "derived" not in data
+    assert "assumptions" not in data
+    assert "18 days" in data["gate_note"]
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_gates_out_clustered_leverage(
+    app_with_health_wellness, mock_garmin_client
+):
+    """3 readings spanning 23 days (clears the span requirement on its own)
+    but two of them fall within 48h of each other at the far end, so that
+    pair holds more than half the fit's statistical leverage -- the second,
+    independent failure mode the span check alone does not catch.
+    """
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([("2024-01-01", 2000, 5)]),
+        _energy_balance_calories_resp([("2024-01-01", 2600)]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": "2024-01-01", "weight": 90000.0, "bodyFat": 28.0},
+            {"calendarDate": "2024-01-23", "weight": 89000.0, "bodyFat": 27.5},
+            {"calendarDate": "2024-01-24", "weight": 88670.0, "bodyFat": 27.3},
+        ]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-24"},
+    )
+    data = json.loads(result[0][0].text)
+
+    assert "derived" not in data
+    assert "cluster" in data["gate_note"]
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_uncertainty_formula_is_pinned(
+    app_with_health_wellness, mock_garmin_client
+):
+    """Pins the exact uncertainty formula documented in the tool's docstring:
+    implied_deficit_kcal_per_day and its uncertainty are the slope and
+    standard error of a single regression of
+    -(fat_kg * 7700 + lean_kg * 1800) against day offset -- not two
+    separately-fit slopes combined after the fact. Expected values were
+    computed by an independent script implementing exactly that formula
+    (see the test file history), not derived from this tool's own code.
+    """
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([("2024-01-01", 2000, 5)]),
+        _energy_balance_calories_resp([("2024-01-01", 2600)]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": "2024-01-01", "weight": 90000.0, "bodyFat": 28.0},
+            {"calendarDate": "2024-01-09", "weight": 89300.0, "bodyFat": 27.6},
+            {"calendarDate": "2024-01-16", "weight": 88900.0, "bodyFat": 27.5},
+            {"calendarDate": "2024-01-24", "weight": 88000.0, "bodyFat": 27.0},
+        ]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-24"},
+    )
+    data = json.loads(result[0][0].text)
+
+    bc = data["body_composition"]
+    # weight_change_kg is rounded to 2dp, fat/lean to 3dp, by the tool itself.
+    assert bc["weight_change_kg"] == pytest.approx(-1.942, abs=0.005)
+    assert bc["fat_mass_change_kg"] == pytest.approx(-1.373, abs=0.0005)
+    assert bc["lean_mass_change_kg"] == pytest.approx(-0.568, abs=0.0005)
+
+    derived = data["derived"]
+    assert derived["implied_deficit_kcal_per_day"] == pytest.approx(504.289, abs=0.1)
+    assert derived["implied_deficit_uncertainty_kcal_per_day"] == pytest.approx(55.664, abs=0.1)
+    assert derived["composition_derived_tdee_kcal_per_day"] == pytest.approx(2504.289, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_single_body_comp_reading(app_with_health_wellness, mock_garmin_client):
+    """With only 1 qualifying reading, no TDEE is derived -- just a note."""
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([("2024-01-01", 2000, 3)]),
+        _energy_balance_calories_resp([("2024-01-01", 2500)]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [{"calendarDate": "2024-01-01", "weight": 80000.0, "bodyFat": 20.0}]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-01"},
+    )
+    data = json.loads(result[0][0].text)
+    assert "derived" not in data
+    assert "body_composition_note" in data
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_chunks_expenditure_over_28_days(
+    app_with_health_wellness, mock_garmin_client
+):
+    """A range longer than the stats endpoint's 28-day cap is split into chunks."""
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([]),
+        _energy_balance_calories_resp([("2024-01-01", 2500)]),  # chunk 1
+        _energy_balance_calories_resp([("2024-02-05", 2600)]),  # chunk 2
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-02-05"},  # 36 days
+    )
+    data = json.loads(result[0][0].text)
+    assert mock_garmin_client.connectapi.call_count == 3
+    assert data["expenditure_garmin"]["days_included"] == 2
+    assert data["expenditure_garmin"]["mean_total_calories_per_day"] == 2550.0
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_rejects_oversized_range(app_with_health_wellness, mock_garmin_client):
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-04-01"},
+    )
+    assert "too large" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_rejects_inverted_range(app_with_health_wellness, mock_garmin_client):
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-15", "end_date": "2024-01-01"},
+    )
+    assert "end_date must be on or after start_date" in result[0][0].text
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_no_usable_data(app_with_health_wellness, mock_garmin_client):
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([]),
+        _energy_balance_calories_resp([]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-03"},
+    )
+    assert "No usable data found" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_error(app_with_health_wellness, mock_garmin_client):
+    mock_garmin_client.connectapi.side_effect = Exception("API error")
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": "2024-01-01", "end_date": "2024-01-03"},
+    )
+    assert "Error retrieving energy balance data" in result[0][0].text
+
+
 @pytest.mark.asyncio
 async def test_get_user_summary_tool(app_with_health_wellness, mock_garmin_client):
     """Test get_user_summary tool returns user summary data"""

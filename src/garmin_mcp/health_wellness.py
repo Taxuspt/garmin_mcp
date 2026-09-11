@@ -89,6 +89,147 @@ def _extract_sleep_summary(sleep_data: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in summary.items() if v is not None}
 
 
+def _iter_date_chunks(
+    start: datetime.date, end: datetime.date, max_days: int
+) -> List[tuple]:
+    """Split [start, end] into consecutive inclusive windows of at most max_days."""
+    chunks = []
+    chunk_start = start
+    while chunk_start <= end:
+        chunk_end = min(end, chunk_start + datetime.timedelta(days=max_days - 1))
+        chunks.append((chunk_start, chunk_end))
+        chunk_start = chunk_end + datetime.timedelta(days=1)
+    return chunks
+
+
+def _fetch_daily_calories(
+    client: Any, start: datetime.date, end: datetime.date
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch per-day total calories from Garmin, chunked under its 28-day cap.
+
+    Returns a dict keyed by ISO date string; a date absent from the result had
+    no data in Garmin (future date, or before the account existed).
+    """
+    STATS_CHUNK_DAYS = 28
+    by_date: Dict[str, Dict[str, Any]] = {}
+    for chunk_start, chunk_end in _iter_date_chunks(start, end, STATS_CHUNK_DAYS):
+        url = f"/usersummary-service/stats/daily/{chunk_start.isoformat()}/{chunk_end.isoformat()}"
+        resp = client.connectapi(url, params={"statsType": "CALORIES"})
+        for entry in (resp or {}).get("values") or []:
+            date_str = entry.get("calendarDate")
+            if date_str:
+                by_date[date_str] = entry.get("values") or {}
+    return by_date
+
+
+def _fetch_daily_intake(
+    client: Any, start: datetime.date, end: datetime.date
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch per-day logged calories and item count from Garmin's nutrition range endpoint.
+
+    Returns a dict keyed by ISO date string; a date with item_count 0 had no
+    logged food.
+    """
+    resp = client.connectapi(
+        "/nutrition-service/food/logs/range",
+        params={"startDate": start.isoformat(), "endDate": end.isoformat()},
+    )
+    by_date: Dict[str, Dict[str, Any]] = {}
+    for day in (resp or {}).get("dailyNutritionSummaries") or []:
+        date_str = day.get("mealDate")
+        if not date_str:
+            continue
+        content = day.get("dailyNutritionContent") or {}
+        item_count = sum(
+            len(meal.get("loggedFoods") or [])
+            for meal in (day.get("mealDetails") or [])
+        )
+        by_date[date_str] = {"calories": content.get("calories"), "item_count": item_count}
+    return by_date
+
+
+def _linear_fit(xs: List[float], ys: List[float]) -> Optional[Dict[str, float]]:
+    """Ordinary least-squares fit of ys against xs. Returns slope, intercept,
+    and (when there are more than 2 points) the standard error of the slope.
+
+    Used to derive a body-composition trend from all qualifying readings in
+    a window instead of just the earliest and latest -- the latter is fully
+    determined by two individual measurements and inherits all their noise.
+    """
+    n = len(xs)
+    if n < 2:
+        return None
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    if sxx == 0:
+        return None
+    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    slope = sxy / sxx
+    intercept = mean_y - slope * mean_x
+
+    se_slope = None
+    if n > 2:
+        sse = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
+        dof = n - 2
+        if dof > 0:
+            se_slope = (sse / dof / sxx) ** 0.5
+
+    return {"slope": slope, "intercept": intercept, "se_slope": se_slope, "n": n}
+
+
+def _body_comp_gate_failure(xs: List[float]) -> Optional[str]:
+    """Check whether body-composition readings are well-conditioned enough to
+    fit a trend from, beyond just having 2+ of them.
+
+    Two failure modes, either of which makes a fitted trend unreliable even
+    though the arithmetic still "works":
+    - The readings don't span enough time for a real trend to be
+      distinguishable from ordinary day-to-day water-weight noise.
+    - Most of the fit's statistical leverage sits in one tight cluster of
+      readings taken within ~48h of each other. A close, low-noise pair
+      inside that cluster can make the fit's residual (and therefore its
+      reported uncertainty) look small, while the slope is still mostly an
+      extrapolation from that cluster to wherever the other reading(s) are --
+      exactly the failure mode a naive `n > 2` check misses.
+    """
+    n = len(xs)
+    MIN_SPAN_DAYS = 21
+    span = max(xs) - min(xs)
+    if span < MIN_SPAN_DAYS:
+        return (
+            f"readings span only {span} days; need at least {MIN_SPAN_DAYS} to "
+            f"separate a real trend from water-weight noise"
+        )
+
+    mean_x = sum(xs) / n
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    if sxx == 0:
+        return "all readings fall on the same day"
+
+    leverages = [1 / n + (x - mean_x) ** 2 / sxx for x in xs]
+    total_leverage = sum(leverages)  # == 2 for a 2-parameter fit
+
+    # Cluster readings whose day-offsets sit within 2 days of a neighbor.
+    order = sorted(range(n), key=lambda i: xs[i])
+    clusters: List[List[int]] = []
+    for idx in order:
+        if clusters and xs[idx] - xs[clusters[-1][-1]] <= 2:
+            clusters[-1].append(idx)
+        else:
+            clusters.append([idx])
+
+    max_cluster_leverage = max(sum(leverages[i] for i in c) for c in clusters)
+    if max_cluster_leverage > total_leverage / 2:
+        return (
+            f"a single cluster of readings within 48h of each other accounts for "
+            f"{max_cluster_leverage / total_leverage:.0%} of the fit's statistical "
+            f"leverage -- the trend across the full window is not reliably "
+            f"distinguishable from noise in that cluster alone"
+        )
+    return None
+
+
 def register_tools(app):
     """Register all health and wellness tools with the MCP server app"""
 
@@ -257,6 +398,291 @@ def register_tools(app):
             "end_date": end_date,
             "days": daily,
         }, indent=2)
+
+    @app.tool()
+    async def get_energy_balance(start_date: str, end_date: str) -> str:
+        """Estimate a composition-derived TDEE from logged intake, Garmin's
+        claimed expenditure, and body-composition change over a date range.
+
+        Combines three signals Garmin exposes separately -- mean logged intake
+        (nutrition log), mean claimed expenditure (Garmin's total_calories from
+        daily stats), and a body-composition trend (weight and body-fat % from
+        smart-scale readings) -- into composition_derived_tdee, an estimate
+        independent of Garmin's calorie model:
+        composition_derived_tdee = mean_intake + implied_deficit, where
+        implied_deficit comes from the fitted rate of fat and fat-free mass
+        change, using the standard energy-density approximations
+        7700 kcal/kg fat and 1800 kcal/kg fat-free mass. These are body
+        composition literature estimates, not Garmin-provided or measured
+        values -- treat the result as a rough estimate, not a lab measurement.
+        difference_kcal_per_day (Garmin's claim minus this estimate) has at
+        least two explanations -- Garmin overestimating expenditure, or
+        under-logged intake, which is common -- and this tool cannot
+        distinguish between them.
+
+        The body-composition trend is fit by least-squares regression across
+        every qualifying scale reading in range, not just the first and last --
+        an endpoint-to-endpoint difference is fully determined by two
+        individual measurements and inherits all of their noise (a 0.5%
+        body-fat wobble, well within normal scale repeatability, can swing a
+        two-point estimate by over a hundred kcal/day). weight_change_kg,
+        fat_mass_change_kg, and lean_mass_change_kg in body_composition are
+        all fitted values (the fitted line's value at the last reading's day
+        offset minus its value at the first), not raw differences between the
+        observed_first_*/observed_last_* fields, which are the actual
+        readings for reference/sanity-checking, not what the change figures
+        are computed from -- fitted_first_weight_kg/fitted_last_weight_kg are
+        also included so fitted_last_weight_kg - fitted_first_weight_kg can be
+        checked against weight_change_kg directly.
+
+        implied_deficit_kcal_per_day is the slope of a single regression: for
+        each reading, compute -(fat_kg * 7700 + lean_kg * 1800) where
+        lean_kg = weight_kg - fat_kg, then fit that value against day offset.
+        This is mathematically identical to combining separately-fit fat and
+        lean slopes, but its standard error -- implied_deficit_uncertainty_kcal_per_day,
+        returned whenever more than 2 readings are used -- is that single
+        fit's own residual standard error, which is well-defined and
+        reproducible from the raw readings alone (fat_kg and lean_kg are both
+        derived from the same weight/body-fat pair per reading, so treating
+        their separately-fit slopes' errors as independent and combining them
+        after the fact, instead of fitting the combined series directly,
+        would not be reproducible from outside without also knowing that
+        assumption). Treat a deficit within roughly one standard error of
+        zero as indistinguishable from no change.
+
+        Below a minimum span, or when most of the fit's statistical leverage
+        sits in one tight cluster of readings taken within about 48 hours of
+        each other, the fitted trend is not reliable even with 3+ readings --
+        a close, low-noise pair inside that cluster makes the fit look
+        precise while the slope is still mostly an extrapolation from that
+        cluster to wherever the other reading(s) fall. When this gate fails,
+        body_composition is still returned (it's just the fitted line, always
+        checkable against the observed readings) but derived is omitted and
+        gate_note explains which condition failed. Prefer windows of 3+ weeks
+        with several readings spread across them, not clustered at one end.
+
+        Short windows are also dominated by water/glycogen shifts (which
+        carry little caloric weight, unlike true lean tissue), which biases
+        the fat-free-mass term; see assumptions.note.
+
+        Exclusions applied automatically, matching get_nutrition_summary_between_dates
+        and get_stats_range:
+        - Intake: days with no logged food (item_count 0) are excluded from
+          the mean, not counted as zero. Days with a low but nonzero
+          item_count remain included (excluding them requires judgment this
+          tool doesn't make unilaterally) but are called out in
+          low_item_count_dates so low-confidence days are visible rather than
+          silently blended into the mean. A window with many such days (or
+          many item_count-0 days) biases composition_derived_tdee downward --
+          check days_excluded_unlogged and low_item_count_dates before
+          comparing two windows against each other.
+        - Expenditure: days with no device data, and the current (partial)
+          day, are excluded from the mean.
+        - Body composition: only scale readings with both weight and body-fat
+          percentage are used (skips weight-only manual entries).
+
+        Needs at least 2 qualifying body-composition readings to derive a
+        trend, and to pass the span/leverage gate above to derive a TDEE from
+        it. With 0 or 1 readings, returns the intake/expenditure means and
+        whatever body composition data exists, but omits the derived TDEE.
+
+        Maximum range: 61 days per call.
+
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+        """
+        MAX_DAYS = 61
+        FAT_KCAL_PER_KG = 7700
+        LEAN_MASS_KCAL_PER_KG = 1800
+        LOW_ITEM_COUNT_THRESHOLD = 3
+        try:
+            start = datetime.date.fromisoformat(start_date)
+            end = datetime.date.fromisoformat(end_date)
+        except ValueError as e:
+            return f"Invalid date format: {e}. Use YYYY-MM-DD."
+
+        days_requested = (end - start).days + 1
+        if days_requested < 1:
+            return "end_date must be on or after start_date."
+        if days_requested > MAX_DAYS:
+            return f"Date range too large ({days_requested} days). Maximum is {MAX_DAYS} days."
+
+        try:
+            intake_by_date = _fetch_daily_intake(garmin_client, start, end)
+            expenditure_by_date = _fetch_daily_calories(garmin_client, start, end)
+            body_comp = garmin_client.get_body_composition(start_date, end_date)
+        except Exception as e:
+            return f"Error retrieving energy balance data: {str(e)}"
+
+        today = datetime.date.today().isoformat()
+
+        logged_days = [
+            (date_str, v["calories"]) for date_str, v in intake_by_date.items()
+            if v.get("item_count", 0) > 0 and v.get("calories") is not None
+        ]
+        intake_days_included = len(logged_days)
+        mean_intake = (
+            sum(c for _, c in logged_days) / intake_days_included if intake_days_included else None
+        )
+        low_item_count_dates = sorted(
+            date_str for date_str, v in intake_by_date.items()
+            if 0 < v.get("item_count", 0) < LOW_ITEM_COUNT_THRESHOLD
+        )
+
+        expenditure_values = [
+            v["totalCalories"] for date_str, v in expenditure_by_date.items()
+            if date_str != today and v.get("totalCalories") is not None
+        ]
+        expenditure_days_included = len(expenditure_values)
+        mean_expenditure = (
+            sum(expenditure_values) / expenditure_days_included if expenditure_days_included else None
+        )
+
+        # Only readings with both weight and body fat % are usable.
+        readings = []
+        for entry in (body_comp or {}).get("dateWeightList") or []:
+            date_str = entry.get("calendarDate")
+            weight_g = entry.get("weight")
+            body_fat_pct = entry.get("bodyFat")
+            if date_str and weight_g is not None and body_fat_pct is not None:
+                readings.append((date_str, weight_g, body_fat_pct))
+        readings.sort(key=lambda r: r[0])
+
+        result: Dict[str, Any] = {
+            "start_date": start_date,
+            "end_date": end_date,
+            "days_requested": days_requested,
+            "intake": {
+                "mean_calories_per_day": round(mean_intake, 1) if mean_intake is not None else None,
+                "days_included": intake_days_included,
+                "days_excluded_unlogged": days_requested - intake_days_included,
+                "low_item_count_dates": low_item_count_dates,
+            },
+            "expenditure_garmin": {
+                "mean_total_calories_per_day": round(mean_expenditure, 1) if mean_expenditure is not None else None,
+                "days_included": expenditure_days_included,
+                "days_excluded": days_requested - expenditure_days_included,
+            },
+        }
+
+        if len(readings) >= 2:
+            first_date = readings[0][0]
+            last_date = readings[-1][0]
+            day_zero = datetime.date.fromisoformat(first_date)
+            xs = [(datetime.date.fromisoformat(d) - day_zero).days for d, _, _ in readings]
+            observed_weight_kg = [w / 1000 for _, w, _ in readings]
+            observed_body_fat_pct = [bf for _, _, bf in readings]
+            fat_kg_series = [w * bf / 100 for w, bf in zip(observed_weight_kg, observed_body_fat_pct)]
+            span_days = xs[-1] - xs[0]
+
+            weight_fit = _linear_fit(xs, observed_weight_kg)
+            fat_fit = _linear_fit(xs, fat_kg_series)
+
+            result["body_composition"] = {
+                "readings_used": len(readings),
+                "first_reading_date": first_date,
+                "last_reading_date": last_date,
+                "days_between_readings": span_days,
+                "observed_first_weight_kg": round(observed_weight_kg[0], 2),
+                "observed_last_weight_kg": round(observed_weight_kg[-1], 2),
+                "observed_first_body_fat_percent": observed_body_fat_pct[0],
+                "observed_last_body_fat_percent": observed_body_fat_pct[-1],
+            }
+
+            gate_failure = _body_comp_gate_failure(xs)
+
+            if weight_fit and fat_fit and span_days >= 1:
+                fat_change_kg = fat_fit["slope"] * span_days
+                weight_change_kg = weight_fit["slope"] * span_days
+                lean_change_kg = weight_change_kg - fat_change_kg
+                result["body_composition"].update({
+                    "fitted_first_weight_kg": round(weight_fit["intercept"] + weight_fit["slope"] * xs[0], 2),
+                    "fitted_last_weight_kg": round(weight_fit["intercept"] + weight_fit["slope"] * xs[-1], 2),
+                    "weight_change_kg": round(weight_change_kg, 2),
+                    "fat_mass_change_kg": round(fat_change_kg, 3),
+                    "lean_mass_change_kg": round(lean_change_kg, 3),
+                })
+
+                if gate_failure:
+                    result["gate_note"] = f"Derived TDEE suppressed: {gate_failure}"
+                elif mean_intake is not None:
+                    # implied_deficit is the slope of a single regression of the
+                    # per-reading implied-deficit value against day offset --
+                    # not two slopes combined after the fact -- so its standard
+                    # error is that one fit's own residual SE, not an assumed-
+                    # independent combination of two correlated fits' errors
+                    # (fat_kg and lean_kg are both derived from the same
+                    # weight/body-fat pair per reading, so they are not
+                    # independent).
+                    deficit_series = [
+                        -(fat_kg * FAT_KCAL_PER_KG + (w - fat_kg) * LEAN_MASS_KCAL_PER_KG)
+                        for w, fat_kg in zip(observed_weight_kg, fat_kg_series)
+                    ]
+                    deficit_fit = _linear_fit(xs, deficit_series)
+                    implied_deficit = deficit_fit["slope"]
+                    measured_tdee = mean_intake + implied_deficit
+
+                    derived: Dict[str, Any] = {
+                        "implied_deficit_kcal_per_day": round(implied_deficit, 1),
+                        "implied_deficit_uncertainty_kcal_per_day": (
+                            round(deficit_fit["se_slope"], 1) if deficit_fit["se_slope"] is not None else None
+                        ),
+                        "composition_derived_tdee_kcal_per_day": round(measured_tdee, 1),
+                        "garmin_tdee_kcal_per_day": (
+                            round(mean_expenditure, 1) if mean_expenditure is not None else None
+                        ),
+                        "difference_kcal_per_day": (
+                            round(mean_expenditure - measured_tdee, 1)
+                            if mean_expenditure is not None else None
+                        ),
+                    }
+                    if deficit_fit["se_slope"] is None:
+                        derived["uncertainty_note"] = (
+                            "Only 2 readings -- no residual variance to estimate uncertainty from. "
+                            "More readings in range would let this be quantified."
+                        )
+
+                    derived["note"] = (
+                        "composition_derived_tdee is a model estimate, not ground truth. "
+                        "difference_kcal_per_day is not attributable to Garmin's model or to "
+                        "under-logged intake without independent validation of either. A window "
+                        "with a high days_excluded_unlogged count biases this estimate downward, "
+                        "since under-logged days pull down the intake mean it's built from."
+                    )
+                    result["derived"] = derived
+                    result["assumptions"] = {
+                        "fat_kcal_per_kg": FAT_KCAL_PER_KG,
+                        "lean_mass_kcal_per_kg": LEAN_MASS_KCAL_PER_KG,
+                        "note": "Standard energy-density approximations from body-composition "
+                                "literature, not Garmin-provided or measured constants. Fat-free "
+                                "mass change over short windows is often water/glycogen rather than "
+                                "structural tissue, which carries little caloric weight -- this "
+                                "biases lean_mass_kcal_per_kg high for short windows.",
+                    }
+                else:
+                    result["derived_note"] = (
+                        "Body composition trend fit but no qualifying intake days to derive a TDEE from."
+                    )
+            else:
+                result["derived_note"] = (
+                    "Body composition readings found but a trend could not be fit "
+                    "(readings span zero days)."
+                )
+        elif readings:
+            result["body_composition_note"] = (
+                f"Only 1 qualifying body-composition reading (weight + body fat %) in range, "
+                f"on {readings[0][0]}. Need at least 2 to fit a trend."
+            )
+        else:
+            result["body_composition_note"] = (
+                "No body-composition readings with both weight and body fat % in range."
+            )
+
+        if intake_days_included == 0 and expenditure_days_included == 0 and not readings:
+            return f"No usable data found between {start_date} and {end_date}."
+
+        return json.dumps(result, indent=2)
 
     @app.tool()
     async def get_user_summary(date: str) -> str:
