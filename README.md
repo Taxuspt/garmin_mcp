@@ -835,6 +835,38 @@ which uvx
 }
 ```
 
+### Windows: Smart App Control blocks `uv` / `uvx`
+
+On Windows 11 with **Smart App Control** enabled, `uv.exe` / `uvx.exe` may be blocked when launching Garmin_MCP — including when `uv` tries to load an unsigned `garmin-mcp.exe` from a local `.venv`.
+
+This is **not** the same as Microsoft Defender Antivirus quarantine. Smart App Control is under:
+
+**Windows Security → App & browser control → Smart App Control**
+
+#### Symptoms
+- Smart App Control notification when running `uv`, `uvx`, or Claude Desktop with `command: "uvx"`
+- Claude Desktop fails to spawn the server even though `uvx` appears installed
+- Event Viewer → *Applications and Services Logs* → *Microsoft* → *Windows* → *CodeIntegrity* → *Operational* shows **CodeIntegrity Error 3077** mentioning `uv.exe` and `garmin-mcp.exe` (policy / Enterprise signing level)
+
+#### Confirm
+1. Smart App Control is **On** (Evaluation or Enforcement).
+2. Check the CodeIntegrity Operational log for event **3077** around the failed launch.
+3. Defender “Virus & threat protection” history may be empty — that does not rule SAC out.
+
+#### Recoveries (prefer keeping Smart App Control on)
+1. Install or reinstall `uv` via a packaged channel, then verify in PowerShell:
+   ```powershell
+   winget install --id=astral-sh.uv -e
+   # or: scoop install main/uv
+   uvx --version
+   ```
+2. Point Claude Desktop at the full path to `uvx.exe` (same idea as the PATH troubleshooting above), for example:
+   ```json
+   "command": "C:\\Users\\<you>\\.local\\bin\\uvx.exe"
+   ```
+3. If Enforcement still blocks loading `garmin-mcp.exe`, you may need an admin/policy exception for that binary path. Turning Smart App Control off globally is a last resort, not the default advice.
+4. If local uvx remains blocked, use the Docker Compose install path instead.
+
 ### Login Issues
 
 If you encounter login issues:
