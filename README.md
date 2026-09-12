@@ -882,6 +882,17 @@ Once connected in Claude, you can ask questions like:
 
 ## Troubleshooting
 
+### `get_training_effect` returns HTTP 403 for a valid activity
+
+Garmin's activity-details endpoint (`/activity-service/activity/{id}`) can
+return **403 Forbidden** even when the same activity is visible in list tools.
+`get_training_effect` now falls back to activity list search, which still
+includes aerobic/anaerobic training effect for recent activities.
+
+If the activity is older than the recent-search window, list the activity with
+`get_activities` / `get_activities_by_date` and retry, or use those list fields
+directly.
+
 ### "Failed to spawn process: No such file or directory"
 
 If Claude Desktop can't find `uvx`, it's because `uvx` is not in the PATH that Claude Desktop uses. To fix this:
