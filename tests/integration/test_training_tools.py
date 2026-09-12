@@ -170,6 +170,12 @@ async def test_get_training_effect_tool(app_with_training, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.get_activity.assert_called_once_with(12345678901)
+    data = json.loads(result[0][0].text)
+    assert data["training_effect"] == 3.5
+    assert data["aerobic_effect"] == 3.5
+    assert data["anaerobic_effect"] == 2.0
+    assert data["recovery_time_hours"] == 12.0
+    assert data["source"] == "activity_details"
 
 
 @pytest.mark.asyncio
@@ -882,6 +888,64 @@ async def test_get_training_effect_exception(app_with_training, mock_garmin_clie
 
     # Verify error is handled gracefully
     assert result is not None
+    assert "Error retrieving training effect data" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_get_training_effect_falls_back_to_activity_list_on_403(
+    app_with_training, mock_garmin_client
+):
+    """HTTP 403 on activity details should still return list-search training effect."""
+    mock_garmin_client.get_activity.side_effect = Exception(
+        "HTTP error: API Error 403 - HTTP 403 Forbidden"
+    )
+    mock_garmin_client.garmin_connect_activities = (
+        "/activitylist-service/activities/search/activities"
+    )
+    mock_garmin_client.connectapi.return_value = [
+        {
+            "activityId": 12345678901,
+            "aerobicTrainingEffect": 3.2,
+            "anaerobicTrainingEffect": 0.4,
+            "aerobicTrainingEffectMessage": "IMPROVING_AEROBIC_BASE_8",
+            "activityTrainingLoad": 140,
+        }
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_training_effect",
+        {"activity_id": 12345678901},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["source"] == "activity_list"
+    assert data["training_effect"] == 3.2
+    assert data["anaerobic_effect"] == 0.4
+    assert data["training_load"] == 140
+
+
+@pytest.mark.asyncio
+async def test_get_training_effect_403_without_list_match(
+    app_with_training, mock_garmin_client
+):
+    """If details 403 and the activity is not in recent search, surface the 403."""
+    mock_garmin_client.get_activity.side_effect = Exception(
+        "HTTP error: API Error 403 - HTTP 403 Forbidden"
+    )
+    mock_garmin_client.garmin_connect_activities = (
+        "/activitylist-service/activities/search/activities"
+    )
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_activities.return_value = []
+
+    result = await app_with_training.call_tool(
+        "get_training_effect",
+        {"activity_id": 12345678901},
+    )
+
+    text = result[0][0].text
+    assert "HTTP 403" in text
+    assert "12345678901" in text
 
 
 @pytest.mark.asyncio

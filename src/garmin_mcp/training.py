@@ -123,6 +123,141 @@ def _get_max_metrics_range(
     return True, connectapi(f"{metrics_url}/{start_date}/{end_date}")
 
 
+def _is_forbidden_error(exc: Exception) -> bool:
+    """True when Garmin rejected the call with HTTP 403 Forbidden."""
+    text = str(exc).lower()
+    return "403" in text or "forbidden" in text
+
+
+def _first_present(mapping: Any, *keys: str) -> Any:
+    """Return the first non-None value for keys on a mapping-like object."""
+    data = _as_dict(mapping)
+    for key in keys:
+        value = data.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _activity_id_matches(item: Any, activity_id: int) -> bool:
+    """Compare Garmin activityId values that may arrive as int or str."""
+    raw = _as_dict(item).get("activityId")
+    try:
+        return int(raw) == int(activity_id)
+    except (TypeError, ValueError):
+        return str(raw) == str(activity_id)
+
+
+def _as_activity_list(payload: Any) -> List[Dict[str, Any]]:
+    """Normalize activity-search payloads to a list of dicts."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    data = _as_dict(payload)
+    for key in ("activityList", "activities"):
+        nested = data.get(key)
+        if isinstance(nested, list):
+            return [item for item in nested if isinstance(item, dict)]
+    return []
+
+
+def _lookup_activity_in_list(client: Any, activity_id: int, limit: int = 100):
+    """Find an activity in the list-search endpoint, which often works when details 403.
+
+    Garmin's `/activity-service/activity/{id}` endpoint returns HTTP 403 for some
+    valid, recently synced activities. The list search used by get_activities
+    still includes aerobic/anaerobic training effect on those same records.
+    """
+    url = getattr(
+        client,
+        "garmin_connect_activities",
+        "/activitylist-service/activities/search/activities",
+    )
+    connectapi = getattr(client, "connectapi", None)
+    search_attempts: List[Dict[str, str]] = [
+        {"activityIds": str(activity_id), "start": "0", "limit": "1"},
+        {"start": "0", "limit": str(limit)},
+    ]
+    if callable(connectapi):
+        for params in search_attempts:
+            try:
+                payload = connectapi(url, params=params)
+            except Exception:
+                continue
+            match = next(
+                (
+                    item
+                    for item in _as_activity_list(payload)
+                    if _activity_id_matches(item, activity_id)
+                ),
+                None,
+            )
+            if match is not None:
+                return match
+
+    get_activities = getattr(client, "get_activities", None)
+    if callable(get_activities):
+        try:
+            payload = get_activities(0, limit)
+        except Exception:
+            payload = None
+        return next(
+            (
+                item
+                for item in _as_activity_list(payload)
+                if _activity_id_matches(item, activity_id)
+            ),
+            None,
+        )
+    return None
+
+
+def _minutes_to_hours(value: Any) -> Optional[float]:
+    """Convert Garmin recovery minutes to hours, or None if missing/invalid."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if value <= 0 or not math.isfinite(value):
+        return None
+    return round(value / 60.0, 1)
+
+
+def _curate_training_effect(
+    activity: Any, activity_id: int, source: str
+) -> Dict[str, Any]:
+    """Pull training-effect fields from either details or list-search shapes."""
+    activity = _as_dict(activity)
+    summary = _as_dict(activity.get("summaryDTO"))
+    aerobic = _first_present(
+        summary, "trainingEffect", "aerobicTrainingEffect"
+    ) or _first_present(activity, "aerobicTrainingEffect", "trainingEffect")
+    anaerobic = _first_present(summary, "anaerobicTrainingEffect") or _first_present(
+        activity, "anaerobicTrainingEffect"
+    )
+    label = _first_present(summary, "trainingEffectLabel") or _first_present(
+        activity, "trainingEffectLabel", "aerobicTrainingEffectMessage"
+    )
+    recovery = _first_present(summary, "recoveryTime") or _first_present(
+        activity, "recoveryTime"
+    )
+    load = _first_present(summary, "activityTrainingLoad") or _first_present(
+        activity, "activityTrainingLoad"
+    )
+    performance = _first_present(summary, "performanceCondition") or _first_present(
+        activity, "performanceCondition"
+    )
+    curated = {
+        "activity_id": activity_id,
+        "source": source,
+        "training_effect": aerobic,
+        "aerobic_effect": aerobic,
+        "anaerobic_effect": anaerobic,
+        "training_effect_label": label,
+        "recovery_time_hours": _minutes_to_hours(recovery),
+        "training_load": load,
+        "performance_condition": performance,
+    }
+    return {key: value for key, value in curated.items() if value is not None}
+
+
 def _build_vo2_trend_series(
     history: List[Dict[str, Any]], end_date: datetime.date
 ) -> List[Dict[str, Any]]:
@@ -455,46 +590,48 @@ def register_tools(app):
 
     @app.tool()
     async def get_training_effect(activity_id: int) -> str:
-        """Get training effect data for a specific activity
+        """Get training effect data for a specific activity.
+
+        Uses activity details first. If Garmin returns HTTP 403 for that
+        endpoint (seen on valid, recent activities), falls back to activity
+        list search, which still includes aerobic/anaerobic training effect.
 
         Args:
             activity_id: ID of the activity to retrieve training effect for
         """
         try:
-            # Training effect data is available through get_activity
-            # The garminconnect library doesn't have a separate get_training_effect method
+            activity_id = int(activity_id)
+        except (TypeError, ValueError):
+            return f"Invalid activity ID: {activity_id}"
+
+        source = "activity_details"
+        detail_error: Optional[Exception] = None
+        try:
             activity = garmin_client.get_activity(activity_id)
+        except Exception as e:
+            if not _is_forbidden_error(e):
+                return f"Error retrieving training effect data: {e}"
+            activity = None
+            detail_error = e
+
+        if not activity:
+            source = "activity_list"
+            try:
+                activity = _lookup_activity_in_list(garmin_client, activity_id)
+            except Exception as e:
+                return f"Error retrieving training effect data: {e}"
             if not activity:
+                if detail_error is not None:
+                    return (
+                        "Error retrieving training effect data: Garmin returned HTTP 403 "
+                        f"for activity {activity_id} details, and the activity was not "
+                        "found in recent activity search."
+                    )
                 return f"No activity found with ID {activity_id}."
 
-            # Extract training effect data from activity summary
-            summary = activity.get("summaryDTO", {})
-
-            # Curate to essential fields only
-            curated = {
-                "activity_id": activity_id,
-                "training_effect": summary.get("trainingEffect"),
-                "aerobic_effect": summary.get("trainingEffect"),
-                "anaerobic_effect": summary.get("anaerobicTrainingEffect"),
-                "training_effect_label": summary.get("trainingEffectLabel"),
-                # Recovery metrics
-                "recovery_time_hours": (
-                    round(summary.get("recoveryTime", 0) / 60, 1)
-                    if summary.get("recoveryTime")
-                    else None
-                ),
-                # Training load
-                "training_load": summary.get("activityTrainingLoad"),
-                # Additional metrics that may be available
-                "performance_condition": summary.get("performanceCondition"),
-            }
-
-            # Remove None values
-            curated = {k: v for k, v in curated.items() if v is not None}
-
-            return json.dumps(curated, indent=2)
-        except Exception as e:
-            return f"Error retrieving training effect data: {str(e)}"
+        return json.dumps(
+            _curate_training_effect(activity, activity_id, source), indent=2
+        )
 
     @app.tool()
     async def get_hrv_data(date: str, return_timeseries: bool = False) -> str:
