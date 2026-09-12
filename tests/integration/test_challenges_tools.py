@@ -79,6 +79,42 @@ async def test_get_goals_future(app_with_challenges, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_goals_returns_connect_ui_cycling_goal(
+    app_with_challenges, mock_garmin_client
+):
+    """Connect UI goals are returned even when the legacy status filter is empty."""
+    mock_garmin_client.garmin_connect_goals_url = "/goal-service/goal/goals"
+    mock_garmin_client.connectapi.return_value = [
+        {
+            "id": 1,
+            "name": "GCC 2026",
+            "type": "distance_accumulation",
+            "distanceInMeters": 160934.4,
+            "startDate": "2026-01-01",
+            "endDate": "2026-12-31",
+            "activityType": "cycling",
+            "period": "custom",
+            "progress": {"percent": 8, "distanceInMeters": 14016.0},
+            "remaining": {"percent": 92, "days": 22, "distanceInMeters": 146918.4},
+            "active": True,
+            "completed": False,
+        }
+    ]
+    mock_garmin_client.get_goals.return_value = []
+
+    result = await app_with_challenges.call_tool(
+        "get_goals",
+        {"goal_type": "active"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data[0]["name"] == "GCC 2026"
+    assert data[0]["activity_type"] == "cycling"
+    assert data[0]["progress_percent"] == 8
+    mock_garmin_client.get_goals.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_personal_record_tool(app_with_challenges, mock_garmin_client):
     """Test get_personal_record tool returns personal records"""
     # Setup mock

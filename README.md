@@ -882,6 +882,14 @@ Once connected in Claude, you can ask questions like:
 
 ## Troubleshooting
 
+### `get_goals` returns no goals that exist in Garmin Connect
+
+Garmin Connect's current Goals UI (named distance/time targets such as a
+100-mile cycling goal) is served by `/goal-service/goal/goals` **without**
+the older `status=active` query used by python-garminconnect. `get_goals`
+now reads that unfiltered endpoint first and falls back to the legacy
+wellness-goals API when it is empty.
+
 ### "Failed to spawn process: No such file or directory"
 
 If Claude Desktop can't find `uvx`, it's because `uvx` is not in the PATH that Claude Desktop uses. To fix this:
