@@ -232,6 +232,25 @@ async def test_get_calendar_events_ignores_non_distance_target(
 
 
 @pytest.mark.asyncio
+async def test_get_calendar_events_converts_mile_distance_to_meters(
+    app_with_calendar_events, mock_garmin_client
+):
+    """A mile completion target is reported in meters."""
+    mock_garmin_client.get_scheduled_workouts.return_value = _month(
+        _race(
+            "2026-10-17",
+            completionTarget={"value": 1.0, "unit": "mile", "unitType": "distance"},
+        )
+    )
+
+    result = await app_with_calendar_events.call_tool(
+        "get_calendar_events", {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    )
+
+    assert json.loads(_result_text(result))["events"][0]["distance_meters"] == 1609.344
+
+
+@pytest.mark.asyncio
 async def test_get_calendar_events_normalises_blank_location(
     app_with_calendar_events, mock_garmin_client
 ):
@@ -244,6 +263,138 @@ async def test_get_calendar_events_normalises_blank_location(
 
     data = json.loads(_result_text(result))
     assert data["events"][0]["location"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_calendar_events_enriches_custom_event_goal(
+    app_with_calendar_events, mock_garmin_client
+):
+    """A custom event uses its numeric id to fetch the user's time goal."""
+    mock_garmin_client.get_scheduled_workouts.return_value = _month(
+        _race(
+            "2026-10-17",
+            id=12345,
+            shareableEventUuid=None,
+            completionTarget={
+                "value": 5.0,
+                "unit": "kilometer",
+                "unitType": "distance",
+            },
+        )
+    )
+    mock_garmin_client.connectapi.return_value = {
+        "eventCustomization": {
+            "customGoal": {
+                "value": 1800.0,
+                "unit": "second",
+                "unitType": "time",
+            }
+        }
+    }
+
+    result = await app_with_calendar_events.call_tool(
+        "get_calendar_events", {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    )
+
+    event = json.loads(_result_text(result))["events"][0]
+    assert event["distance_meters"] == 5000.0
+    assert event["goal_time_seconds"] == 1800.0
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/calendar-service/event/12345"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_calendar_events_enriches_shareable_event_goal(
+    app_with_calendar_events, mock_garmin_client
+):
+    """A subscribed event uses its shareable UUID to fetch the time goal."""
+    mock_garmin_client.get_scheduled_workouts.return_value = _month(
+        _race("2026-10-17", id=None, uuid="shareable-uuid")
+    )
+    mock_garmin_client.connectapi.return_value = {
+        "eventCustomization": {
+            "customGoal": {
+                "value": 14400.0,
+                "unit": "second",
+                "unitType": "time",
+            }
+        }
+    }
+
+    result = await app_with_calendar_events.call_tool(
+        "get_calendar_events", {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    )
+
+    event = json.loads(_result_text(result))["events"][0]
+    assert event["distance_meters"] == 42195.0
+    assert event["goal_time_seconds"] == 14400.0
+    mock_garmin_client.connectapi.assert_called_once_with(
+        "/calendar-service/event/shareable-uuid/shareable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_calendar_events_ignores_non_time_custom_goal(
+    app_with_calendar_events, mock_garmin_client
+):
+    """Only second-based time goals are exposed as goal_time_seconds."""
+    mock_garmin_client.get_scheduled_workouts.return_value = _month(
+        _race("2026-10-17")
+    )
+    mock_garmin_client.connectapi.return_value = {
+        "eventCustomization": {
+            "customGoal": {
+                "value": 10.0,
+                "unit": "kilometer",
+                "unitType": "distance",
+            }
+        }
+    }
+
+    result = await app_with_calendar_events.call_tool(
+        "get_calendar_events", {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    )
+
+    assert json.loads(_result_text(result))["events"][0]["goal_time_seconds"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_calendar_events_skips_detail_without_event_identity(
+    app_with_calendar_events, mock_garmin_client
+):
+    """An event with neither id nor UUID remains usable without a detail call."""
+    mock_garmin_client.get_scheduled_workouts.return_value = _month(
+        _race("2026-10-17", id=None, shareableEventUuid=None)
+    )
+
+    result = await app_with_calendar_events.call_tool(
+        "get_calendar_events", {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    )
+
+    event = json.loads(_result_text(result))["events"][0]
+    assert event["goal_time_seconds"] is None
+    mock_garmin_client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_calendar_events_keeps_event_when_detail_fetch_fails(
+    app_with_calendar_events, mock_garmin_client
+):
+    """A missing detail response does not make the calendar list fail."""
+    mock_garmin_client.get_scheduled_workouts.return_value = _month(
+        _race("2026-10-17")
+    )
+    mock_garmin_client.connectapi.side_effect = Exception("detail unavailable")
+
+    result = await app_with_calendar_events.call_tool(
+        "get_calendar_events", {"start_date": "2026-10-01", "end_date": "2026-10-31"}
+    )
+
+    data = json.loads(_result_text(result))
+    assert data["count"] == 1
+    assert data["events"][0]["distance_meters"] == 42195.0
+    assert data["events"][0]["goal_time_seconds"] is None
 
 
 @pytest.mark.asyncio
