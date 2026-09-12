@@ -15,6 +15,174 @@ def configure(client):
     garmin_client = client
 
 
+def _as_snapshot_list(payload: Any) -> List[Dict[str, Any]]:
+    """Normalize training-readiness payloads to a list of dicts."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        return [payload]
+    return []
+
+
+def _recovery_state(remaining_hours: Optional[float], phrase: Any) -> str:
+    """Map remaining hours / Garmin change phrase to a coarse state."""
+    if phrase == "REACHED_ZERO" or remaining_hours == 0:
+        return "recovered"
+    if remaining_hours is None:
+        return "unknown"
+    if remaining_hours <= 6:
+        return "nearly_recovered"
+    if remaining_hours <= 24:
+        return "recovering"
+    return "not_recovered"
+
+
+def _hours_from_recovery_minutes(minutes: Any, phrase: Any = None) -> Optional[float]:
+    """Convert Garmin recovery minutes to hours.
+
+    When ``recoveryTimeChangePhrase`` is ``REACHED_ZERO``, Garmin keeps the last
+    assigned minute value even though the clock has drained to zero.
+    """
+    if phrase == "REACHED_ZERO":
+        return 0.0
+    if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
+        return None
+    if minutes < 0:
+        return None
+    return round(float(minutes) / 60.0, 1)
+
+
+def _recovery_from_readiness(payload: Any, source: str) -> Optional[Dict[str, Any]]:
+    """Build a recovery-time payload from training-readiness snapshots."""
+    snapshots = _as_snapshot_list(payload)
+    if not snapshots:
+        return None
+    latest = max(
+        snapshots,
+        key=lambda item: str(item.get("timestampLocal") or item.get("timestamp") or ""),
+    )
+    phrase = latest.get("recoveryTimeChangePhrase")
+    hours = _hours_from_recovery_minutes(latest.get("recoveryTime"), phrase)
+    if hours is None:
+        return None
+    score = latest.get("score")
+    if score is None:
+        score = latest.get("readinessScore")
+    curated = {
+        "remaining_hours": hours,
+        "recovery_score": score,
+        "state": _recovery_state(hours, phrase),
+        "source": source,
+        "date": latest.get("calendarDate"),
+        "timestamp": latest.get("timestampLocal") or latest.get("timestamp"),
+        "change_phrase": phrase,
+        "level": latest.get("level") or latest.get("readinessLevel"),
+    }
+    return {key: value for key, value in curated.items() if value is not None}
+
+
+def _activity_end_utc(activity: Dict[str, Any]) -> Optional[datetime.datetime]:
+    """Estimate activity end time from list-search fields."""
+    begin = activity.get("beginTimestamp")
+    duration = activity.get("duration") or activity.get("elapsedDuration") or 0
+    try:
+        duration_s = float(duration)
+    except (TypeError, ValueError):
+        duration_s = 0.0
+    if isinstance(begin, (int, float)) and not isinstance(begin, bool) and begin > 0:
+        start = datetime.datetime.fromtimestamp(begin / 1000.0, tz=datetime.timezone.utc)
+        return start + datetime.timedelta(seconds=duration_s)
+    return None
+
+
+def _recovery_from_recent_activities(
+    client: Any, now: datetime.datetime
+) -> Optional[Dict[str, Any]]:
+    """Decay activity-assigned recoveryTime when Training Readiness is absent."""
+    get_activities = getattr(client, "get_activities", None)
+    if not callable(get_activities):
+        return None
+    try:
+        items = get_activities(0, 20)
+    except Exception:
+        return None
+    if not isinstance(items, list):
+        return None
+
+    best: Optional[Dict[str, Any]] = None
+    best_end: Optional[datetime.datetime] = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        recovery = item.get("recoveryTime")
+        if isinstance(recovery, bool) or not isinstance(recovery, (int, float)):
+            continue
+        end = _activity_end_utc(item)
+        if end is None:
+            continue
+        elapsed_min = max(0.0, (now - end).total_seconds() / 60.0)
+        remaining_hours = round(max(0.0, float(recovery) - elapsed_min) / 60.0, 1)
+        if best_end is None or end > best_end:
+            best_end = end
+            best = {
+                "remaining_hours": remaining_hours,
+                "recovery_score": None,
+                "state": _recovery_state(remaining_hours, None),
+                "source": "recent_activity",
+                "activity_id": item.get("activityId"),
+                "activity_name": item.get("activityName"),
+            }
+    if best is None:
+        return None
+    return {key: value for key, value in best.items() if value is not None}
+
+
+def _safe_call(fn: Any, *args: Any) -> Any:
+    try:
+        return fn(*args)
+    except Exception:
+        return None
+
+
+def _collect_recovery_time(
+    client: Any, date_str: str, now: Optional[datetime.datetime] = None
+) -> Dict[str, Any]:
+    """Resolve daily recovery-time remaining from readiness, then activities."""
+    readiness = _safe_call(getattr(client, "get_training_readiness", None), date_str)
+    curated = _recovery_from_readiness(readiness, "training_readiness")
+    if curated:
+        curated.setdefault("date", date_str)
+        return curated
+
+    morning = _safe_call(
+        getattr(client, "get_morning_training_readiness", None), date_str
+    )
+    curated = _recovery_from_readiness(morning, "morning_training_readiness")
+    if curated:
+        curated.setdefault("date", date_str)
+        return curated
+
+    if now is None:
+        now = datetime.datetime.now(datetime.timezone.utc)
+    curated = _recovery_from_recent_activities(client, now)
+    if curated:
+        curated.setdefault("date", date_str)
+        return curated
+
+    return {
+        "remaining_hours": None,
+        "recovery_score": None,
+        "state": "unavailable",
+        "date": date_str,
+        "message": (
+            "No recovery time remaining found for this date. Training Readiness "
+            "snapshots were empty and recent activities did not include recoveryTime. "
+            "Some devices (for example Forerunner 255) show recovery on-device without "
+            "publishing a Connect Training Readiness feed."
+        ),
+    }
+
+
 def _extract_sleep_summary(sleep_data: Dict[str, Any]) -> Dict[str, Any]:
     """Curate a single night's raw Garmin sleep payload down to essential metrics.
 
@@ -1496,5 +1664,30 @@ def register_tools(app):
             return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving morning training readiness: {str(e)}"
+
+    @app.tool()
+    async def get_recovery_time_remaining(date: str = "") -> str:
+        """Get remaining recovery time in hours for a day.
+
+        This is the Firstbeat recovery clock shown on-device, distinct from
+        Training Readiness score (missing on some devices such as Forerunner 255)
+        and from Training Status ACWR. When Training Readiness snapshots exist
+        they are the current remaining value. Otherwise the tool decays
+        recoveryTime assigned on recent activities.
+
+        Args:
+            date: Date in YYYY-MM-DD format. Defaults to today.
+        """
+        try:
+            date = (date or "").strip() or datetime.date.today().isoformat()
+            datetime.datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return f"Invalid date {date!r}. Use YYYY-MM-DD."
+
+        try:
+            curated = _collect_recovery_time(garmin_client, date)
+            return json.dumps(curated, indent=2)
+        except Exception as e:
+            return f"Error retrieving recovery time remaining: {str(e)}"
 
     return app

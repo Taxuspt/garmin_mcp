@@ -1371,3 +1371,49 @@ async def test_get_body_battery_handles_null_activity_events(app_with_health_wel
     assert "NoneType" not in text
     assert "Error" not in text
     assert "100" in text
+
+
+@pytest.mark.asyncio
+async def test_get_recovery_time_remaining_from_readiness(
+    app_with_health_wellness, mock_garmin_client
+):
+    mock_garmin_client.get_training_readiness.return_value = [
+        {
+            "calendarDate": "2026-09-12",
+            "timestampLocal": "2026-09-12T08:00:00",
+            "recoveryTime": 720,
+            "score": 64,
+            "level": "MODERATE",
+            "recoveryTimeChangePhrase": "NO_CHANGE_SLEEP",
+        }
+    ]
+
+    result = await app_with_health_wellness.call_tool(
+        "get_recovery_time_remaining",
+        {"date": "2026-09-12"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["remaining_hours"] == 12.0
+    assert data["recovery_score"] == 64
+    assert data["state"] == "recovering"
+    assert data["source"] == "training_readiness"
+    mock_garmin_client.get_training_readiness.assert_called_once_with("2026-09-12")
+
+
+@pytest.mark.asyncio
+async def test_get_recovery_time_remaining_unavailable(
+    app_with_health_wellness, mock_garmin_client
+):
+    mock_garmin_client.get_training_readiness.return_value = []
+    mock_garmin_client.get_morning_training_readiness.return_value = None
+    mock_garmin_client.get_activities.return_value = []
+
+    result = await app_with_health_wellness.call_tool(
+        "get_recovery_time_remaining",
+        {"date": "2026-09-12"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["state"] == "unavailable"
+    assert data["remaining_hours"] is None
