@@ -224,6 +224,142 @@ def _format_pr_value(value: float, value_type: str) -> str:
     return str(value)
 
 
+def _parse_goal_date(value: Any) -> Optional[datetime.date]:
+    """Parse a Garmin goal date string (YYYY-MM-DD) into a date, or None."""
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    try:
+        return datetime.datetime.strptime(value[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _as_goal_list(payload: Any) -> List[Dict[str, Any]]:
+    """Normalize Connect goal payloads to a list of dicts."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("goals", "items", "data"):
+            nested = payload.get(key)
+            if isinstance(nested, list):
+                return [item for item in nested if isinstance(item, dict)]
+        if any(key in payload for key in ("name", "goalType", "id", "type")):
+            return [payload]
+    return []
+
+
+def _is_connect_ui_goal(goal: Dict[str, Any]) -> bool:
+    """True for the current Connect Goals UI shape (distance/time accumulation)."""
+    progress = goal.get("progress")
+    return "name" in goal and (
+        isinstance(progress, dict)
+        or "distanceInMeters" in goal
+        or ("type" in goal and "goalType" not in goal)
+    )
+
+
+def _classify_goal(goal: Dict[str, Any], today: datetime.date) -> str:
+    """Classify a Connect UI goal as active, future, or past."""
+    if goal.get("completed") is True:
+        return "past"
+
+    start = _parse_goal_date(goal.get("startDate"))
+    end = _parse_goal_date(goal.get("endDate"))
+
+    if start and start > today:
+        return "future"
+    if end and end < today:
+        return "past"
+    if goal.get("active") is False:
+        return "past"
+    return "active"
+
+
+def _curate_connect_ui_goal(goal: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten Connect UI goal progress/remaining into LLM-friendly fields."""
+    progress = goal.get("progress") if isinstance(goal.get("progress"), dict) else {}
+    remaining = goal.get("remaining") if isinstance(goal.get("remaining"), dict) else {}
+    overage = goal.get("overage") if isinstance(goal.get("overage"), dict) else {}
+    curated = {
+        "id": goal.get("id"),
+        "name": goal.get("name"),
+        "type": goal.get("type"),
+        "activity_type": goal.get("activityType"),
+        "period": goal.get("period"),
+        "privacy": goal.get("privacy"),
+        "start_date": goal.get("startDate"),
+        "end_date": goal.get("endDate"),
+        "active": goal.get("active"),
+        "completed": goal.get("completed"),
+        "target_distance_meters": goal.get("distanceInMeters"),
+        "target_duration_seconds": goal.get("durationInSeconds"),
+        "target_calories": goal.get("caloriesInKiloCalories"),
+        "target_activities": goal.get("numberOfActivities"),
+        "progress_percent": progress.get("percent"),
+        "progress_distance_meters": progress.get("distanceInMeters"),
+        "progress_days": progress.get("days"),
+        "remaining_percent": remaining.get("percent"),
+        "remaining_distance_meters": remaining.get("distanceInMeters"),
+        "remaining_days": remaining.get("days"),
+        "overage_percent": overage.get("percent"),
+    }
+    return {key: value for key, value in curated.items() if value is not None}
+
+
+def _fetch_connect_ui_goals(client: Any) -> List[Dict[str, Any]]:
+    """Fetch Goals from the Connect UI endpoint without a legacy status filter.
+
+    python-garminconnect's ``get_goals(status=...)`` always sends
+    ``status=active|future|past``, which is the older wellness-goals query.
+    Garmin Connect's current Goals UI (named distance/time targets such as a
+    100-mile cycling goal) is returned by ``GET /goal-service/goal/goals``
+    with no status parameter and a different JSON shape.
+    """
+    connectapi = getattr(client, "connectapi", None)
+    url = getattr(client, "garmin_connect_goals_url", "/goal-service/goal/goals")
+    if not callable(connectapi) or not isinstance(url, str) or not url:
+        return []
+
+    payloads: List[Any] = []
+    try:
+        payloads.append(connectapi(url))
+    except Exception:
+        pass
+    try:
+        payloads.append(connectapi(url, params={"start": "0", "limit": "100"}))
+    except TypeError:
+        pass
+    except Exception:
+        pass
+
+    for payload in payloads:
+        items = _as_goal_list(payload)
+        if items:
+            return items
+    return []
+
+
+def _collect_goals(
+    client: Any, goal_type: str, today: datetime.date
+) -> List[Any]:
+    """Prefer Connect UI goals; fall back to the legacy status-filtered API."""
+    modern = _fetch_connect_ui_goals(client)
+    if modern:
+        return [
+            _curate_connect_ui_goal(goal) if _is_connect_ui_goal(goal) else goal
+            for goal in modern
+            if _classify_goal(goal, today) == goal_type
+        ]
+
+    legacy = client.get_goals(goal_type)
+    as_list = _as_goal_list(legacy)
+    if as_list:
+        return as_list
+    if legacy:
+        return [legacy]
+    return []
+
+
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
@@ -235,13 +371,22 @@ def register_tools(app):
 
     @app.tool()
     async def get_goals(goal_type: str = "active") -> str:
-        """Get Garmin Connect goals (active, future, or past)
+        """Get Garmin Connect goals (active, future, or past).
+
+        Reads the current Connect Goals UI (named distance/time targets such as
+        a cycling mileage goal) first. If that endpoint is empty, falls back to
+        the older wellness-goals API used by python-garminconnect.
 
         Args:
             goal_type: Type of goals to retrieve. Options: "active", "future", or "past"
         """
         try:
-            goals = garmin_client.get_goals(goal_type)
+            goal_type = (goal_type or "active").strip().lower()
+            if goal_type not in {"active", "future", "past"}:
+                return (
+                    f"Invalid goal_type {goal_type!r}. Options: active, future, past."
+                )
+            goals = _collect_goals(garmin_client, goal_type, datetime.date.today())
             if not goals:
                 return f"No {goal_type} goals found."
             return json.dumps(goals, indent=2)
