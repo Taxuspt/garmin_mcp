@@ -1068,3 +1068,68 @@ async def test_create_manual_activity_exception(app_with_activity_management, mo
     )
     assert "Error" in result[0][0].text
     assert "Garmin API error" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_delete_activity_requires_confirmation(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 12345678901,
+        "activityName": "Morning Run",
+        "activityTypeDTO": {"typeKey": "running"},
+        "summaryDTO": {
+            "startTimeLocal": "2024-01-15 07:00:00",
+            "distance": 5000.0,
+            "duration": 1800.0,
+        },
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "delete_activity",
+        {"activity_id": 12345678901},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "needs_confirmation"
+    assert data["activity"]["name"] == "Morning Run"
+    mock_garmin_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_activity_with_confirm(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 12345678901,
+        "activityName": "Morning Run",
+        "activityTypeDTO": {"typeKey": "running"},
+        "summaryDTO": {"startTimeLocal": "2024-01-15 07:00:00"},
+    }
+    mock_garmin_client.delete_activity.return_value = None
+
+    result = await app_with_activity_management.call_tool(
+        "delete_activity",
+        {"activity_id": 12345678901, "confirm": True},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "deleted"
+    assert data["activity"]["activity_id"] == 12345678901
+    mock_garmin_client.delete_activity.assert_called_once_with(12345678901)
+
+
+@pytest.mark.asyncio
+async def test_delete_activity_exception(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.get_activity.return_value = {"activityName": "Morning Run"}
+    mock_garmin_client.delete_activity.side_effect = Exception("Garmin API error")
+
+    result = await app_with_activity_management.call_tool(
+        "delete_activity",
+        {"activity_id": 12345678901, "confirm": True},
+    )
+
+    assert "Error deleting activity" in result[0][0].text
+    assert "Garmin API error" in result[0][0].text

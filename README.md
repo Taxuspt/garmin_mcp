@@ -27,7 +27,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
 
-- ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
+- ✅ Activity Management (21 tools) - includes write tools for type, description, event type, perceived effort, feel, and confirmed delete
 - ✅ Health & Wellness (33 tools) - includes custom lightweight summary tools
 - ✅ Training & Performance (13 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
 - ✅ Workouts (8 tools)
@@ -77,7 +77,10 @@ Some endpoints are not implemented due to performance or complexity consideratio
 - `upload_running_workout()`, `upload_cycling_workout()`, `upload_swimming_workout()` - Sport-specific workout uploads. Use `upload_workout()` for general workouts.
 
 **Maintenance & Destructive Operations:**
-- `delete_activity()`, `delete_blood_pressure()` - Destructive operations require careful consideration.
+- `delete_blood_pressure()` - Destructive operations require careful consideration.
+- `delete_activity()` is implemented with a confirmation gate: call once to
+  preview, then again with `confirm=true` to delete. Deletions are logged to
+  stderr. There is no undo.
 - Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
 
 If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
