@@ -3,6 +3,7 @@ Activity Management functions for Garmin Connect MCP Server
 """
 import json
 import datetime
+import sys
 from typing import Any, Dict, List, Optional, Union
 
 # The garmin_client will be set by the main file
@@ -13,6 +14,61 @@ def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
     garmin_client = client
+
+
+def _activity_preview(client: Any, activity_id: int) -> Dict[str, Any]:
+    """Build a compact preview of an activity before deleting it."""
+    preview: Dict[str, Any] = {"activity_id": activity_id}
+
+    activity = None
+    try:
+        activity = client.get_activity(activity_id)
+    except Exception:
+        activity = None
+
+    if isinstance(activity, dict) and activity:
+        summary = activity.get("summaryDTO")
+        summary = summary if isinstance(summary, dict) else {}
+        type_dto = activity.get("activityTypeDTO")
+        type_dto = type_dto if isinstance(type_dto, dict) else {}
+        preview.update(
+            {
+                "name": activity.get("activityName"),
+                "type": type_dto.get("typeKey"),
+                "start_time": summary.get("startTimeLocal") or activity.get("startTimeLocal"),
+                "distance_meters": summary.get("distance") or activity.get("distance"),
+                "duration_seconds": summary.get("duration") or activity.get("duration"),
+            }
+        )
+        return {key: value for key, value in preview.items() if value is not None}
+
+    get_activities = getattr(client, "get_activities", None)
+    if not callable(get_activities):
+        return preview
+    try:
+        items = get_activities(0, 50)
+    except Exception:
+        items = None
+    if not isinstance(items, list):
+        return preview
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("activityId")) != str(activity_id):
+            continue
+        type_info = item.get("activityType")
+        type_info = type_info if isinstance(type_info, dict) else {}
+        preview.update(
+            {
+                "name": item.get("activityName"),
+                "type": type_info.get("typeKey"),
+                "start_time": item.get("startTimeLocal"),
+                "distance_meters": item.get("distance"),
+                "duration_seconds": item.get("duration"),
+            }
+        )
+        break
+    return {key: value for key, value in preview.items() if value is not None}
 
 
 def _put_activity_update(activity_id: int, payload: Dict[str, Any]) -> Any:
@@ -937,6 +993,58 @@ def register_tools(app):
             }, indent=2)
         except Exception as e:
             return f"Error creating manual activity: {str(e)}"
+
+    @app.tool()
+    async def delete_activity(
+        activity_id: Union[int, str], confirm: bool = False
+    ) -> str:
+        """Permanently delete an activity from Garmin Connect.
+
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the activity, then call again with confirm=true to delete it.
+        confirm=true is the scripting equivalent of a force flag.
+
+        Args:
+            activity_id: ID of the activity to delete
+            confirm: Must be true to actually delete. Default false returns a preview.
+        """
+        try:
+            activity_id = int(activity_id)
+        except (TypeError, ValueError):
+            return f"Invalid activity ID: {activity_id}"
+
+        try:
+            preview = _activity_preview(garmin_client, activity_id)
+            if not confirm:
+                return json.dumps(
+                    {
+                        "status": "needs_confirmation",
+                        "activity": preview,
+                        "message": (
+                            "This permanently deletes the activity from Garmin Connect "
+                            "and cannot be undone. Call again with confirm=true to proceed."
+                        ),
+                    },
+                    indent=2,
+                )
+
+            garmin_client.delete_activity(activity_id)
+            print(
+                "delete_activity: deleted activity "
+                f"{activity_id} name={preview.get('name')!r} "
+                f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                file=sys.stderr,
+            )
+            return json.dumps(
+                {
+                    "status": "deleted",
+                    "activity": preview,
+                    "message": f"Activity {activity_id} permanently deleted.",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error deleting activity: {str(e)}"
 
     @app.tool()
     async def get_activity_types() -> str:
