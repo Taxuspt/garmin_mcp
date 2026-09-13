@@ -20,8 +20,11 @@ External URL:
 {{- if .Values.garmin.existingSecret }}
 
 Using existing credentials Secret: {{ .Values.garmin.existingSecret }}
-  It must contain keys GARMIN_EMAIL and GARMIN_PASSWORD.
+  It must contain either GARMINTOKENS (contents of garmin_tokens.json; works
+  with MFA) or GARMIN_EMAIL + GARMIN_PASSWORD (MFA-free accounts only).
 {{- end }}
 
 Reminder: if your Garmin account uses MFA, the first login cannot run inside a
-pod. Pre-authenticate with `garmin-mcp-auth` and seed the token volume.
+pod. Pre-authenticate locally with `garmin-mcp-auth`, then install with
+  --set-file garmin.tokens.json=$HOME/.garminconnect/garmin_tokens.json
+(or put that JSON under the GARMINTOKENS key of garmin.existingSecret).

@@ -1,3 +1,9 @@
+{{- if eq .Values.transport.mode "stdio" -}}
+{{- fail "transport.mode=stdio is not supported by this chart (a pod has no stdin to attach to); use streamable-http or sse" -}}
+{{- end -}}
+{{- if and (include "garmin-mcp.tokenMode" .) (not .Values.persistence.enabled) -}}
+{{- fail "garmin.tokens.* requires persistence.enabled=true: without a volume the token JSON would be passed inline via $GARMINTOKENS (logged at startup) and rotated refresh tokens would be lost on restart" -}}
+{{- end -}}
 {{- $http := ne .Values.transport.mode "stdio" -}}
 {{- /* PVC-backed token store (directory mode) whenever persistence is on. It is
        seeded once from the Secret by the init container below, then the app
@@ -58,7 +64,9 @@ spec:
                   print("token store present; keeping rotated token", flush=True)
               elif seed:
                   os.makedirs(d, exist_ok=True)
-                  with open(p, "w") as f:
+                  # Owner-only: the app only hardens the dir on the fresh-credentials
+                  # path, so a seeded file keeps whatever mode it was created with.
+                  with open(os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
                       f.write(seed)
                   print("seeded token store from Secret", flush=True)
               else:

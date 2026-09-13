@@ -44,9 +44,10 @@ garmin:
   isCn: false
 
 # --- Transport --------------------------------------------------------------
-# stdio is the local default; in-cluster you almost always want streamable-http.
+# streamable-http (default) serves MCP at /mcp; sse serves /sse + /messages/.
+# stdio is rejected: a pod has no stdin for an MCP client to attach to.
 transport:
-  mode: streamable-http # stdio | streamable-http | sse
+  mode: streamable-http # streamable-http | sse
   host: "0.0.0.0"
   port: 8000
 
@@ -58,8 +59,9 @@ transport:
 # each rotated token back. On first boot an init container seeds the volume from
 # the Secret (tokens.json/base64 or existingSecret's GARMINTOKENS); later boots
 # keep the rotated token already on the PVC. In credentials mode the app logs in
-# and writes the volume itself. Keep this on for any long-running / scale-to-zero
-# deployment; only stdio/local runs can safely leave it off.
+# and writes the volume itself. Keep this on: token mode (tokens.json/base64)
+# refuses to render without it, since the inline fallback logs the token JSON at
+# startup and loses every rotation on restart.
 persistence:
   enabled: true
   size: 64Mi
@@ -80,6 +82,8 @@ ingress:
   enabled: false
   className: nginx
   host: garmin-mcp.example.com
+  # Matches transport.mode=streamable-http. For sse set path: / (it needs both
+  # /sse and /messages/).
   path: /mcp
   pathType: Prefix
   annotations: {}
