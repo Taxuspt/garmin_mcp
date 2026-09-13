@@ -12,6 +12,14 @@ from garmin_mcp.challenges import (
 )
 
 
+SOCIAL_PROFILE = {
+    "id": 41039001,
+    "profileId": 41039001,
+    "displayName": "abc123display",
+}
+
+SETTINGS_USER_ID = "99999999"
+
 CONNECT_UI_GOAL = {
     "id": 41039448,
     "name": "GCC 2026",
@@ -76,13 +84,37 @@ def test_curate_connect_ui_goal_flattens_progress():
 
 
 class _FakeClient:
-    def __init__(self, modern=None, legacy=None):
+    """Mimic garminconnect 0.3.x: goals require userId and status together."""
+
+    def __init__(self, modern=None, legacy=None, profile=None):
         self.garmin_connect_goals_url = "/goal-service/goal/goals"
+        self.display_name = (profile or SOCIAL_PROFILE).get("displayName")
+        self._profile = profile if profile is not None else SOCIAL_PROFILE
         self._modern = modern
         self.legacy = legacy
         self.get_goals_calls = []
+        self.connectapi_calls = []
 
     def connectapi(self, url, params=None):
+        self.connectapi_calls.append((url, params))
+        if url == "/userprofile-service/socialProfile":
+            return self._profile
+        if "/goal-service/goal/goals" not in url:
+            return []
+        params = params or {}
+        user_id = params.get("userId") or params.get("userProfilePk")
+        status = params.get("status")
+        if not user_id or not status:
+            raise Exception("API Error 400: userId and status cant be null")
+        if str(user_id) == SETTINGS_USER_ID:
+            return []
+        if str(user_id) not in {
+            str(SOCIAL_PROFILE["id"]),
+            SOCIAL_PROFILE["displayName"],
+        }:
+            return []
+        if self._modern is None:
+            return []
         return self._modern
 
     def get_goals(self, goal_type):
@@ -96,11 +128,52 @@ def test_collect_goals_prefers_connect_ui_payload():
     assert len(goals) == 1
     assert goals[0]["name"] == "GCC 2026"
     assert client.get_goals_calls == []
+    goal_calls = [
+        call for call in client.connectapi_calls if call[0] == "/goal-service/goal/goals"
+    ]
+    assert goal_calls
+    assert all(call[1] and call[1].get("userId") and call[1].get("status") for call in goal_calls)
+
+
+def test_collect_goals_swallows_400_when_user_id_and_status_missing():
+    client = _FakeClient(modern=[CONNECT_UI_GOAL], legacy=[])
+    goals = _collect_goals(client, "active", date(2026, 9, 12))
+    assert goals[0]["name"] == "GCC 2026"
+    unfiltered = [
+        call
+        for call in client.connectapi_calls
+        if call[0] == "/goal-service/goal/goals"
+        and not (call[1] and call[1].get("userId") and call[1].get("status"))
+    ]
+    assert unfiltered == []
+
+
+def test_collect_goals_ignores_settings_user_id_and_uses_social_profile():
+    """get_user_profile() settings ids return []; socialProfile.id does not."""
+    client = _FakeClient(modern=[CONNECT_UI_GOAL], legacy=[])
+    goals = _collect_goals(client, "active", date(2026, 9, 12))
+    assert goals[0]["id"] == CONNECT_UI_GOAL["id"]
+    used_ids = [
+        (call[1] or {}).get("userId") or (call[1] or {}).get("userProfilePk")
+        for call in client.connectapi_calls
+        if call[0] == "/goal-service/goal/goals"
+    ]
+    assert str(SOCIAL_PROFILE["id"]) in used_ids
+    assert SETTINGS_USER_ID not in used_ids
 
 
 def test_collect_goals_falls_back_to_legacy_when_connect_ui_empty():
     legacy = {"goals": [{"goalType": "STEPS", "goalValue": 8000}]}
     client = _FakeClient(modern=[], legacy=legacy)
+    goals = _collect_goals(client, "active", date(2026, 9, 12))
+    assert goals == [{"goalType": "STEPS", "goalValue": 8000}]
+    assert client.get_goals_calls == ["active"]
+
+
+def test_collect_goals_falls_back_when_social_profile_missing():
+    legacy = {"goals": [{"goalType": "STEPS", "goalValue": 8000}]}
+    client = _FakeClient(modern=[CONNECT_UI_GOAL], legacy=legacy, profile={})
+    client.display_name = None
     goals = _collect_goals(client, "active", date(2026, 9, 12))
     assert goals == [{"goalType": "STEPS", "goalValue": 8000}]
     assert client.get_goals_calls == ["active"]

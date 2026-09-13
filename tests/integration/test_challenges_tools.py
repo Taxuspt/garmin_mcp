@@ -82,25 +82,42 @@ async def test_get_goals_future(app_with_challenges, mock_garmin_client):
 async def test_get_goals_returns_connect_ui_cycling_goal(
     app_with_challenges, mock_garmin_client
 ):
-    """Connect UI goals are returned even when the legacy status filter is empty."""
+    """Connect UI goals are returned with socialProfile userId plus status."""
+    connect_ui_goal = {
+        "id": 1,
+        "name": "GCC 2026",
+        "type": "distance_accumulation",
+        "distanceInMeters": 160934.4,
+        "startDate": "2026-01-01",
+        "endDate": "2026-12-31",
+        "activityType": "cycling",
+        "period": "custom",
+        "progress": {"percent": 8, "distanceInMeters": 14016.0},
+        "remaining": {"percent": 92, "days": 22, "distanceInMeters": 146918.4},
+        "active": True,
+        "completed": False,
+    }
     mock_garmin_client.garmin_connect_goals_url = "/goal-service/goal/goals"
-    mock_garmin_client.connectapi.return_value = [
-        {
-            "id": 1,
-            "name": "GCC 2026",
-            "type": "distance_accumulation",
-            "distanceInMeters": 160934.4,
-            "startDate": "2026-01-01",
-            "endDate": "2026-12-31",
-            "activityType": "cycling",
-            "period": "custom",
-            "progress": {"percent": 8, "distanceInMeters": 14016.0},
-            "remaining": {"percent": 92, "days": 22, "distanceInMeters": 146918.4},
-            "active": True,
-            "completed": False,
-        }
-    ]
+    mock_garmin_client.display_name = "abc123display"
     mock_garmin_client.get_goals.return_value = []
+
+    def connectapi(url, params=None):
+        if url == "/userprofile-service/socialProfile":
+            return {
+                "id": 41039001,
+                "profileId": 41039001,
+                "displayName": "abc123display",
+            }
+        params = params or {}
+        if not params.get("userId") or not params.get("status"):
+            raise Exception("API Error 400: userId and status cant be null")
+        if str(params.get("userId")) != "41039001":
+            return []
+        if params.get("status") != "active":
+            return []
+        return [connect_ui_goal]
+
+    mock_garmin_client.connectapi.side_effect = connectapi
 
     result = await app_with_challenges.call_tool(
         "get_goals",
