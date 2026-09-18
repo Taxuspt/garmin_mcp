@@ -224,16 +224,6 @@ def _format_pr_value(value: float, value_type: str) -> str:
     return str(value)
 
 
-def _parse_goal_date(value: Any) -> Optional[datetime.date]:
-    """Parse a Garmin goal date string (YYYY-MM-DD) into a date, or None."""
-    if not isinstance(value, str) or len(value) < 10:
-        return None
-    try:
-        return datetime.datetime.strptime(value[:10], "%Y-%m-%d").date()
-    except ValueError:
-        return None
-
-
 def _as_goal_list(payload: Any) -> List[Dict[str, Any]]:
     """Normalize Connect goal payloads to a list of dicts."""
     if isinstance(payload, list):
@@ -258,23 +248,6 @@ def _is_connect_ui_goal(goal: Dict[str, Any]) -> bool:
     )
 
 
-def _classify_goal(goal: Dict[str, Any], today: datetime.date) -> str:
-    """Classify a Connect UI goal as active, future, or past."""
-    if goal.get("completed") is True:
-        return "past"
-
-    start = _parse_goal_date(goal.get("startDate"))
-    end = _parse_goal_date(goal.get("endDate"))
-
-    if start and start > today:
-        return "future"
-    if end and end < today:
-        return "past"
-    if goal.get("active") is False:
-        return "past"
-    return "active"
-
-
 def _curate_connect_ui_goal(goal: Dict[str, Any]) -> Dict[str, Any]:
     """Flatten Connect UI goal progress/remaining into LLM-friendly fields."""
     progress = goal.get("progress") if isinstance(goal.get("progress"), dict) else {}
@@ -297,189 +270,84 @@ def _curate_connect_ui_goal(goal: Dict[str, Any]) -> Dict[str, Any]:
         "target_activities": goal.get("numberOfActivities"),
         "progress_percent": progress.get("percent"),
         "progress_distance_meters": progress.get("distanceInMeters"),
+        "progress_duration_seconds": progress.get("durationInSeconds"),
+        "progress_calories": progress.get("caloriesInKiloCalories"),
+        "progress_activities": progress.get("numberOfActivities"),
         "progress_days": progress.get("days"),
         "remaining_percent": remaining.get("percent"),
         "remaining_distance_meters": remaining.get("distanceInMeters"),
+        "remaining_duration_seconds": remaining.get("durationInSeconds"),
+        "remaining_calories": remaining.get("caloriesInKiloCalories"),
+        "remaining_activities": remaining.get("numberOfActivities"),
         "remaining_days": remaining.get("days"),
         "overage_percent": overage.get("percent"),
     }
     return {key: value for key, value in curated.items() if value is not None}
 
 
-_GOAL_STATUSES = ("active", "future", "past")
-_SOCIAL_PROFILE_URL = "/userprofile-service/socialProfile"
-_EFFECTIVE_GOALS_URL = "/goal-service/goal/user/effective"
+_GOALS_URL = "/goal-service/goal/goals"
+# goal-service only returns Connect UI goals (named distance/duration
+# accumulation targets) when the request carries the fetch-metadata header a
+# browser sends on a same-origin XHR; without it the list is silently empty.
+_GOALS_HEADERS = {"Sec-Fetch-Site": "same-origin"}
+# ``start`` is 1-based: ``start=0`` returns [] even when goals exist, which is
+# why python-garminconnect's get_goals() (it starts at 0) misses them.
+_GOALS_FIRST_INDEX = 1
+_GOALS_PAGE_SIZE = 100
+_GOALS_MAX_PAGES = 20
 
 
-def _as_id_string(value: Any) -> Optional[str]:
-    """Return a Garmin user id as a string, ignoring mocks and blanks."""
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    return None
-
-
-def _social_profile(client: Any) -> Dict[str, Any]:
-    """Load the social profile used by Connect to identify the current user."""
-    payload = _safe_connectapi(client, _SOCIAL_PROFILE_URL)
-    return payload if isinstance(payload, dict) else {}
-
-
-def _goal_user_ids(client: Any, profile: Dict[str, Any]) -> List[str]:
-    """Candidate userIds for goal-service.
-
-    Garmin now rejects ``/goal-service/goal/goals`` unless both ``userId`` and
-    ``status`` are set. ``get_user_profile()`` in python-garminconnect returns
-    user-settings, not the social profile, so callers that pass that ``id``
-    still get ``[]``. The numeric ``id`` / ``profileId`` from socialProfile is
-    what Connect's Goals UI uses.
-    """
-    ids: List[str] = []
-    for key in ("id", "profileId", "userId", "userProfilePk", "userProfilePK"):
-        as_id = _as_id_string(profile.get(key))
-        if as_id and as_id not in ids:
-            ids.append(as_id)
-    display = _as_id_string(
-        getattr(client, "display_name", None) or profile.get("displayName")
-    )
-    if display and display not in ids:
-        ids.append(display)
-    return ids
-
-
-def _safe_connectapi(client: Any, url: str, params: Optional[Dict[str, str]] = None) -> Any:
-    """Call connectapi and swallow Garmin 400s / unexpected stubs."""
-    connectapi = getattr(client, "connectapi", None)
-    if not callable(connectapi) or not isinstance(url, str) or not url:
-        return None
-    try:
-        if params is None:
-            return connectapi(url)
-        return connectapi(url, params=params)
-    except TypeError:
-        # Do not retry without params: Garmin returns 400 when userId/status
-        # are omitted. A client that rejects ``params=`` is not usable here.
-        return None
-    except Exception:
-        return None
-
-
-def _dedupe_goals(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Keep the first copy of each goal id/name."""
-    unique: List[Dict[str, Any]] = []
-    seen = set()
-    for item in items:
-        marker = item.get("id")
-        if marker is None:
-            marker = item.get("name") or str(item)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        unique.append(item)
-    return unique
-
-
-def _query_goals_with_user(
-    client: Any,
-    url: str,
-    user_ids: List[str],
-    statuses: List[str],
-) -> List[Dict[str, Any]]:
-    """GET /goal-service/goal/goals with the userId+status pair Garmin requires."""
-    if not user_ids or not statuses:
-        return []
-
-    def _query(user_id: str, status: str, id_key: str) -> List[Dict[str, Any]]:
-        return _as_goal_list(
-            _safe_connectapi(
-                client,
-                url,
-                {
-                    id_key: user_id,
-                    "status": status,
-                    "start": "0",
-                    "limit": "100",
-                    "sortOrder": "asc",
-                },
-            )
-        )
-
-    requested, extra_statuses = statuses[0], statuses[1:]
-    for id_key in ("userId", "userProfilePk"):
-        for user_id in user_ids:
-            items = _query(user_id, requested, id_key)
-            if items:
-                return _dedupe_goals(items)
-
-    found: List[Dict[str, Any]] = []
-    for user_id in user_ids:
-        for status in extra_statuses:
-            found.extend(_query(user_id, status, "userId"))
-        if found:
-            break
-    return _dedupe_goals(found)
-
-
-def _fetch_connect_ui_goals(
-    client: Any, goal_type: str = "active"
-) -> List[Dict[str, Any]]:
-    """Fetch Connect UI goals using userId+status.
-
-    Calling ``/goal-service/goal/goals`` without both parameters returns
-    HTTP 400 ``userId and status cant be null``. python-garminconnect's
-    ``get_goals(status)`` omits userId and now yields ``[]`` for Goals UI
-    targets such as a named cycling mileage goal.
-    """
-    url = getattr(client, "garmin_connect_goals_url", "/goal-service/goal/goals")
+def _fetch_goals_page(client: Any, status: str, start: int) -> List[Dict[str, Any]]:
+    """GET one page of goals the way Garmin Connect's Goals page does."""
+    url = getattr(client, "garmin_connect_goals_url", None)
     if not isinstance(url, str) or not url:
-        url = "/goal-service/goal/goals"
-
-    profile = _social_profile(client)
-    user_ids = _goal_user_ids(client, profile)
-    if not user_ids:
-        return []
-
-    statuses = [goal_type] + [status for status in _GOAL_STATUSES if status != goal_type]
-    found = _query_goals_with_user(client, url, user_ids, statuses)
-    if found:
-        return found
-
-    today = datetime.date.today().isoformat()
-    extras = [
-        _safe_connectapi(client, f"{_EFFECTIVE_GOALS_URL}/{today}"),
-        _safe_connectapi(client, f"/goal-service/goal/user/{user_ids[0]}"),
-        _safe_connectapi(
-            client,
-            f"/goal-service/goal/{user_ids[0]}/goals",
-            {"status": goal_type, "start": "0", "limit": "100"},
-        ),
-    ]
-    extra_items: List[Dict[str, Any]] = []
-    for payload in extras:
-        extra_items.extend(
-            item
-            for item in _as_goal_list(payload)
-            if _is_connect_ui_goal(item) or "goalType" in item
-        )
-    return _dedupe_goals(extra_items)
+        url = _GOALS_URL
+    params = {
+        "status": status,
+        "start": str(start),
+        "limit": str(_GOALS_PAGE_SIZE),
+        "sortOrder": "asc",
+    }
+    return _as_goal_list(
+        client.connectapi(url, params=params, headers=dict(_GOALS_HEADERS))
+    )
 
 
-def _collect_goals(
-    client: Any, goal_type: str, today: datetime.date
-) -> List[Any]:
-    """Prefer Connect UI goals; fall back to the legacy status-filtered API."""
-    modern = _fetch_connect_ui_goals(client, goal_type)
-    curated = [
-        _curate_connect_ui_goal(goal) if _is_connect_ui_goal(goal) else goal
-        for goal in modern
-        if _classify_goal(goal, today) == goal_type
-    ]
-    if curated:
-        return curated
+def _fetch_connect_goals(client: Any, status: str) -> List[Dict[str, Any]]:
+    """Fetch every goal for ``status`` with 1-based pagination."""
+    goals: List[Dict[str, Any]] = []
+    seen = set()
+    start = _GOALS_FIRST_INDEX
+    for _ in range(_GOALS_MAX_PAGES):
+        page = _fetch_goals_page(client, status, start)
+        new = []
+        for goal in page:
+            marker = goal.get("id")
+            if marker is None:
+                marker = json.dumps(goal, sort_keys=True, default=str)
+            if marker not in seen:
+                seen.add(marker)
+                new.append(goal)
+        goals.extend(new)
+        # Stop on a short page, or if the server ignored ``start`` and
+        # handed back goals we already have.
+        if len(page) < _GOALS_PAGE_SIZE or not new:
+            break
+        start += _GOALS_PAGE_SIZE
+    return goals
+
+
+def _collect_goals(client: Any, goal_type: str) -> List[Any]:
+    """Read goals like Connect's Goals page; fall back to the library call."""
+    try:
+        goals = _fetch_connect_goals(client, goal_type)
+    except Exception:
+        goals = []
+    if goals:
+        return [
+            _curate_connect_ui_goal(goal) if _is_connect_ui_goal(goal) else goal
+            for goal in goals
+        ]
 
     legacy = client.get_goals(goal_type)
     as_list = _as_goal_list(legacy)
@@ -503,10 +371,10 @@ def register_tools(app):
     async def get_goals(goal_type: str = "active") -> str:
         """Get Garmin Connect goals (active, future, or past).
 
-        Reads the current Connect Goals UI (named distance/time targets such as
-        a cycling mileage goal) using socialProfile userId plus status. Garmin
-        returns HTTP 400 if either query param is omitted. If that is empty,
-        falls back to python-garminconnect's get_goals().
+        Reads goals the way Garmin Connect's Goals page does, so named
+        distance/time targets (e.g. a monthly cycling mileage goal) are
+        included with their progress and remaining amounts. Falls back to
+        python-garminconnect's get_goals() if that request returns nothing.
 
         Args:
             goal_type: Type of goals to retrieve. Options: "active", "future", or "past"
@@ -517,7 +385,7 @@ def register_tools(app):
                 return (
                     f"Invalid goal_type {goal_type!r}. Options: active, future, past."
                 )
-            goals = _collect_goals(garmin_client, goal_type, datetime.date.today())
+            goals = _collect_goals(garmin_client, goal_type)
             if not goals:
                 return f"No {goal_type} goals found."
             return json.dumps(goals, indent=2)

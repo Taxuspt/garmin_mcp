@@ -1,56 +1,82 @@
-"""Unit tests for Connect UI goal parsing used by get_goals."""
-
-from datetime import date
+"""Unit tests for the Connect UI goal fetch used by get_goals."""
 
 from garmin_mcp.challenges import (
     _as_goal_list,
-    _classify_goal,
     _collect_goals,
     _curate_connect_ui_goal,
     _is_connect_ui_goal,
-    _parse_goal_date,
 )
 
 
-SOCIAL_PROFILE = {
-    "id": 41039001,
-    "profileId": 41039001,
-    "displayName": "abc123display",
-}
-
-SETTINGS_USER_ID = "99999999"
-
+# Response shape from /goal-service/goal/goals?status=active as observed on
+# Garmin Connect's Goals page (cyberjunky/python-garminconnect#431).
 CONNECT_UI_GOAL = {
-    "id": 41039448,
+    "id": 41139679,
     "name": "GCC 2026",
     "type": "distance_accumulation",
-    "distanceInMeters": 160934.4,
+    "distanceInMeters": 160934.0,
+    "durationInSeconds": None,
+    "caloriesInKiloCalories": None,
+    "numberOfActivities": None,
     "startDate": "2026-09-01",
-    "endDate": "2026-09-23",
     "activityType": "cycling",
-    "period": "custom",
-    "privacy": "private",
+    "period": "one_month",
+    "privacy": "public",
     "progress": {
-        "percent": 8,
-        "days": 11,
-        "distanceInMeters": 14016.0,
+        "percent": 17,
+        "days": 17,
+        "distanceInMeters": 28089.0,
+        "durationInSeconds": None,
+        "caloriesInKiloCalories": None,
+        "numberOfActivities": None,
     },
     "remaining": {
-        "percent": 92,
-        "days": 11,
-        "distanceInMeters": 146918.4,
+        "percent": 83,
+        "days": 13,
+        "distanceInMeters": 132845.0,
+        "durationInSeconds": None,
+        "caloriesInKiloCalories": None,
+        "numberOfActivities": None,
     },
     "overage": {"percent": 0, "days": 0, "distanceInMeters": 0.0},
+    "endDate": "2026-09-30",
     "active": True,
     "completed": False,
 }
 
 
-def test_parse_goal_date():
-    assert _parse_goal_date("2026-09-01") == date(2026, 9, 1)
-    assert _parse_goal_date("2026-09-01T00:00:00") == date(2026, 9, 1)
-    assert _parse_goal_date("not-a-date") is None
-    assert _parse_goal_date(None) is None
+class _FakeClient:
+    """Mimic goal-service as observed live.
+
+    Goals are only returned when ``Sec-Fetch-Site: same-origin`` is sent and
+    ``start`` is 1-based; ``start=0`` yields [] even when goals exist.
+    """
+
+    def __init__(self, goals_by_status=None, legacy=None, ignore_start=False):
+        self.garmin_connect_goals_url = "/goal-service/goal/goals"
+        self._goals = goals_by_status or {}
+        self._ignore_start = ignore_start
+        self.legacy = legacy
+        self.get_goals_calls = []
+        self.connectapi_calls = []
+
+    def connectapi(self, url, params=None, headers=None):
+        self.connectapi_calls.append((url, dict(params or {}), dict(headers or {})))
+        params = params or {}
+        if (headers or {}).get("Sec-Fetch-Site") != "same-origin":
+            return []
+        goals = self._goals.get(params.get("status"), [])
+        if self._ignore_start:
+            return goals
+        start = int(params.get("start", 1))
+        limit = int(params.get("limit", 30))
+        if start < 1:
+            return []
+        return goals[start - 1 : start - 1 + limit]
+
+    def get_goals(self, goal_type):
+        self.get_goals_calls.append(goal_type)
+        return self.legacy
 
 
 def test_as_goal_list_unwraps_legacy_and_modern_shapes():
@@ -61,119 +87,79 @@ def test_as_goal_list_unwraps_legacy_and_modern_shapes():
     assert _as_goal_list(object()) == []
 
 
-def test_classify_connect_ui_goal_by_dates_and_flags():
-    today = date(2026, 9, 12)
-    assert _classify_goal(CONNECT_UI_GOAL, today) == "active"
-    future = {**CONNECT_UI_GOAL, "startDate": "2026-10-01", "endDate": "2026-10-31"}
-    assert _classify_goal(future, today) == "future"
-    past = {**CONNECT_UI_GOAL, "endDate": "2026-08-31", "active": False}
-    assert _classify_goal(past, today) == "past"
-    completed = {**CONNECT_UI_GOAL, "completed": True}
-    assert _classify_goal(completed, today) == "past"
-
-
 def test_curate_connect_ui_goal_flattens_progress():
     curated = _curate_connect_ui_goal(CONNECT_UI_GOAL)
     assert curated["name"] == "GCC 2026"
     assert curated["activity_type"] == "cycling"
-    assert curated["target_distance_meters"] == 160934.4
-    assert curated["progress_percent"] == 8
-    assert curated["remaining_distance_meters"] == 146918.4
-    assert curated["remaining_days"] == 11
+    assert curated["target_distance_meters"] == 160934.0
+    assert curated["progress_percent"] == 17
+    assert curated["progress_distance_meters"] == 28089.0
+    assert curated["remaining_distance_meters"] == 132845.0
+    assert curated["remaining_days"] == 13
+    assert "target_duration_seconds" not in curated
     assert _is_connect_ui_goal(CONNECT_UI_GOAL)
+    assert not _is_connect_ui_goal({"goalType": "STEPS", "goalValue": 8000})
 
 
-class _FakeClient:
-    """Mimic garminconnect 0.3.x: goals require userId and status together."""
+def test_collect_goals_sends_header_and_one_based_start():
+    client = _FakeClient({"active": [CONNECT_UI_GOAL]}, legacy=[])
+    goals = _collect_goals(client, "active")
 
-    def __init__(self, modern=None, legacy=None, profile=None):
-        self.garmin_connect_goals_url = "/goal-service/goal/goals"
-        self.display_name = (profile or SOCIAL_PROFILE).get("displayName")
-        self._profile = profile if profile is not None else SOCIAL_PROFILE
-        self._modern = modern
-        self.legacy = legacy
-        self.get_goals_calls = []
-        self.connectapi_calls = []
-
-    def connectapi(self, url, params=None):
-        self.connectapi_calls.append((url, params))
-        if url == "/userprofile-service/socialProfile":
-            return self._profile
-        if "/goal-service/goal/goals" not in url:
-            return []
-        params = params or {}
-        user_id = params.get("userId") or params.get("userProfilePk")
-        status = params.get("status")
-        if not user_id or not status:
-            raise Exception("API Error 400: userId and status cant be null")
-        if str(user_id) == SETTINGS_USER_ID:
-            return []
-        if str(user_id) not in {
-            str(SOCIAL_PROFILE["id"]),
-            SOCIAL_PROFILE["displayName"],
-        }:
-            return []
-        if self._modern is None:
-            return []
-        return self._modern
-
-    def get_goals(self, goal_type):
-        self.get_goals_calls.append(goal_type)
-        return self.legacy
-
-
-def test_collect_goals_prefers_connect_ui_payload():
-    client = _FakeClient(modern=[CONNECT_UI_GOAL], legacy=[])
-    goals = _collect_goals(client, "active", date(2026, 9, 12))
-    assert len(goals) == 1
-    assert goals[0]["name"] == "GCC 2026"
+    assert [g["name"] for g in goals] == ["GCC 2026"]
+    assert goals[0]["progress_percent"] == 17
     assert client.get_goals_calls == []
-    goal_calls = [
-        call for call in client.connectapi_calls if call[0] == "/goal-service/goal/goals"
-    ]
-    assert goal_calls
-    assert all(call[1] and call[1].get("userId") and call[1].get("status") for call in goal_calls)
+    url, params, headers = client.connectapi_calls[0]
+    assert url == "/goal-service/goal/goals"
+    assert params["status"] == "active"
+    assert params["start"] == "1"
+    assert headers == {"Sec-Fetch-Site": "same-origin"}
+    assert "userId" not in params
 
 
-def test_collect_goals_swallows_400_when_user_id_and_status_missing():
-    client = _FakeClient(modern=[CONNECT_UI_GOAL], legacy=[])
-    goals = _collect_goals(client, "active", date(2026, 9, 12))
-    assert goals[0]["name"] == "GCC 2026"
-    unfiltered = [
-        call
-        for call in client.connectapi_calls
-        if call[0] == "/goal-service/goal/goals"
-        and not (call[1] and call[1].get("userId") and call[1].get("status"))
-    ]
-    assert unfiltered == []
+def test_collect_goals_passes_status_through():
+    past = {**CONNECT_UI_GOAL, "id": 1, "active": False, "completed": True}
+    client = _FakeClient({"active": [CONNECT_UI_GOAL], "past": [past]}, legacy=[])
+    goals = _collect_goals(client, "past")
+    assert [g["id"] for g in goals] == [1]
+    assert client.connectapi_calls[0][1]["status"] == "past"
 
 
-def test_collect_goals_ignores_settings_user_id_and_uses_social_profile():
-    """get_user_profile() settings ids return []; socialProfile.id does not."""
-    client = _FakeClient(modern=[CONNECT_UI_GOAL], legacy=[])
-    goals = _collect_goals(client, "active", date(2026, 9, 12))
-    assert goals[0]["id"] == CONNECT_UI_GOAL["id"]
-    used_ids = [
-        (call[1] or {}).get("userId") or (call[1] or {}).get("userProfilePk")
-        for call in client.connectapi_calls
-        if call[0] == "/goal-service/goal/goals"
-    ]
-    assert str(SOCIAL_PROFILE["id"]) in used_ids
-    assert SETTINGS_USER_ID not in used_ids
+def test_collect_goals_paginates_from_one():
+    many = [{**CONNECT_UI_GOAL, "id": i} for i in range(150)]
+    client = _FakeClient({"past": many}, legacy=[])
+    goals = _collect_goals(client, "past")
+    assert [g["id"] for g in goals] == list(range(150))
+    assert [c[1]["start"] for c in client.connectapi_calls] == ["1", "101"]
 
 
-def test_collect_goals_falls_back_to_legacy_when_connect_ui_empty():
+def test_collect_goals_stops_if_server_ignores_start():
+    full_page = [{**CONNECT_UI_GOAL, "id": i} for i in range(100)]
+    client = _FakeClient({"active": full_page}, legacy=[], ignore_start=True)
+    goals = _collect_goals(client, "active")
+    assert len(goals) == 100
+    assert len(client.connectapi_calls) == 2
+
+
+def test_collect_goals_passes_legacy_wellness_goals_through():
+    wellness = {"goalType": "STEPS", "goalValue": 8000}
+    client = _FakeClient({"active": [wellness]}, legacy=[])
+    assert _collect_goals(client, "active") == [wellness]
+
+
+def test_collect_goals_falls_back_to_library_when_empty():
     legacy = {"goals": [{"goalType": "STEPS", "goalValue": 8000}]}
-    client = _FakeClient(modern=[], legacy=legacy)
-    goals = _collect_goals(client, "active", date(2026, 9, 12))
+    client = _FakeClient({}, legacy=legacy)
+    goals = _collect_goals(client, "active")
     assert goals == [{"goalType": "STEPS", "goalValue": 8000}]
     assert client.get_goals_calls == ["active"]
 
 
-def test_collect_goals_falls_back_when_social_profile_missing():
-    legacy = {"goals": [{"goalType": "STEPS", "goalValue": 8000}]}
-    client = _FakeClient(modern=[CONNECT_UI_GOAL], legacy=legacy, profile={})
-    client.display_name = None
-    goals = _collect_goals(client, "active", date(2026, 9, 12))
-    assert goals == [{"goalType": "STEPS", "goalValue": 8000}]
+def test_collect_goals_falls_back_to_library_on_error():
+    client = _FakeClient({}, legacy=[{"goalType": "STEPS", "goalValue": 8000}])
+
+    def boom(*args, **kwargs):
+        raise Exception("API Error 500")
+
+    client.connectapi = boom
+    assert _collect_goals(client, "active") == [{"goalType": "STEPS", "goalValue": 8000}]
     assert client.get_goals_calls == ["active"]

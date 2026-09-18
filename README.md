@@ -884,14 +884,13 @@ Once connected in Claude, you can ask questions like:
 
 ### `get_goals` returns no goals that exist in Garmin Connect
 
-Garmin's `/goal-service/goal/goals` endpoint now requires **both** `userId`
-and `status`. Omitting them returns HTTP 400 (`userId and status cant be
-null`). Sending only `status=active` (python-garminconnect's default) often
-returns `[]` for named Connect UI goals.
-
-`get_goals` resolves `userId` from `/userprofile-service/socialProfile`
-(`id` / `profileId`, not `get_user_profile()` settings) and queries with
-both parameters before falling back to the legacy API.
+Garmin's goal-service only returns goals created in Connect's current Goals UI
+(named distance/time targets such as a monthly cycling goal) when the request
+sends `Sec-Fetch-Site: same-origin` and uses a 1-based `start`. With
+`start=0`, it returns an empty list. python-garminconnect's `get_goals()` does not do both
+(through 0.3.16), so `get_goals` here calls `/goal-service/goal/goals`
+directly the way Connect's Goals page does, and uses the library call only as
+a fallback.
 
 ### "Failed to spawn process: No such file or directory"
 
