@@ -1603,6 +1603,28 @@ async def test_get_garmin_coach_workouts_rejects_invalid_date(
 
 # Delete workout tests
 @pytest.mark.asyncio
+async def test_delete_workout_requires_confirmation(app_with_workouts, mock_garmin_client):
+    """Test delete_workout returns a preview unless confirm=true"""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 123456,
+        "workoutName": "Easy Run",
+        "sportType": {"sportTypeKey": "running"},
+    }
+
+    result = await app_with_workouts.call_tool(
+        "delete_workout",
+        {"workout_id": 123456}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "needs_confirmation"
+    assert result_data["workout"]["name"] == "Easy Run"
+    mock_garmin_client.delete_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_delete_workout_success(app_with_workouts, mock_garmin_client):
     """Test delete_workout tool when the library call succeeds"""
     import json as json_module
@@ -1610,11 +1632,16 @@ async def test_delete_workout_success(app_with_workouts, mock_garmin_client):
     # The MCP tool now delegates to garmin_client.delete_workout(id)
     # (high-level method). Success is signalled by absence of exception.
     mock_garmin_client.delete_workout.return_value = {}
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 123456,
+        "workoutName": "Easy Run",
+        "sportType": {"sportTypeKey": "running"},
+    }
 
     workout_id = 123456
     result = await app_with_workouts.call_tool(
         "delete_workout",
-        {"workout_id": workout_id}
+        {"workout_id": workout_id, "confirm": True}
     )
 
     assert result is not None
@@ -1631,11 +1658,12 @@ async def test_delete_workout_failure(app_with_workouts, mock_garmin_client):
     import json as json_module
 
     mock_garmin_client.delete_workout.side_effect = Exception("API Error 404")
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutId": 999999}
 
     workout_id = 999999
     result = await app_with_workouts.call_tool(
         "delete_workout",
-        {"workout_id": workout_id}
+        {"workout_id": workout_id, "confirm": True}
     )
 
     assert result is not None
@@ -1651,10 +1679,11 @@ async def test_delete_workout_exception(app_with_workouts, mock_garmin_client):
     import json as json_module
 
     mock_garmin_client.delete_workout.side_effect = Exception("Network error")
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutId": 123456}
 
     result = await app_with_workouts.call_tool(
         "delete_workout",
-        {"workout_id": 123456}
+        {"workout_id": 123456, "confirm": True}
     )
 
     assert result is not None
@@ -1698,15 +1727,39 @@ async def test_upload_workout_exception(app_with_workouts, mock_garmin_client):
 
 # delete_workouts tests
 @pytest.mark.asyncio
+async def test_delete_workouts_requires_confirmation(app_with_workouts, mock_garmin_client):
+    """Test delete_workouts returns a preview unless confirm=true"""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 123456,
+        "workoutName": "Easy Run",
+        "sportType": {"sportTypeKey": "running"},
+    }
+
+    result = await app_with_workouts.call_tool(
+        "delete_workouts",
+        {"workout_ids": [123456]}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "needs_confirmation"
+    assert result_data["total"] == 1
+    assert result_data["workouts"][0]["name"] == "Easy Run"
+    mock_garmin_client.delete_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_delete_workouts_single(app_with_workouts, mock_garmin_client):
     """Test delete_workouts with a single workout ID"""
     import json as json_module
 
     mock_garmin_client.delete_workout.return_value = {}
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutId": 123456}
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
-        {"workout_ids": [123456]}
+        {"workout_ids": [123456], "confirm": True}
     )
 
     assert result is not None
@@ -1724,10 +1777,15 @@ async def test_delete_workouts_multiple(app_with_workouts, mock_garmin_client):
     import json as json_module
 
     mock_garmin_client.delete_workout.return_value = {}
+    mock_garmin_client.get_workout_by_id.side_effect = [
+        {"workoutId": 111},
+        {"workoutId": 222},
+        {"workoutId": 333},
+    ]
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
-        {"workout_ids": [111, 222, 333]}
+        {"workout_ids": [111, 222, 333], "confirm": True}
     )
 
     assert result is not None
@@ -1747,10 +1805,14 @@ async def test_delete_workouts_partial_failure(app_with_workouts, mock_garmin_cl
         {},
         Exception("API Error 404"),
     ]
+    mock_garmin_client.get_workout_by_id.side_effect = [
+        {"workoutId": 111},
+        {"workoutId": 999},
+    ]
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
-        {"workout_ids": [111, 999]}
+        {"workout_ids": [111, 999], "confirm": True}
     )
 
     assert result is not None
@@ -1769,10 +1831,11 @@ async def test_delete_workouts_exception(app_with_workouts, mock_garmin_client):
     import json as json_module
 
     mock_garmin_client.delete_workout.side_effect = Exception("Network error")
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutId": 123456}
 
     result = await app_with_workouts.call_tool(
         "delete_workouts",
-        {"workout_ids": [123456]}
+        {"workout_ids": [123456], "confirm": True}
     )
 
     assert result is not None

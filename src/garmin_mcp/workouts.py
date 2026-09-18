@@ -3,6 +3,7 @@ Workout-related functions for Garmin Connect MCP Server
 """
 import json
 import re
+import sys
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -358,6 +359,55 @@ def _curate_workout_summary(workout: dict) -> dict:
 
     # Remove None values
     return {k: v for k, v in summary.items() if v is not None}
+
+
+def _workout_preview(client: Any, workout_id: int) -> Dict[str, Any]:
+    """Build a compact preview of a workout before deleting it."""
+    preview: Dict[str, Any] = {"workout_id": workout_id}
+
+    workout = None
+    try:
+        workout = client.get_workout_by_id(workout_id)
+    except Exception:
+        workout = None
+
+    if isinstance(workout, dict) and workout:
+        summary = _curate_workout_summary(workout)
+        preview.update(
+            {
+                "name": summary.get("name"),
+                "sport": summary.get("sport"),
+                "provider": summary.get("provider"),
+                "updated_date": summary.get("updated_date"),
+            }
+        )
+        return {key: value for key, value in preview.items() if value is not None}
+
+    get_workouts = getattr(client, "get_workouts", None)
+    if not callable(get_workouts):
+        return preview
+    try:
+        items = get_workouts()
+    except Exception:
+        return preview
+
+    if not isinstance(items, list):
+        return preview
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("workoutId") == workout_id:
+            summary = _curate_workout_summary(item)
+            preview.update(
+                {
+                    "name": summary.get("name"),
+                    "sport": summary.get("sport"),
+                    "provider": summary.get("provider"),
+                    "updated_date": summary.get("updated_date"),
+                }
+            )
+            break
+    return {key: value for key, value in preview.items() if value is not None}
 
 
 def _curate_step_target(
@@ -995,23 +1045,47 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
-    async def delete_workout(workout_id: int) -> str:
+    async def delete_workout(workout_id: int, confirm: bool = False) -> str:
         """Delete a workout from Garmin Connect
 
         Permanently removes a workout from your Garmin Connect workout library.
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the workout, then call again with confirm=true to delete it.
 
         Args:
             workout_id: ID of the workout to delete (get IDs from get_workouts)
+            confirm: Must be true to actually delete. Default false returns a preview.
         """
         try:
+            preview = _workout_preview(garmin_client, workout_id)
+            if not confirm:
+                return json.dumps(
+                    {
+                        "status": "needs_confirmation",
+                        "workout": preview,
+                        "message": (
+                            "This permanently deletes the workout from Garmin Connect "
+                            "and cannot be undone. Call again with confirm=true to proceed."
+                        ),
+                    },
+                    indent=2,
+                )
+
             # Use the high-level garminconnect method. In garminconnect 0.3.2,
             # client.delete(..., api=True) returns resp.json() (a dict), not a
             # Response, so checking response.status_code raises AttributeError.
             # Delegate to the library and rely on exceptions to signal failure.
             garmin_client.delete_workout(workout_id)
+            print(
+                "delete_workout: deleted workout "
+                f"{workout_id} name={preview.get('name')!r} "
+                f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                file=sys.stderr,
+            )
             return json.dumps({
                 "status": "success",
                 "workout_id": workout_id,
+                "workout": preview,
                 "message": f"Workout {workout_id} deleted successfully"
             }, indent=2)
         except Exception as e:
@@ -1022,23 +1096,48 @@ def register_tools(app):
             }, indent=2)
 
     @app.tool()
-    async def delete_workouts(workout_ids: list[int]) -> str:
+    async def delete_workouts(workout_ids: list[int], confirm: bool = False) -> str:
         """Delete multiple workouts from Garmin Connect in a single call
 
         Permanently removes multiple workouts from your Garmin Connect workout library.
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the workouts, then call again with confirm=true to delete them.
 
         Args:
             workout_ids: List of workout IDs to delete (get IDs from get_workouts)
+            confirm: Must be true to actually delete. Default false returns a preview.
         """
+        previews = [_workout_preview(garmin_client, workout_id) for workout_id in workout_ids]
+        if not confirm:
+            return json.dumps(
+                {
+                    "status": "needs_confirmation",
+                    "total": len(workout_ids),
+                    "workouts": previews,
+                    "message": (
+                        "This permanently deletes these workouts from Garmin Connect "
+                        "and cannot be undone. Call again with confirm=true to proceed."
+                    ),
+                },
+                indent=2,
+            )
+
         results = []
-        for workout_id in workout_ids:
+        for workout_id, preview in zip(workout_ids, previews):
             try:
                 # See note in delete_workout: high-level call avoids the
                 # garminconnect 0.3.2 dict-vs-Response trap.
                 garmin_client.delete_workout(workout_id)
+                print(
+                    "delete_workouts: deleted workout "
+                    f"{workout_id} name={preview.get('name')!r} "
+                    f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                    file=sys.stderr,
+                )
                 results.append({
                     "status": "success",
                     "workout_id": workout_id,
+                    "workout": preview,
                     "message": f"Workout {workout_id} deleted successfully"
                 })
             except Exception as e:
