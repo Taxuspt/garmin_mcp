@@ -11,8 +11,10 @@ class FakeApp:
 
     def __init__(self):
         self.registered = []
+        self.tool_kwargs = []
 
     def tool(self, *args, **kwargs):
+        self.tool_kwargs.append(kwargs)
         explicit = kwargs.get("name") or (
             args[0] if args and isinstance(args[0], str) else None
         )
@@ -116,3 +118,23 @@ def test_passthrough_to_wrapped_app():
     app = FakeApp()
     filt = _ToolFilter(app, set(), set())
     assert filt.run() == "ran"
+
+
+def test_structured_output_defaults_to_false():
+    """String tools must not double-emit escaped JSON in structuredContent (#331)."""
+    app = FakeApp()
+    filt = _ToolFilter(app, set(), set())
+    _register(filt, ["get_a"])
+    assert app.tool_kwargs == [{"structured_output": False}]
+
+
+def test_structured_output_explicit_true_is_preserved():
+    app = FakeApp()
+    filt = _ToolFilter(app, set(), set())
+
+    def fn():
+        return None
+
+    fn.__name__ = "get_a"
+    filt.tool(structured_output=True)(fn)
+    assert app.tool_kwargs == [{"structured_output": True}]
