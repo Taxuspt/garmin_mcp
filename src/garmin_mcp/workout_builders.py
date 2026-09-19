@@ -279,7 +279,7 @@ def build_strength_json(
     steps: List[dict] = []
     step_order = 1
 
-    for ex in exercises:
+    for index, ex in enumerate(exercises):
         ex_name = ex.get("name", "Exercise")
         sets = int(ex.get("sets", 1))
         reps = int(ex.get("reps", 1))
@@ -342,8 +342,10 @@ def build_strength_json(
         steps.append(step)
         step_order += 1
 
-        # Rest step (skip after last exercise)
-        if rest_seconds > 0 and ex != exercises[-1]:
+        # Rest step (skip after last exercise). Compared by index, not by value:
+        # two identical exercise dicts would otherwise make an earlier one look
+        # like the last and lose its rest step.
+        if rest_seconds > 0 and index != len(exercises) - 1:
             steps.append({
                 "type": "ExecutableStepDTO",
                 "stepOrder": step_order,
