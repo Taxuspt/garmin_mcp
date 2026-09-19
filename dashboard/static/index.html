@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diário de Saúde — Ricardo Runnn</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface-1:   #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+
+    --series-bb:      #2a78d6; /* blue - body battery */
+    --series-hrv:     #eb6834; /* orange - HRV */
+    --series-score:   #1baf7a; /* aqua - sleep score */
+    --series-hr:      #e34948; /* red - resting HR */
+
+    --status-good:     #0ca30c;
+    --status-warning:  #fab219;
+    --status-critical: #d03b3b;
+
+    /* Sequential blue ramp for ordinal HR zones (Z1 light -> Z5 dark) */
+    --zone-1: #cde2fb;
+    --zone-2: #9ec5f4;
+    --zone-3: #5598e7;
+    --zone-4: #256abf;
+    --zone-5: #104281;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:        #0d0d0d;
+      --surface-1:   #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:        #2c2c2a;
+      --baseline:    #383835;
+      --border:      rgba(255,255,255,0.10);
+
+      --series-bb:      #3987e5;
+      --series-hrv:     #d95926;
+      --series-score:   #199e70;
+      --series-hr:      #e66767;
+
+      --status-good:     #0ca30c;
+      --status-warning:  #fab219;
+      --status-critical: #d03b3b;
+
+      /* Sequential blue ramp, lighter overall so it stays visible on the dark surface */
+      --zone-1: #cde2fb;
+      --zone-2: #86b6ef;
+      --zone-3: #5598e7;
+      --zone-4: #3987e5;
+      --zone-5: #2a78d6;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; font-weight: 650; margin: 0 0 4px; }
+  .subtitle { color: var(--text-secondary); font-size: 0.9rem; margin: 0 0 20px; }
+
+  .readiness {
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    border-left: 5px solid var(--text-muted);
+  }
+  .readiness.apto { border-left-color: var(--status-good); }
+  .readiness.cautela { border-left-color: var(--status-warning); }
+  .readiness.nao_apto { border-left-color: var(--status-critical); }
+  .readiness .label { font-size: 1.15rem; font-weight: 700; margin-bottom: 4px; }
+  .readiness .plan { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 10px; }
+  .readiness ul { margin: 0; padding-left: 20px; font-size: 0.85rem; color: var(--text-secondary); }
+  .readiness li { margin-bottom: 2px; }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .tile .label { color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+  .tile .value { font-size: 1.7rem; font-weight: 650; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .tile .sub { color: var(--text-muted); font-size: 0.8rem; margin-top: 2px; }
+
+  .volume-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .volume-card h2 { font-size: 0.95rem; font-weight: 650; margin: 0 0 4px; }
+  .volume-card .sub { color: var(--text-muted); font-size: 0.8rem; }
+  .volume-bar-wrap { flex: 1; min-width: 200px; }
+  .volume-bar-track { background: var(--grid); border-radius: 6px; height: 10px; overflow: hidden; margin-top: 8px; }
+  .volume-bar-fill { background: var(--series-bb); height: 100%; border-radius: 6px; }
+  .volume-nums { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 1.1rem; white-space: nowrap; }
+
+  .charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .card h2 { font-size: 0.95rem; font-weight: 650; margin: 0 0 2px; }
+  .card .last-value { color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+  .card canvas { max-height: 220px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  td.name { font-variant-numeric: normal; color: var(--text-primary); font-weight: 500; }
+  .muted { color: var(--text-muted); }
+  .error { color: var(--series-hr); font-size: 0.85rem; padding: 8px 0; }
+  .section-gap { margin-bottom: 20px; }
+
+  .zone-bar-track {
+    display: flex;
+    height: 22px;
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 10px 0 14px;
+  }
+  .zone-bar-seg { height: 100%; }
+  .zone-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-size: 0.82rem;
+  }
+  .zone-legend .item { display: flex; align-items: center; gap: 6px; }
+  .zone-legend .dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .zone-legend .pct { font-weight: 650; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Diário de Saúde — Ricardo Runnn</h1>
+  <p class="subtitle" id="subtitle">A carregar…</p>
+
+  <div class="readiness" id="readiness">
+    <div class="label">A avaliar prontidão…</div>
+  </div>
+
+  <div class="readiness" id="overtraining">
+    <div class="label">A avaliar risco de overtraining…</div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="volume-card" id="volume-card">
+    <div>
+      <h2>Volume da semana</h2>
+      <div class="sub" id="volume-sub">A carregar…</div>
+    </div>
+    <div class="volume-bar-wrap">
+      <div class="volume-nums" id="volume-nums">—</div>
+      <div class="volume-bar-track"><div class="volume-bar-fill" id="volume-bar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:12px;">Atividades recentes</h2>
+    <div id="activities-wrap"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">Volume semanal (6 semanas)</h2>
+    <div class="last-value" id="voltrend-sub"></div>
+    <canvas id="chart-voltrend"></canvas>
+  </div>
+
+  <div class="charts" id="charts">
+    <div class="card">
+      <h2>Body Battery (14 dias)</h2>
+      <div class="last-value" id="bb-last"></div>
+      <canvas id="chart-bb"></canvas>
+    </div>
+    <div class="card">
+      <h2>HRV — última noite (14 dias)</h2>
+      <div class="last-value" id="hrv-last"></div>
+      <canvas id="chart-hrv"></canvas>
+    </div>
+    <div class="card">
+      <h2>Sono — score (14 noites)</h2>
+      <div class="last-value" id="score-last"></div>
+      <canvas id="chart-score"></canvas>
+    </div>
+    <div class="card">
+      <h2>FC em repouso (14 dias)</h2>
+      <div class="last-value" id="hr-last"></div>
+      <canvas id="chart-hr"></canvas>
+    </div>
+    <div class="card">
+      <h2>VO2max (90 dias)</h2>
+      <div class="last-value" id="vo2-last"></div>
+      <canvas id="chart-vo2"></canvas>
+    </div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:4px;">Sono na noite após o treino</h2>
+    <div class="last-value" id="sleepload-sub">A carregar…</div>
+    <div id="sleepload-wrap"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:4px;">Zonas de FC — últimas 10 corridas</h2>
+    <div class="last-value" id="zones-sub">A carregar…</div>
+    <div id="zones-wrap"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:4px;">Projeção de prova (fórmula de Riegel)</h2>
+    <div class="last-value" id="race-sub">Estimativa matemática a partir do teu tempo atual — não é garantia de prova real.</div>
+    <div id="race-wrap"></div>
+  </div>
+</div>
+
+<script>
+const css = getComputedStyle(document.documentElement);
+const cssVar = (name) => css.getPropertyValue(name).trim();
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
+}
+
+function fmtDateTime(raw) {
+  // raw looks like "2026-09-17 20:12:51" -> "17/09 20:12"
+  if (!raw) return "—";
+  const d = new Date(raw.replace(" ", "T"));
+  if (isNaN(d)) return raw;
+  const datePart = d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
+  const timePart = d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" });
+  return `${datePart} ${timePart}`;
+}
+
+function lineChart(canvasId, labels, values, colorVar, unit, yStepSize) {
+  const color = cssVar(colorVar);
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  return new Chart(document.getElementById(canvasId), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: color,
+        backgroundColor: color,
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: color,
+        pointHoverBorderColor: surface,
+        pointHoverBorderWidth: 2,
+        tension: 0.25,
+        spanGaps: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: surface,
+          titleColor: ink,
+          bodyColor: ink,
+          borderColor: grid,
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: (ctx) => ctx.parsed.y == null ? "sem dados" : `${ctx.parsed.y} ${unit}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: muted, font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          grid: { color: grid },
+          ticks: {
+            color: muted,
+            font: { size: 10 },
+            ...(yStepSize ? { stepSize: yStepSize, callback: (v) => Number(v.toFixed(1)) } : {}),
+          },
+          border: { display: false },
+        }
+      }
+    }
+  });
+}
+
+function barChart(canvasId, labels, values, colorVar, unit) {
+  const color = cssVar(colorVar);
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  return new Chart(document.getElementById(canvasId), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: color,
+        borderRadius: 4,
+        maxBarThickness: 40,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: surface,
+          titleColor: ink,
+          bodyColor: ink,
+          borderColor: grid,
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: (ctx) => ctx.parsed.y == null ? "sem dados" : `${ctx.parsed.y} ${unit}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: muted, font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          grid: { color: grid },
+          ticks: { color: muted, font: { size: 10 } },
+          border: { display: false },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+function stackedZoneBarChart(canvasId, labels, weeks) {
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  const datasets = [1, 2, 3, 4, 5].map(zoneNum => ({
+    label: `Z${zoneNum}`,
+    data: weeks.map(w => w.zones.find(z => z.zone === zoneNum)?.km ?? 0),
+    backgroundColor: cssVar(`--zone-${zoneNum}`),
+    borderRadius: 3,
+    maxBarThickness: 40,
+  }));
+
+  return new Chart(document.getElementById(canvasId), {
+    type: "bar",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          position: "bottom",
+          labels: { color: muted, font: { size: 11 }, boxWidth: 10, boxHeight: 10 },
+        },
+        tooltip: {
+          backgroundColor: surface,
+          titleColor: ink,
+          bodyColor: ink,
+          borderColor: grid,
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}km`,
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { display: false },
+          ticks: { color: muted, font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          stacked: true,
+          grid: { color: grid },
+          ticks: { color: muted, font: { size: 10 } },
+          border: { display: false },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+function lastValue(arr, key) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i][key] != null) return arr[i][key];
+  }
+  return null;
+}
+
+function tile(label, value, sub) {
+  const div = document.createElement("div");
+  div.className = "tile";
+  div.innerHTML = `<div class="label">${label}</div><div class="value">${value ?? "—"}</div>${sub ? `<div class="sub">${sub}</div>` : ""}`;
+  return div;
+}
+
+async function loadReadiness() {
+  const r = await fetchJSON("/api/readiness");
+  const el = document.getElementById("readiness");
+  el.className = `readiness ${r.verdict}`;
+  const planHtml = r.today_plan
+    ? `Proposto hoje: <strong>${r.today_plan.description}</strong>`
+    : "Sem sessão planeada para hoje.";
+  const reasonsHtml = r.reasons.map(x => `<li>${x}</li>`).join("");
+  el.innerHTML = `
+    <div class="label">${r.label}</div>
+    <div class="plan">${planHtml}</div>
+    <ul>${reasonsHtml}</ul>
+  `;
+}
+
+function fmtTime(date) {
+  return date.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+async function loadSummary() {
+  const s = await fetchJSON("/api/summary");
+  document.getElementById("subtitle").textContent = `Dados de ${s.date} · atualizado às ${fmtTime(new Date())}`;
+  const tiles = document.getElementById("tiles");
+  tiles.appendChild(tile("Body Battery", s.body_battery, s.body_battery_lowest != null ? `min ${s.body_battery_lowest} / max ${s.body_battery_highest}` : "/ 100"));
+  tiles.appendChild(tile("FC repouso", s.resting_hr, "bpm"));
+  tiles.appendChild(tile("Stress médio", s.avg_stress, null));
+}
+
+async function loadRecovery() {
+  const r = await fetchJSON("/api/recovery?days=14");
+  const labels = r.days.map(d => fmtDate(d.date));
+
+  lineChart("chart-bb", labels, r.days.map(d => d.body_battery), "--series-bb", "/100");
+  lineChart("chart-hrv", labels, r.days.map(d => d.hrv_avg), "--series-hrv", "ms");
+  lineChart("chart-score", labels, r.days.map(d => d.sleep_score), "--series-score", "/100");
+  lineChart("chart-hr", labels, r.days.map(d => d.resting_hr), "--series-hr", "bpm");
+
+  const bb = lastValue(r.days, "body_battery");
+  const hrv = lastValue(r.days, "hrv_avg");
+  const sc = lastValue(r.days, "sleep_score");
+  const hr = lastValue(r.days, "resting_hr");
+
+  document.getElementById("bb-last").textContent = bb != null ? `Último valor: ${bb}/100` : "Sem dados recentes";
+  document.getElementById("hrv-last").textContent = hrv != null ? `Última noite: ${hrv}ms` : "Sem dados recentes";
+  document.getElementById("score-last").textContent = sc != null ? `Última noite: ${sc}/100` : "Sem dados recentes";
+  document.getElementById("hr-last").textContent = hr != null ? `Último valor: ${hr}bpm` : "Sem dados recentes";
+}
+
+async function loadOvertrainingRisk() {
+  const o = await fetchJSON("/api/overtraining_risk");
+  const el = document.getElementById("overtraining");
+  const verdictClass = o.verdict === "baixo" ? "apto" : (o.verdict === "moderado" ? "cautela" : "nao_apto");
+  el.className = `readiness ${verdictClass}`;
+  const reasonsHtml = o.reasons.map(x => `<li>${x}</li>`).join("");
+  const gapsHtml = o.data_gaps.length
+    ? `<div class="plan muted">Nota: ${o.data_gaps.join(" · ")}</div>`
+    : "";
+  el.innerHTML = `
+    <div class="label">${o.label}</div>
+    <div class="plan">Tendência dos últimos ${o.period_days} dias (HRV, FC repouso, sono)</div>
+    <ul>${reasonsHtml}</ul>
+    ${gapsHtml}
+  `;
+}
+
+async function loadVolumeTrend() {
+  const v = await fetchJSON("/api/volume_trend?weeks=6");
+  const labels = v.weeks.map(w => fmtDate(w.week_start));
+  stackedZoneBarChart("chart-voltrend", labels, v.weeks);
+  const last = v.weeks[v.weeks.length - 1];
+  document.getElementById("voltrend-sub").textContent =
+    `Semana atual (a partir de ${fmtDate(last.week_start)}): ${last.km}km em ${last.sessions} sessão(ões) · cor = zona de FC (Z2 até 140bpm)`;
+}
+
+async function loadVo2max() {
+  const v = await fetchJSON("/api/vo2max_trend?days=90");
+  const labels = v.series.map(d => fmtDate(d.date));
+  lineChart("chart-vo2", labels, v.series.map(d => d.vo2_max), "--series-hrv", "", 0.5);
+  if (v.latest != null) {
+    const sign = v.change > 0 ? "+" : "";
+    document.getElementById("vo2-last").textContent =
+      `Atual: ${v.latest} (${sign}${v.change} em 90 dias)`;
+  } else {
+    document.getElementById("vo2-last").textContent = "Sem dados";
+  }
+}
+
+async function loadSleepAfterRun() {
+  const s = await fetchJSON("/api/sleep_after_run?count=8");
+  const wrap = document.getElementById("sleepload-wrap");
+  const sub = document.getElementById("sleepload-sub");
+  const withData = s.runs.filter(r => r.sleep_hours != null).length;
+  sub.textContent = `${withData} de ${s.runs.length} corridas com dados de sono na noite seguinte`;
+  const rows = s.runs.map(r => `
+    <tr>
+      <td class="name">${r.run_name ?? "—"} <span class="muted">(${r.run_distance_km}km)</span></td>
+      <td>${r.run_date}</td>
+      <td>${r.sleep_hours != null ? r.sleep_hours + "h" : "—"}</td>
+      <td>${r.sleep_score != null ? r.sleep_score + "/100" : "—"}</td>
+    </tr>
+  `).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Corrida</th><th>Data</th><th>Sono (h)</th><th>Score</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function loadZoneAnalysis() {
+  const z = await fetchJSON("/api/zone_analysis?count=10");
+  const sub = document.getElementById("zones-sub");
+  const wrap = document.getElementById("zones-wrap");
+
+  if (!z.activities_analyzed) {
+    sub.textContent = "Sem dados de FC suficientes nas corridas recentes.";
+    wrap.innerHTML = "";
+    return;
+  }
+
+  sub.textContent = `${z.activities_analyzed} corrida(s) analisada(s) · ${z.total_minutes} min de FC no total · Z2 até ${z.z2_ceiling_bpm}bpm`;
+
+  const nextFloor = (i) => (i < z.zones.length - 1 ? z.zones[i + 1].floor_bpm - 1 : null);
+
+  const segs = z.zones.map(zn => {
+    const color = cssVar(`--zone-${zn.zone}`);
+    return `<div class="zone-bar-seg" style="width:${zn.pct}%; background:${color};" title="Z${zn.zone}: ${zn.pct}%"></div>`;
+  }).join("");
+
+  const legend = z.zones.map((zn, i) => {
+    const color = cssVar(`--zone-${zn.zone}`);
+    const top = nextFloor(i);
+    const range = top ? `${zn.floor_bpm}-${top}bpm` : `${zn.floor_bpm}+bpm`;
+    return `<div class="item">
+      <span class="dot" style="background:${color};"></span>
+      Z${zn.zone} <span class="muted">(${range})</span> <span class="pct">${zn.pct}%</span>
+      <span class="muted">(${zn.minutes}min)</span>
+    </div>`;
+  }).join("");
+
+  wrap.innerHTML = `
+    <div class="zone-bar-track">${segs}</div>
+    <div class="zone-legend">${legend}</div>
+  `;
+}
+
+async function loadVolume() {
+  const v = await fetchJSON("/api/weekly_volume");
+  const sub = document.getElementById("volume-sub");
+  const nums = document.getElementById("volume-nums");
+  const bar = document.getElementById("volume-bar");
+  sub.textContent = `Semana de ${v.week_start} a ${v.week_end} · ${v.sessions_count} corrida(s)`;
+  if (v.target_km != null) {
+    nums.textContent = `${v.real_km} / ${v.target_km} km`;
+    const pct = Math.min(100, (v.real_km / v.target_km) * 100);
+    bar.style.width = `${pct}%`;
+  } else {
+    nums.textContent = `${v.real_km} km`;
+    bar.style.width = "0%";
+  }
+}
+
+async function loadRaceProjection() {
+  const p = await fetchJSON("/api/race_projection");
+  const wrap = document.getElementById("race-wrap");
+  const rows = p.projections.map(proj => {
+    const mins = Math.floor(proj.projected_minutes);
+    const secs = Math.round((proj.projected_minutes - mins) * 60);
+    const timeStr = `${mins}:${String(secs).padStart(2, "0")}`;
+    const paceMin = Math.floor(proj.pace_min_per_km);
+    const paceSec = Math.round((proj.pace_min_per_km - paceMin) * 60);
+    return `<tr>
+      <td>${proj.distance_km}km</td>
+      <td>${timeStr}</td>
+      <td>${paceMin}:${String(paceSec).padStart(2, "0")}/km</td>
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Distância</th><th>Tempo projetado</th><th>Ritmo</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function loadActivities() {
+  const a = await fetchJSON("/api/activities?limit=8");
+  const wrap = document.getElementById("activities-wrap");
+  if (!a.activities.length) {
+    wrap.innerHTML = `<p class="muted">Sem atividades recentes.</p>`;
+    return;
+  }
+  const rows = a.activities.map(act => `
+    <tr>
+      <td class="name">${act.name ?? "—"}</td>
+      <td>${fmtDateTime(act.start_time)}</td>
+      <td>${act.distance_km != null ? act.distance_km + " km" : "—"}</td>
+      <td>${act.duration_min != null ? act.duration_min + " min" : "—"}</td>
+      <td>${act.avg_hr ?? "—"}</td>
+    </tr>
+  `).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Nome</th><th>Início</th><th>Dist.</th><th>Dur.</th><th>FC méd.</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function main() {
+  try {
+    await Promise.all([
+      loadReadiness(),
+      loadOvertrainingRisk(),
+      loadSummary(),
+      loadRecovery(),
+      loadVolume(),
+      loadVolumeTrend(),
+      loadVo2max(),
+      loadSleepAfterRun(),
+      loadZoneAnalysis(),
+      loadRaceProjection(),
+      loadActivities(),
+    ]);
+  } catch (err) {
+    document.getElementById("subtitle").innerHTML = `<span class="error">Erro a carregar dados: ${err.message}</span>`;
+    console.error(err);
+  }
+}
+
+main();
+</script>
+</body>
+</html>
