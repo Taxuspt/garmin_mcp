@@ -20,6 +20,52 @@ def _num_to_str(value: float) -> str:
     return str(int(value)) if value == int(value) else str(value)
 
 
+def resolve_weight_goal_target_date(stored_target, date, target_date=None):
+    """Decide which ``targetDate`` a nutrition-settings update should carry.
+
+    ``/nutrition-service/settings/{date}`` is a full-object PUT, and the object
+    it returns includes ``targetDate`` -- the *weight goal's* target, not a
+    nutrition field. Garmin validates it on write and rejects the entire
+    request unless it is after the day being written::
+
+        API Error 400 - Goal targetDate must be after the asOfDate provided.
+
+    So once a user's weight-goal target date has passed, every nutrition
+    update fails for every current or future date, with an error that names
+    neither the field nor the weight goal.
+
+    The stored value is deliberately never dropped or silently rewritten: it
+    belongs to the user's weight goal, and changing it as a side effect of a
+    calorie update would alter something they did not ask to change.
+
+    Returns ``(target_date_to_set, error)``. At most one is not ``None``; both
+    ``None`` means the stored value is valid and must be left untouched.
+    """
+    if target_date is not None:
+        try:
+            datetime.date.fromisoformat(target_date)
+        except (ValueError, TypeError):
+            return None, f"Invalid target_date {target_date!r}. Use YYYY-MM-DD."
+        if target_date <= date:
+            return None, (
+                f"target_date ({target_date}) must be after date ({date}); Garmin "
+                f"requires the weight goal's target to be later than the day being written."
+            )
+        return target_date, None
+
+    if stored_target and str(stored_target) <= date:
+        return None, (
+            f"Cannot update nutrition settings for {date}: the weight goal's targetDate "
+            f"({stored_target}) is not after {date}, and Garmin rejects the whole settings "
+            f"update in that case.\n"
+            f"Either set a new target date on the weight goal in Garmin Connect (or end the "
+            f"goal) and retry, or pass target_date=YYYY-MM-DD (after {date}) to move the "
+            f"weight goal's target date as part of this update."
+        )
+
+    return None, None
+
+
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
@@ -164,6 +210,7 @@ def register_tools(app):
         carbs_grams: Optional[int] = None,
         fat_grams: Optional[int] = None,
         protein_grams: Optional[int] = None,
+        target_date: Optional[str] = None,
     ) -> str:
         """Update daily nutrition goals (calorie target and macronutrient targets).
 
@@ -183,6 +230,10 @@ def register_tools(app):
             carbs_grams: Daily carbohydrate target in grams
             fat_grams: Daily fat target in grams
             protein_grams: Daily protein target in grams
+            target_date: Optional new target date (YYYY-MM-DD) for the weight
+                  goal that this endpoint carries. Only needed when the stored
+                  target date has already passed, which otherwise makes Garmin
+                  reject the update; must be after `date`.
         """
         if all(v is None for v in (calorie_goal, carbs_grams, fat_grams, protein_grams)):
             return "No fields to update — supply at least one of calorie_goal, carbs_grams, fat_grams, protein_grams."
@@ -192,6 +243,13 @@ def register_tools(app):
             if not current:
                 return f"Could not read current nutrition settings for {date} — cannot apply update."
             current = deepcopy(current)
+            new_target, target_error = resolve_weight_goal_target_date(
+                current.get("targetDate"), date, target_date
+            )
+            if target_error:
+                return target_error
+            if new_target:
+                current["targetDate"] = new_target
             if calorie_goal is not None:
                 current["calorieGoal"] = calorie_goal
             macro_overrides = {
