@@ -392,6 +392,7 @@ def register_tools(app):
 
         Args:
             name: Workout name (e.g. "W3 Mié 2:2")
+                Max 256 characters: Garmin SILENTLY TRUNCATES longer names.
             run_seconds: Duration of each run interval in seconds
             walk_seconds: Duration of each walk/recovery interval in seconds
             repeats: Number of run/walk repetitions
@@ -447,6 +448,7 @@ def register_tools(app):
 
         Args:
             name: Workout name (e.g. "Step 8 - 30min continuous")
+                Max 256 characters: Garmin SILENTLY TRUNCATES longer names.
             run_seconds: Duration of the run in seconds
             warmup_min: Warmup walk duration in minutes
             cooldown_min: Cooldown walk duration in minutes
@@ -490,6 +492,7 @@ def register_tools(app):
 
         Args:
             name: Workout name
+                Max 256 characters: Garmin SILENTLY TRUNCATES longer names.
             duration_min: Main walking block duration in minutes
             hr_min: Minimum heart rate in bpm (used for description; target is Z2)
             hr_max: Maximum heart rate in bpm (used for description; target is Z2)
@@ -531,6 +534,7 @@ def register_tools(app):
 
         Args:
             name: Workout name
+                Max 256 characters: Garmin SILENTLY TRUNCATES longer names.
             exercises: List of dicts with keys: name, sets, reps, rest_seconds and an
                 optional category. Category is omitted from the payload when not
                 given; Garmin accepts that. When given it must be one of Garmin's
