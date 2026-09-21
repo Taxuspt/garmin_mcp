@@ -7,6 +7,7 @@ weekly volume target) is read directly from the Coach Memory MCP's local
 SQLite database -- read-only, no need to speak the MCP protocol for that.
 """
 import datetime
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -28,13 +29,20 @@ _client: Garmin | None = None
 
 COACH_DB_PATH = Path.home() / ".local" / "share" / "coach" / "memory.db"
 
-# Weekly km targets for the current 4-week Base block (set 19 sep 2026).
+# Weekly km targets for the current 4-week Base block (set 19 sep 2026),
+# re-bucketed into Monday-Sunday calendar weeks (21 sep 2026) -- summed from
+# the actual planned distance of whichever sessions fall in each window,
+# since the plan's own sessions are anchored Sun(long)/Tue/Thu and don't line
+# up 1:1 with ISO calendar weeks.
 BLOCK_WEEK_TARGETS = [
-    ("2026-09-20", "2026-09-26", 18),
-    ("2026-09-27", "2026-10-03", 20),
-    ("2026-10-04", "2026-10-10", 22),
-    ("2026-10-11", "2026-10-17", 15),
+    ("2026-09-14", "2026-09-20", 8),
+    ("2026-09-21", "2026-09-27", 19),
+    ("2026-09-28", "2026-10-04", 21),
+    ("2026-10-05", "2026-10-11", 18),
+    ("2026-10-12", "2026-10-18", 9),
 ]
+
+BIOMECHANICS_BOARD_PATH = Path.home() / ".local" / "share" / "coach" / "biomechanics_board.json"
 
 
 def get_client() -> Garmin:
@@ -268,9 +276,7 @@ def api_weekly_volume():
     """This week's real running volume vs the block's target for that week."""
     client = get_client()
     today = datetime.date.today()
-    # Week runs Sunday-Saturday to match the block's session cadence (long run on Sunday).
-    days_since_sunday = (today.weekday() + 1) % 7
-    week_start = today - datetime.timedelta(days=days_since_sunday)
+    week_start = today - datetime.timedelta(days=today.weekday())  # Monday
     week_end = week_start + datetime.timedelta(days=6)
 
     try:
@@ -493,11 +499,10 @@ def api_zone_analysis(count: int = Query(default=10, ge=1, le=20)):
 
 @app.get("/api/volume_trend")
 def api_volume_trend(weeks: int = Query(default=6, ge=1, le=12)):
-    """Weekly running km for the last N weeks (Sunday-start, matching the block)."""
+    """Weekly running km for the last N weeks (Monday-start), most recent week first."""
     client = get_client()
     today = datetime.date.today()
-    days_since_sunday = (today.weekday() + 1) % 7
-    this_week_start = today - datetime.timedelta(days=days_since_sunday)
+    this_week_start = today - datetime.timedelta(days=today.weekday())  # Monday
     range_start = this_week_start - datetime.timedelta(weeks=weeks - 1)
 
     try:
@@ -526,7 +531,7 @@ def api_volume_trend(weeks: int = Query(default=6, ge=1, le=12)):
             d = datetime.date.fromisoformat(a["startTimeLocal"][:10])
         except (KeyError, ValueError):
             continue
-        wk = d - datetime.timedelta(days=(d.weekday() + 1) % 7)
+        wk = d - datetime.timedelta(days=d.weekday())  # Monday
         key = wk.isoformat()
         if key not in buckets:
             continue
@@ -539,7 +544,7 @@ def api_volume_trend(weeks: int = Query(default=6, ge=1, le=12)):
                 buckets[key]["zone_km"][num] += km
 
     weeks_out = []
-    for k, v in sorted(buckets.items()):
+    for k, v in sorted(buckets.items(), reverse=True):  # current week first
         weeks_out.append({
             "week_start": k,
             "km": round(v["km"], 1),
@@ -817,6 +822,23 @@ def api_running_dynamics(count: int = Query(default=10, ge=1, le=20)):
         })
 
     return {"runs": out}
+
+
+@app.get("/api/biomechanics_notes")
+def api_biomechanics_notes():
+    """Weekly biomechanical assessment board, keyed by week_start (Monday).
+
+    Source of truth is the human-readable ~/.local/share/coach/BIOMECANICA.md;
+    this JSON mirror is what the dashboard reads to show notes when a week is
+    clicked. Update both when adding a new assessment.
+    """
+    if not BIOMECHANICS_BOARD_PATH.exists():
+        return {}
+    try:
+        with open(BIOMECHANICS_BOARD_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 @app.get("/api/activities")

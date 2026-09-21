@@ -167,6 +167,41 @@
   .zone-legend .item { display: flex; align-items: center; gap: 6px; }
   .zone-legend .dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
   .zone-legend .pct { font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  #chart-voltrend { cursor: pointer; }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    max-width: 640px;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 20px 22px;
+  }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .modal-header h2 { font-size: 1.05rem; margin: 0; }
+  .modal-close {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 4px 8px;
+  }
+  .modal-close:hover { color: var(--text-primary); }
+  .modal-card h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-secondary); margin: 16px 0 6px; }
+  .modal-card ul { margin: 0; padding-left: 20px; font-size: 0.88rem; line-height: 1.5; }
+  .modal-card li { margin-bottom: 6px; }
+  .modal-card .modal-sub { color: var(--text-muted); font-size: 0.82rem; }
 </style>
 </head>
 <body>
@@ -202,8 +237,18 @@
 
   <div class="card section-gap">
     <h2 style="margin-bottom:2px;">Volume semanal (6 semanas)</h2>
-    <div class="last-value" id="voltrend-sub"></div>
+    <div class="last-value" id="voltrend-sub">Clique numa semana para ver a avaliação biomecânica, se houver.</div>
     <canvas id="chart-voltrend"></canvas>
+  </div>
+
+  <div class="modal-overlay" id="biomech-modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="biomech-modal-title">Avaliação biomecânica</h2>
+        <button class="modal-close" id="biomech-modal-close" aria-label="Fechar">&times;</button>
+      </div>
+      <div id="biomech-modal-body"></div>
+    </div>
   </div>
 
   <div class="charts" id="charts">
@@ -238,12 +283,6 @@
     <h2 style="margin-bottom:4px;">Sono na noite após o treino</h2>
     <div class="last-value" id="sleepload-sub">A carregar…</div>
     <div id="sleepload-wrap"></div>
-  </div>
-
-  <div class="card section-gap">
-    <h2 style="margin-bottom:4px;">Zonas de FC — últimas 10 corridas</h2>
-    <div class="last-value" id="zones-sub">A carregar…</div>
-    <div id="zones-wrap"></div>
   </div>
 
   <div class="card section-gap">
@@ -417,7 +456,7 @@ function barChart(canvasId, labels, values, colorVar, unit) {
   });
 }
 
-function stackedZoneBarChart(canvasId, labels, weeks) {
+function stackedZoneBarChart(canvasId, labels, weeks, onBarClick) {
   const grid = cssVar("--grid");
   const muted = cssVar("--text-muted");
   const surface = cssVar("--surface-1");
@@ -444,6 +483,14 @@ function stackedZoneBarChart(canvasId, labels, weeks) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      onClick: (evt, elements, chart) => {
+        if (!onBarClick) return;
+        const points = chart.getElementsAtEventForMode(evt, "index", { intersect: false }, true);
+        if (points.length) onBarClick(points[0].index);
+      },
+      onHover: (evt, elements) => {
+        evt.native.target.style.cursor = elements.length ? "pointer" : "default";
+      },
       plugins: {
         legend: {
           display: true,
@@ -560,13 +607,50 @@ async function loadOvertrainingRisk() {
   `;
 }
 
+function openBiomechModal(weekStart, note) {
+  const overlay = document.getElementById("biomech-modal-overlay");
+  const title = document.getElementById("biomech-modal-title");
+  const body = document.getElementById("biomech-modal-body");
+  const weekLabel = fmtDate(weekStart);
+
+  if (!note) {
+    title.textContent = `Semana de ${weekLabel}`;
+    body.innerHTML = `<p class="modal-sub">Sem avaliação biomecânica registrada para esta semana.</p>`;
+  } else {
+    title.textContent = note.title || `Semana de ${weekLabel}`;
+    const findings = (note.findings || []).map(f => `<li>${f}</li>`).join("");
+    const recs = (note.recommendations || []).map(r => `<li>${r}</li>`).join("");
+    body.innerHTML = `
+      <div class="modal-sub">Registrado em ${note.recorded_at ?? "—"} · período analisado: ${note.period_analyzed ?? "—"}</div>
+      <h3>Achados</h3>
+      <ul>${findings}</ul>
+      <h3>Recomendações</h3>
+      <ul>${recs}</ul>
+      ${note.next_review ? `<h3>Próxima revisão</h3><p class="modal-sub">${note.next_review}</p>` : ""}
+    `;
+  }
+  overlay.classList.add("open");
+}
+
+function setupBiomechModalClose() {
+  const overlay = document.getElementById("biomech-modal-overlay");
+  document.getElementById("biomech-modal-close").addEventListener("click", () => overlay.classList.remove("open"));
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.classList.remove("open"); });
+}
+
 async function loadVolumeTrend() {
-  const v = await fetchJSON("/api/volume_trend?weeks=6");
+  const [v, notes] = await Promise.all([
+    fetchJSON("/api/volume_trend?weeks=6"),
+    fetchJSON("/api/biomechanics_notes").catch(() => ({})),
+  ]);
   const labels = v.weeks.map(w => fmtDate(w.week_start));
-  stackedZoneBarChart("chart-voltrend", labels, v.weeks);
-  const last = v.weeks[v.weeks.length - 1];
+  stackedZoneBarChart("chart-voltrend", labels, v.weeks, (index) => {
+    const week = v.weeks[index];
+    openBiomechModal(week.week_start, notes[week.week_start]);
+  });
+  const current = v.weeks[0];
   document.getElementById("voltrend-sub").textContent =
-    `Semana atual (a partir de ${fmtDate(last.week_start)}): ${last.km}km em ${last.sessions} sessão(ões) · cor = zona de FC (Z2 até 140bpm)`;
+    `Semana atual (a partir de ${fmtDate(current.week_start)}): ${current.km}km em ${current.sessions} sessão(ões) · cor = zona de FC (Z2 até 140bpm) · clique numa barra para ver a avaliação biomecânica`;
 }
 
 async function loadVo2max() {
@@ -693,43 +777,6 @@ async function loadRunningDynamics() {
   `;
 }
 
-async function loadZoneAnalysis() {
-  const z = await fetchJSON("/api/zone_analysis?count=10");
-  const sub = document.getElementById("zones-sub");
-  const wrap = document.getElementById("zones-wrap");
-
-  if (!z.activities_analyzed) {
-    sub.textContent = "Sem dados de FC suficientes nas corridas recentes.";
-    wrap.innerHTML = "";
-    return;
-  }
-
-  sub.textContent = `${z.activities_analyzed} corrida(s) analisada(s) · ${z.total_minutes} min de FC no total · Z2 até ${z.z2_ceiling_bpm}bpm`;
-
-  const nextFloor = (i) => (i < z.zones.length - 1 ? z.zones[i + 1].floor_bpm - 1 : null);
-
-  const segs = z.zones.map(zn => {
-    const color = cssVar(`--zone-${zn.zone}`);
-    return `<div class="zone-bar-seg" style="width:${zn.pct}%; background:${color};" title="Z${zn.zone}: ${zn.pct}%"></div>`;
-  }).join("");
-
-  const legend = z.zones.map((zn, i) => {
-    const color = cssVar(`--zone-${zn.zone}`);
-    const top = nextFloor(i);
-    const range = top ? `${zn.floor_bpm}-${top}bpm` : `${zn.floor_bpm}+bpm`;
-    return `<div class="item">
-      <span class="dot" style="background:${color};"></span>
-      Z${zn.zone} <span class="muted">(${range})</span> <span class="pct">${zn.pct}%</span>
-      <span class="muted">(${zn.minutes}min)</span>
-    </div>`;
-  }).join("");
-
-  wrap.innerHTML = `
-    <div class="zone-bar-track">${segs}</div>
-    <div class="zone-legend">${legend}</div>
-  `;
-}
-
 async function loadVolume() {
   const v = await fetchJSON("/api/weekly_volume");
   const sub = document.getElementById("volume-sub");
@@ -792,6 +839,7 @@ async function loadActivities() {
 }
 
 async function main() {
+  setupBiomechModalClose();
   try {
     await Promise.all([
       loadReadiness(),
@@ -802,7 +850,6 @@ async function main() {
       loadVolumeTrend(),
       loadVo2max(),
       loadSleepAfterRun(),
-      loadZoneAnalysis(),
       loadFirst10minHr(),
       loadRunningDynamics(),
       loadRaceProjection(),
