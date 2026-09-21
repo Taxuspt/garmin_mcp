@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Diário de Saúde — Ricardo Runnn</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <style>
   :root {
     color-scheme: light;
@@ -21,6 +22,8 @@
     --series-hrv:     #eb6834; /* orange - HRV */
     --series-score:   #1baf7a; /* aqua - sleep score */
     --series-hr:      #e34948; /* red - resting HR */
+    --series-fitness: #4a3aa7; /* violet - chronic load */
+    --series-fatigue: #008300; /* green - acute load */
 
     --status-good:     #0ca30c;
     --status-warning:  #fab219;
@@ -49,6 +52,8 @@
       --series-hrv:     #d95926;
       --series-score:   #199e70;
       --series-hr:      #e66767;
+      --series-fitness: #9085e9;
+      --series-fatigue: #008300;
 
       --status-good:     #0ca30c;
       --status-warning:  #fab219;
@@ -300,6 +305,12 @@
   </div>
 
   <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">Fitness &amp; Freshness (42 dias)</h2>
+    <div class="last-value" id="ff-last">A carregar…</div>
+    <canvas id="chart-ff"></canvas>
+  </div>
+
+  <div class="card section-gap">
     <h2 style="margin-bottom:4px;">Sono na noite após o treino</h2>
     <div class="last-value" id="sleepload-sub">A carregar…</div>
     <div id="sleepload-wrap"></div>
@@ -325,6 +336,13 @@
 </div>
 
 <script>
+// Loaded globally but only opted into on the one chart that needs it
+// (stacked weekly volume-by-zone), so other charts stay label-free.
+if (window.ChartDataLabels) {
+  Chart.register(ChartDataLabels);
+  Chart.defaults.set("plugins.datalabels", { display: false });
+}
+
 const css = getComputedStyle(document.documentElement);
 const cssVar = (name) => css.getPropertyValue(name).trim();
 
@@ -492,9 +510,16 @@ function stackedZoneBarChart(canvasId, labels, weeks, onBarClick) {
   const datasets = groups.map(g => ({
     label: g.label,
     data: weeks.map(w => g.zones.reduce((sum, z) => sum + (w.zones.find(x => x.zone === z)?.km ?? 0), 0)),
+    pctData: weeks.map(w => g.zones.reduce((sum, z) => sum + (w.zones.find(x => x.zone === z)?.pct ?? 0), 0)),
     backgroundColor: cssVar(g.colorVar),
     borderRadius: 3,
     maxBarThickness: 40,
+    datalabels: {
+      display: (ctx) => (ctx.dataset.pctData?.[ctx.dataIndex] ?? 0) >= 8,
+      color: "#ffffff",
+      font: { size: 10, weight: "650" },
+      formatter: (_value, ctx) => `${ctx.dataset.pctData[ctx.dataIndex]}%`,
+    },
   }));
 
   return new Chart(document.getElementById(canvasId), {
@@ -525,7 +550,10 @@ function stackedZoneBarChart(canvasId, labels, weeks, onBarClick) {
           borderWidth: 1,
           padding: 10,
           callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}km`,
+            label: (ctx) => {
+              const pct = ctx.dataset.pctData?.[ctx.dataIndex];
+              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}km${pct != null ? ` (${pct}%)` : ""}`;
+            },
           }
         }
       },
@@ -702,7 +730,7 @@ async function loadVolumeTrend() {
     const week = v.weeks[index];
     openBiomechModal(week.week_start, notes[week.week_start]);
   });
-  const current = v.weeks[0];
+  const current = v.weeks[v.weeks.length - 1];
   document.getElementById("voltrend-sub").textContent =
     `Semana atual (a partir de ${fmtDate(current.week_start)}): ${current.km}km em ${current.sessions} sessão(ões) · cor = zona de FC (Z2 até ${v.z2_ceiling_bpm}bpm) · clique numa barra para ver a avaliação biomecânica`;
 }
@@ -717,6 +745,61 @@ async function loadVo2max() {
       `Atual: ${v.latest} (${sign}${v.change} em 90 dias)`;
   } else {
     document.getElementById("vo2-last").textContent = "Sem dados";
+  }
+}
+
+async function loadFitnessFreshness() {
+  const f = await fetchJSON("/api/fitness_freshness?days=42");
+  const labels = f.series.map(d => fmtDate(d.date));
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  new Chart(document.getElementById("chart-ff"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Fitness (carga crônica)",
+          data: f.series.map(d => d.fitness),
+          borderColor: cssVar("--series-fitness"),
+          backgroundColor: cssVar("--series-fitness"),
+          borderWidth: 2, pointRadius: 0, tension: 0.25, spanGaps: true,
+        },
+        {
+          label: "Fadiga (carga aguda)",
+          data: f.series.map(d => d.fatigue),
+          borderColor: cssVar("--series-fatigue"),
+          backgroundColor: cssVar("--series-fatigue"),
+          borderWidth: 2, pointRadius: 0, tension: 0.25, spanGaps: true,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "bottom", labels: { color: muted, font: { size: 11 }, boxWidth: 10, boxHeight: 10 } },
+        tooltip: {
+          backgroundColor: surface, titleColor: ink, bodyColor: ink,
+          borderColor: grid, borderWidth: 1, padding: 10,
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: muted, font: { size: 10 }, maxRotation: 0 }, border: { color: cssVar("--baseline") } },
+        y: { grid: { color: grid }, ticks: { color: muted, font: { size: 10 } }, border: { display: false }, beginAtZero: true },
+      }
+    }
+  });
+
+  if (f.latest) {
+    document.getElementById("ff-last").textContent =
+      `Hoje: fitness ${f.latest.fitness} · fadiga ${f.latest.fatigue} · forma (razão) ${f.latest.ratio} — ${f.latest.status ?? "sem status"}`;
+  } else {
+    document.getElementById("ff-last").textContent = "Sem dados de carga de treino ainda.";
   }
 }
 
@@ -752,9 +835,8 @@ async function loadFirst10minHr() {
   const overCount = r.runs.filter(x => x.avg_hr_first_10min > ceiling).length;
   sub.textContent = `Limite Z2: ${ceiling}bpm · ${overCount} de ${r.runs.length} corridas já começam acima disso`;
 
-  const runsAsc = [...r.runs].reverse();
-  const labels = runsAsc.map(x => fmtDateTime(x.date).split(" ")[0]);
-  const values = runsAsc.map(x => x.avg_hr_first_10min);
+  const labels = r.runs.map(x => fmtDateTime(x.date).split(" ")[0]);
+  const values = r.runs.map(x => x.avg_hr_first_10min);
   const colors = values.map(v => v > ceiling ? cssVar("--status-critical") : cssVar("--zone-2"));
 
   new Chart(document.getElementById("chart-first10"), {
@@ -904,6 +986,7 @@ async function main() {
       loadVolume(),
       loadVolumeTrend(),
       loadVo2max(),
+      loadFitnessFreshness(),
       loadSleepAfterRun(),
       loadFirst10minHr(),
       loadRunningDynamics(),

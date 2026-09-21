@@ -571,13 +571,18 @@ def api_volume_trend(weeks: int = Query(default=6, ge=1, le=12)):
                 buckets[key]["zone_km"][num] += km
 
     weeks_out = []
-    for k, v in sorted(buckets.items(), reverse=True):  # current week first
+    for k, v in sorted(buckets.items()):  # ascending: oldest -> current
+        week_total = sum(v["zone_km"].values())
         weeks_out.append({
             "week_start": k,
             "km": round(v["km"], 1),
             "sessions": v["sessions"],
             "zones": [
-                {"zone": num, "km": round(v["zone_km"][num], 2)}
+                {
+                    "zone": num,
+                    "km": round(v["zone_km"][num], 2),
+                    "pct": round((v["zone_km"][num] / week_total) * 100) if week_total else 0,
+                }
                 for num in (1, 2, 3, 4, 5)
             ],
         })
@@ -632,6 +637,49 @@ def api_vo2max_trend(days: int = Query(default=90, ge=7, le=180)):
     return {"series": series, "first": first_val, "latest": last_val, "change": change}
 
 
+@app.get("/api/fitness_freshness")
+def api_fitness_freshness(days: int = Query(default=42, ge=7, le=90)):
+    """Fitness (chronic load) / Fatigue (acute load) / Form (ratio), Garmin's ACWR model.
+
+    Mirrors Garmin Connect's own "Fitness & Freshness": chronic load = longer-term
+    training load ("fitness"), acute load = short-term training load ("fatigue"),
+    their ratio = "form" (optimal band ~0.8-1.3 per Garmin's acwrStatus).
+    """
+    client = get_client()
+    end = datetime.date.today()
+    start = end - datetime.timedelta(days=days - 1)
+
+    series = []
+    current = start
+    while current <= end:
+        d = current.isoformat()
+        try:
+            status = client.get_training_status(d) or {}
+        except Exception:
+            status = {}
+        recent = status.get("mostRecentTrainingStatus") or {}
+        latest = recent.get("latestTrainingStatusData") or {}
+        device_data = {}
+        for v in latest.values():
+            if isinstance(v, dict) and v:
+                device_data = v
+                break
+        acwr = device_data.get("acuteTrainingLoadDTO") or {}
+        series.append({
+            "date": d,
+            "fitness": acwr.get("dailyTrainingLoadChronic"),
+            "fatigue": acwr.get("dailyTrainingLoadAcute"),
+            "ratio": acwr.get("dailyAcuteChronicWorkloadRatio"),
+            "status": acwr.get("acwrStatus"),
+        })
+        current += datetime.timedelta(days=1)
+
+    valid = [s for s in series if s["fitness"] is not None]
+    latest_point = valid[-1] if valid else None
+
+    return {"series": series, "latest": latest_point}
+
+
 @app.get("/api/sleep_after_run")
 def api_sleep_after_run(count: int = Query(default=10, ge=1, le=20)):
     """Sleep (hours/score) on the night following each of the last N runs."""
@@ -645,6 +693,7 @@ def api_sleep_after_run(count: int = Query(default=10, ge=1, le=20)):
         a for a in candidates
         if (a.get("activityType") or {}).get("typeKey") in ("running", "trail_running", "track_running")
     ][:count]
+    running.reverse()  # ascending: oldest -> most recent
 
     out = []
     for a in running:
@@ -782,6 +831,7 @@ def api_first10min_hr(count: int = Query(default=10, ge=1, le=20)):
         a for a in candidates
         if (a.get("activityType") or {}).get("typeKey") in ("running", "trail_running", "track_running")
     ][:count]
+    running.reverse()  # ascending: oldest -> most recent
 
     out = []
     for a in running:
@@ -821,6 +871,7 @@ def api_running_dynamics(count: int = Query(default=10, ge=1, le=20)):
         a for a in candidates
         if (a.get("activityType") or {}).get("typeKey") in ("running", "trail_running", "track_running")
     ][:count]
+    running.reverse()  # ascending: oldest -> most recent
 
     out = []
     for a in running:
