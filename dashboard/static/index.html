@@ -223,6 +223,45 @@
   .badge-skipped { background: rgba(250,178,25,0.15); color: var(--status-warning); }
   .badge-cancelled { background: rgba(208,59,59,0.15); color: var(--status-critical); }
 
+  .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
+  .cal-header h2 { font-size: 0.95rem; font-weight: 650; margin: 0; }
+  .cal-year-nav { display: flex; align-items: center; gap: 10px; }
+  .cal-year-nav button {
+    background: none; border: none; color: var(--text-secondary);
+    font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  }
+  .cal-year-nav button:hover:not(:disabled) { background: var(--grid); color: var(--text-primary); }
+  .cal-year-nav button:disabled { opacity: 0.3; cursor: default; }
+  .cal-year-nav .cal-year-label { font-weight: 700; font-size: 1.05rem; min-width: 3.5ch; text-align: center; }
+
+  .cal-overview {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 24px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .cal-sparkline-block { flex: 1; min-width: 220px; }
+  .cal-sparkline { display: flex; align-items: flex-end; gap: 2px; height: 56px; }
+  .cal-sparkline .bar { flex: 1; background: var(--series-bb); border-radius: 1px; min-height: 2px; }
+  .cal-sparkline-label { color: var(--text-muted); font-size: 0.72rem; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.02em; }
+  .cal-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+  .cal-stat-value { font-size: 1.6rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .cal-stat.primary .cal-stat-value { color: var(--series-bb); }
+  .cal-stat-label { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.02em; }
+
+  .cal-months { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .cal-month {
+    background: var(--page); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; min-height: 132px; display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .cal-month.current { background: var(--series-bb); border-color: var(--series-bb); }
+  .cal-month.current .cal-month-name, .cal-month.current .cal-month-hours, .cal-month.current .cal-month-hours-label { color: #ffffff; }
+  .cal-month.future { opacity: 0.45; }
+  .cal-month-name { text-align: right; text-transform: uppercase; color: var(--text-muted); font-size: 0.8rem; font-weight: 650; letter-spacing: 0.03em; }
+  .cal-month-hours { font-size: 1.6rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .cal-month-hours-label { color: var(--text-muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  .cal-month-bars { display: flex; align-items: flex-end; gap: 1.5px; height: 38px; margin-top: 10px; }
+  .cal-month-bars .bar { flex: 1; background: var(--text-primary); opacity: 0.7; border-radius: 1px; min-height: 2px; }
+  .cal-month.current .cal-month-bars .bar { background: #ffffff; opacity: 0.9; }
+
   .wc-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -275,6 +314,30 @@
   <div class="card section-gap">
     <h2 style="margin-bottom:12px;">Atividades recentes</h2>
     <div id="activities-wrap"></div>
+  </div>
+
+  <div class="card section-gap" id="cal-wrap">
+    <div class="cal-header">
+      <h2>Calendário de treinamento</h2>
+      <div class="cal-year-nav">
+        <button id="cal-year-prev" aria-label="Ano anterior">&lsaquo;</button>
+        <span class="cal-year-label" id="cal-year-label">—</span>
+        <button id="cal-year-next" aria-label="Próximo ano">&rsaquo;</button>
+      </div>
+    </div>
+    <div class="cal-overview">
+      <div class="cal-sparkline-block">
+        <div class="cal-sparkline" id="cal-sparkline"></div>
+        <div class="cal-sparkline-label" id="cal-weeks-label">52 semanas</div>
+      </div>
+      <div class="cal-stats">
+        <div class="cal-stat primary"><div class="cal-stat-value" id="cal-hours">—</div><div class="cal-stat-label">Horas</div></div>
+        <div class="cal-stat"><div class="cal-stat-value" id="cal-km">—</div><div class="cal-stat-label">Quilómetros</div></div>
+        <div class="cal-stat"><div class="cal-stat-value" id="cal-pr">—</div><div class="cal-stat-label">Recordes pessoais</div></div>
+        <div class="cal-stat"><div class="cal-stat-value" id="cal-activities">—</div><div class="cal-stat-label">Atividades</div></div>
+      </div>
+    </div>
+    <div class="cal-months" id="cal-months"></div>
   </div>
 
   <div class="card section-gap">
@@ -1066,6 +1129,59 @@ async function loadRaceProjection() {
     </table>`;
 }
 
+const MONTH_NAMES_PT = ["JAN.", "FEV.", "MAR.", "ABR.", "MAI.", "JUN.", "JUL.", "AGO.", "SET.", "OUT.", "NOV.", "DEZ."];
+let calYear = new Date().getFullYear();
+
+function barsHtml(values) {
+  const max = Math.max(1, ...values);
+  return values.map(v => `<div class="bar" style="height:${Math.max(2, (v / max) * 100)}%"></div>`).join("");
+}
+
+async function loadTrainingCalendar(year) {
+  const wrap = document.getElementById("cal-wrap");
+  wrap.style.opacity = "0.5";
+  let c;
+  try {
+    c = await fetchJSON(`/api/training_calendar?year=${year}`);
+  } finally {
+    wrap.style.opacity = "1";
+  }
+  calYear = c.year;
+  const thisYear = new Date().getFullYear();
+
+  document.getElementById("cal-year-label").textContent = c.year;
+  document.getElementById("cal-year-next").disabled = c.year >= thisYear;
+  document.getElementById("cal-weeks-label").textContent = `${c.weeks.length} semanas`;
+  document.getElementById("cal-sparkline").innerHTML = barsHtml(c.weeks.map(w => w.hours));
+
+  document.getElementById("cal-hours").textContent = c.totals.hours.toLocaleString("pt-PT", { maximumFractionDigits: 0 });
+  document.getElementById("cal-km").textContent = c.totals.km.toLocaleString("pt-PT", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  document.getElementById("cal-pr").textContent = c.totals.personal_records;
+  document.getElementById("cal-activities").textContent = c.totals.activities;
+
+  const now = new Date();
+  document.getElementById("cal-months").innerHTML = c.months.map(m => {
+    const isCurrent = c.year === now.getFullYear() && m.month === now.getMonth() + 1;
+    const isFuture = c.year > now.getFullYear() || (c.year === now.getFullYear() && m.month > now.getMonth() + 1);
+    const hoursBlock = isFuture ? "<div></div>" : `
+      <div>
+        <div class="cal-month-hours">${Math.round(m.hours)}</div>
+        <div class="cal-month-hours-label">Horas</div>
+      </div>`;
+    return `
+      <div class="cal-month ${isCurrent ? "current" : ""} ${isFuture ? "future" : ""}">
+        <div class="cal-month-name">${MONTH_NAMES_PT[m.month - 1]}</div>
+        ${hoursBlock}
+        <div class="cal-month-bars">${barsHtml(m.days)}</div>
+      </div>`;
+  }).join("");
+}
+
+function setupCalendarNav() {
+  document.getElementById("cal-year-prev").addEventListener("click", () => loadTrainingCalendar(calYear - 1));
+  document.getElementById("cal-year-next").addEventListener("click", () => loadTrainingCalendar(calYear + 1));
+}
+
 async function loadActivities() {
   const a = await fetchJSON("/api/activities?limit=8");
   const wrap = document.getElementById("activities-wrap");
@@ -1091,6 +1207,7 @@ async function loadActivities() {
 
 async function main() {
   setupBiomechModalClose();
+  setupCalendarNav();
   try {
     await Promise.all([
       loadReadiness(),
@@ -1099,6 +1216,7 @@ async function main() {
       loadSummary(),
       loadRecovery(),
       loadVolume(),
+      loadTrainingCalendar(calYear),
       loadVolumeTrend(),
       loadVo2max(),
       loadFitnessFreshness(),

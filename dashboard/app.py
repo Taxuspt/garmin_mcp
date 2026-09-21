@@ -1112,6 +1112,100 @@ def api_activities(limit: int = Query(default=10, ge=1, le=50)):
     return {"activities": result}
 
 
+@app.get("/api/training_calendar")
+def api_training_calendar(year: int = Query(default=None, ge=2000, le=2100)):
+    """Year-at-a-glance training calendar (Strava-style): weekly sparkline,
+    year totals (hours/km/PRs/activities) and one card per month with a
+    daily-hours bar chart.
+    """
+    client = get_client()
+    today = datetime.date.today()
+    year = year or today.year
+    year_start = datetime.date(year, 1, 1)
+    year_end = datetime.date(year, 12, 31)
+    range_end = min(year_end, today)
+
+    activities = []
+    if range_end >= year_start:
+        try:
+            activities = client.get_activities_by_date(
+                year_start.isoformat(), range_end.isoformat()
+            ) or []
+        except Exception as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    daily_hours: dict[str, float] = {}
+    total_duration_s = 0.0
+    total_distance_m = 0.0
+    for a in activities:
+        start_time = a.get("startTimeLocal")
+        if not start_time:
+            continue
+        try:
+            d = datetime.date.fromisoformat(start_time[:10])
+        except ValueError:
+            continue
+        if d.year != year:
+            continue
+        duration = a.get("duration") or 0
+        daily_hours[d.isoformat()] = daily_hours.get(d.isoformat(), 0.0) + duration / 3600
+        total_duration_s += duration
+        total_distance_m += a.get("distance") or 0
+
+    # Weekly (Monday-start) hours strip spanning the whole year, ~52-53 bars.
+    first_monday = year_start - datetime.timedelta(days=year_start.weekday())
+    weeks_out = []
+    wk = first_monday
+    while wk <= year_end:
+        week_hours = sum(
+            daily_hours.get((wk + datetime.timedelta(days=i)).isoformat(), 0.0)
+            for i in range(7)
+            if (wk + datetime.timedelta(days=i)).year == year
+        )
+        weeks_out.append({"week_start": wk.isoformat(), "hours": round(week_hours, 2)})
+        wk += datetime.timedelta(days=7)
+
+    # Personal records achieved during this year.
+    try:
+        records = client.get_personal_record() or []
+    except Exception:
+        records = []
+    pr_count = 0
+    for r in records:
+        ts = r.get("activityStartDateTimeLocalFormatted") or r.get("actStartDateTimeInGMTFormatted")
+        if ts and ts[:4] == str(year):
+            pr_count += 1
+
+    months_out = []
+    for m in range(1, 13):
+        month_start = datetime.date(year, m, 1)
+        if month_start > today:
+            months_out.append({"month": m, "hours": 0.0, "days": []})
+            continue
+        next_month = datetime.date(year + 1, 1, 1) if m == 12 else datetime.date(year, m + 1, 1)
+        days_out = []
+        month_hours = 0.0
+        d = month_start
+        while d < next_month:
+            h = daily_hours.get(d.isoformat(), 0.0)
+            month_hours += h
+            days_out.append(round(h, 2))
+            d += datetime.timedelta(days=1)
+        months_out.append({"month": m, "hours": round(month_hours, 1), "days": days_out})
+
+    return {
+        "year": year,
+        "weeks": weeks_out,
+        "months": months_out,
+        "totals": {
+            "hours": round(total_duration_s / 3600, 1),
+            "km": round(total_distance_m / 1000, 1),
+            "personal_records": pr_count,
+            "activities": len(activities),
+        },
+    }
+
+
 _INDEX_HTML = Path(__file__).resolve().parent / "static" / "index.html"
 
 
