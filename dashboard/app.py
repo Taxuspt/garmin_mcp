@@ -81,6 +81,31 @@ def _plan_for_date(date: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _next_plan_after(date: str) -> dict | None:
+    """Soonest pending plan strictly after the given date."""
+    if not COACH_DB_PATH.exists():
+        return None
+    with get_coach_db() as conn:
+        row = conn.execute(
+            "SELECT id, planned_at, description, notes, status, activity_id "
+            "FROM plan WHERE planned_at > ? AND status = 'pending' "
+            "ORDER BY planned_at LIMIT 1",
+            (date,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _all_plans() -> list[dict]:
+    if not COACH_DB_PATH.exists():
+        return []
+    with get_coach_db() as conn:
+        rows = conn.execute(
+            "SELECT id, planned_at, description, notes, status, activity_id "
+            "FROM plan ORDER BY planned_at"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _week_target(date: str) -> int | None:
     for start, end, km in BLOCK_WEEK_TARGETS:
         if start <= date <= end:
@@ -259,6 +284,7 @@ def api_readiness():
         reasons.append("Sinais de recuperacao dentro do normal")
 
     plan = _plan_for_date(today_str)
+    next_plan = _next_plan_after(today_str) if not plan else None
 
     return {
         "date": today_str,
@@ -267,6 +293,7 @@ def api_readiness():
         "flags": flags,
         "reasons": reasons,
         "today_plan": plan,
+        "next_plan": next_plan,
         "snapshot": last_night,
     }
 
@@ -335,7 +362,7 @@ def api_race_projection():
 
 # Custom zone boundaries (lower bound, inclusive), overriding Garmin's own
 # Z2 ceiling (136) per Ricardo's request: Z2 runs up to 140bpm.
-ZONE_FLOORS = {1: 90, 2: 120, 3: 141, 4: 153, 5: 165}
+ZONE_FLOORS = {1: 90, 2: 120, 3: 140, 4: 153, 5: 165}
 
 
 def _bucket_zone(hr: float) -> int:
@@ -554,7 +581,7 @@ def api_volume_trend(weeks: int = Query(default=6, ge=1, le=12)):
                 for num in (1, 2, 3, 4, 5)
             ],
         })
-    return {"weeks": weeks_out}
+    return {"weeks": weeks_out, "z2_ceiling_bpm": ZONE_FLOORS[3] - 1}
 
 
 @app.get("/api/vo2max_trend")
@@ -822,6 +849,17 @@ def api_running_dynamics(count: int = Query(default=10, ge=1, le=20)):
         })
 
     return {"runs": out}
+
+
+@app.get("/api/plan")
+def api_plan():
+    """Full training plan (all sessions, any status) from Coach Memory."""
+    today = datetime.date.today().isoformat()
+    plans = _all_plans()
+    return {
+        "today": today,
+        "sessions": plans,
+    }
 
 
 @app.get("/api/biomechanics_notes")

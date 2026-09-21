@@ -202,6 +202,21 @@
   .modal-card ul { margin: 0; padding-left: 20px; font-size: 0.88rem; line-height: 1.5; }
   .modal-card li { margin-bottom: 6px; }
   .modal-card .modal-sub { color: var(--text-muted); font-size: 0.82rem; }
+
+  tr.plan-today { background: rgba(255,255,255,0.04); }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 650;
+    padding: 2px 8px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .badge-pending { background: rgba(137,135,129,0.2); color: var(--text-secondary); }
+  .badge-completed { background: rgba(12,163,12,0.15); color: var(--status-good); }
+  .badge-skipped { background: rgba(250,178,25,0.15); color: var(--status-warning); }
+  .badge-cancelled { background: rgba(208,59,59,0.15); color: var(--status-critical); }
 </style>
 </head>
 <body>
@@ -215,6 +230,11 @@
 
   <div class="readiness" id="overtraining">
     <div class="label">A avaliar risco de overtraining…</div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:12px;">Plano de treino</h2>
+    <div id="plan-wrap"></div>
   </div>
 
   <div class="tiles" id="tiles"></div>
@@ -542,13 +562,47 @@ function tile(label, value, sub) {
   return div;
 }
 
+async function loadPlan() {
+  const p = await fetchJSON("/api/plan");
+  const wrap = document.getElementById("plan-wrap");
+  if (!p.sessions.length) {
+    wrap.innerHTML = `<p class="muted">Sem sessões no plano.</p>`;
+    return;
+  }
+  const badgeClass = {
+    pending: "badge-pending",
+    completed: "badge-completed",
+    skipped: "badge-skipped",
+    cancelled: "badge-cancelled",
+  };
+  const rows = p.sessions.map(s => {
+    const isToday = s.planned_at === p.today;
+    return `
+    <tr class="${isToday ? "plan-today" : ""}">
+      <td>${fmtDate(s.planned_at)}${isToday ? ' <span class="muted">(hoje)</span>' : ""}</td>
+      <td class="name">${s.description}</td>
+      <td><span class="badge ${badgeClass[s.status] ?? "badge-pending"}">${s.status}</span></td>
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Data</th><th>Sessão</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
 async function loadReadiness() {
   const r = await fetchJSON("/api/readiness");
   const el = document.getElementById("readiness");
   el.className = `readiness ${r.verdict}`;
-  const planHtml = r.today_plan
-    ? `Proposto hoje: <strong>${r.today_plan.description}</strong>`
-    : "Sem sessão planeada para hoje.";
+  let planHtml;
+  if (r.today_plan) {
+    planHtml = `Proposto hoje: <strong>${r.today_plan.description}</strong>`;
+  } else if (r.next_plan) {
+    planHtml = `Sem sessão planeada para hoje. Próxima: <strong>${fmtDate(r.next_plan.planned_at)} — ${r.next_plan.description}</strong>`;
+  } else {
+    planHtml = "Sem sessão planeada para hoje nem próximas sessões no plano.";
+  }
   const reasonsHtml = r.reasons.map(x => `<li>${x}</li>`).join("");
   el.innerHTML = `
     <div class="label">${r.label}</div>
@@ -650,7 +704,7 @@ async function loadVolumeTrend() {
   });
   const current = v.weeks[0];
   document.getElementById("voltrend-sub").textContent =
-    `Semana atual (a partir de ${fmtDate(current.week_start)}): ${current.km}km em ${current.sessions} sessão(ões) · cor = zona de FC (Z2 até 140bpm) · clique numa barra para ver a avaliação biomecânica`;
+    `Semana atual (a partir de ${fmtDate(current.week_start)}): ${current.km}km em ${current.sessions} sessão(ões) · cor = zona de FC (Z2 até ${v.z2_ceiling_bpm}bpm) · clique numa barra para ver a avaliação biomecânica`;
 }
 
 async function loadVo2max() {
@@ -843,6 +897,7 @@ async function main() {
   try {
     await Promise.all([
       loadReadiness(),
+      loadPlan(),
       loadOvertrainingRisk(),
       loadSummary(),
       loadRecovery(),
