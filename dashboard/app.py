@@ -733,6 +733,92 @@ def api_overtraining_risk(days: int = Query(default=21, ge=7, le=42)):
     }
 
 
+@app.get("/api/first10min_hr")
+def api_first10min_hr(count: int = Query(default=10, ge=1, le=20)):
+    """Average HR during the first 10 minutes of each of the last N runs.
+
+    Checks whether Ricardo starts runs already above the Z2 ceiling (140bpm) --
+    a classic "went out too fast" pattern.
+    """
+    client = get_client()
+    try:
+        candidates = client.get_activities(0, count * 4) or []
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    running = [
+        a for a in candidates
+        if (a.get("activityType") or {}).get("typeKey") in ("running", "trail_running", "track_running")
+    ][:count]
+
+    out = []
+    for a in running:
+        activity_id = a.get("activityId")
+        try:
+            details = client.get_activity_details(activity_id)
+        except Exception:
+            continue
+        series = _extract_hr_series(details)
+        if not series:
+            continue
+        t0 = series[0][0]
+        window = [hr for ts, hr in series if ts - t0 <= 600_000]
+        if not window:
+            continue
+        out.append({
+            "id": activity_id,
+            "name": a.get("activityName"),
+            "date": a.get("startTimeLocal"),
+            "avg_hr_first_10min": round(sum(window) / len(window), 1),
+            "avg_hr_overall": a.get("averageHR"),
+        })
+
+    return {"runs": out, "z2_ceiling_bpm": ZONE_FLOORS[3] - 1}
+
+
+@app.get("/api/running_dynamics")
+def api_running_dynamics(count: int = Query(default=10, ge=1, le=20)):
+    """Running-form metrics (cadence, stride, GCT, vertical oscillation/ratio) per run."""
+    client = get_client()
+    try:
+        candidates = client.get_activities(0, count * 4) or []
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    running = [
+        a for a in candidates
+        if (a.get("activityType") or {}).get("typeKey") in ("running", "trail_running", "track_running")
+    ][:count]
+
+    out = []
+    for a in running:
+        activity_id = a.get("activityId")
+        try:
+            full = client.get_activity(activity_id) or {}
+        except Exception:
+            continue
+        s = full.get("summaryDTO") or {}
+        distance = s.get("distance")
+        duration = s.get("duration")
+        pace_min_per_km = (duration / 60) / (distance / 1000) if distance and duration else None
+        out.append({
+            "id": activity_id,
+            "name": a.get("activityName"),
+            "date": a.get("startTimeLocal"),
+            "distance_km": round(distance / 1000, 2) if distance else None,
+            "pace_min_per_km": round(pace_min_per_km, 2) if pace_min_per_km else None,
+            "avg_hr": s.get("averageHR"),
+            "avg_cadence_spm": s.get("averageRunCadence"),
+            "max_cadence_spm": s.get("maxRunCadence"),
+            "stride_length_cm": round(s["strideLength"], 1) if s.get("strideLength") else None,
+            "ground_contact_time_ms": round(s["groundContactTime"], 1) if s.get("groundContactTime") else None,
+            "vertical_oscillation_cm": round(s["verticalOscillation"], 2) if s.get("verticalOscillation") else None,
+            "vertical_ratio_pct": round(s["verticalRatio"], 2) if s.get("verticalRatio") else None,
+        })
+
+    return {"runs": out}
+
+
 @app.get("/api/activities")
 def api_activities(limit: int = Query(default=10, ge=1, le=50)):
     client = get_client()

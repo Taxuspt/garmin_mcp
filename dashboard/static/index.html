@@ -247,6 +247,18 @@
   </div>
 
   <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">FC média nos primeiros 10 minutos</h2>
+    <div class="last-value" id="first10-sub">A carregar…</div>
+    <canvas id="chart-first10"></canvas>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:4px;">Métricas de corrida (biomecânica)</h2>
+    <div class="last-value" id="dynamics-sub">Cadência, passada, tempo de contacto e oscilação vertical — últimas corridas.</div>
+    <div id="dynamics-wrap"></div>
+  </div>
+
+  <div class="card section-gap">
     <h2 style="margin-bottom:4px;">Projeção de prova (fórmula de Riegel)</h2>
     <div class="last-value" id="race-sub">Estimativa matemática a partir do teu tempo atual — não é garantia de prova real.</div>
     <div id="race-wrap"></div>
@@ -271,6 +283,13 @@ function fmtDate(iso) {
   return d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
 }
 
+function fmtPace(minPerKm) {
+  if (minPerKm == null) return "—";
+  const m = Math.floor(minPerKm);
+  const s = Math.round((minPerKm - m) * 60);
+  return `${m}:${String(s).padStart(2, "0")}/km`;
+}
+
 function fmtDateTime(raw) {
   // raw looks like "2026-09-17 20:12:51" -> "17/09 20:12"
   if (!raw) return "—";
@@ -281,7 +300,7 @@ function fmtDateTime(raw) {
   return `${datePart} ${timePart}`;
 }
 
-function lineChart(canvasId, labels, values, colorVar, unit, yStepSize) {
+function lineChart(canvasId, labels, values, colorVar, unit, yStepSize, spanGaps = true) {
   const color = cssVar(colorVar);
   const grid = cssVar("--grid");
   const muted = cssVar("--text-muted");
@@ -303,7 +322,7 @@ function lineChart(canvasId, labels, values, colorVar, unit, yStepSize) {
         pointHoverBorderColor: surface,
         pointHoverBorderWidth: 2,
         tension: 0.25,
-        spanGaps: true,
+        spanGaps,
       }]
     },
     options: {
@@ -404,10 +423,17 @@ function stackedZoneBarChart(canvasId, labels, weeks) {
   const surface = cssVar("--surface-1");
   const ink = cssVar("--text-primary");
 
-  const datasets = [1, 2, 3, 4, 5].map(zoneNum => ({
-    label: `Z${zoneNum}`,
-    data: weeks.map(w => w.zones.find(z => z.zone === zoneNum)?.km ?? 0),
-    backgroundColor: cssVar(`--zone-${zoneNum}`),
+  // Z1 and Z2 merged into a single "recovery/base" portion (both are easy effort).
+  const groups = [
+    { label: "Z1-Z2", zones: [1, 2], colorVar: "--zone-2" },
+    { label: "Z3", zones: [3], colorVar: "--zone-3" },
+    { label: "Z4", zones: [4], colorVar: "--zone-4" },
+    { label: "Z5", zones: [5], colorVar: "--zone-5" },
+  ];
+  const datasets = groups.map(g => ({
+    label: g.label,
+    data: weeks.map(w => g.zones.reduce((sum, z) => sum + (w.zones.find(x => x.zone === z)?.km ?? 0), 0)),
+    backgroundColor: cssVar(g.colorVar),
     borderRadius: 3,
     maxBarThickness: 40,
   }));
@@ -503,7 +529,7 @@ async function loadRecovery() {
 
   lineChart("chart-bb", labels, r.days.map(d => d.body_battery), "--series-bb", "/100");
   lineChart("chart-hrv", labels, r.days.map(d => d.hrv_avg), "--series-hrv", "ms");
-  lineChart("chart-score", labels, r.days.map(d => d.sleep_score), "--series-score", "/100");
+  lineChart("chart-score", labels, r.days.map(d => d.sleep_score), "--series-score", "/100", undefined, false);
   lineChart("chart-hr", labels, r.days.map(d => d.resting_hr), "--series-hr", "bpm");
 
   const bb = lastValue(r.days, "body_battery");
@@ -575,6 +601,96 @@ async function loadSleepAfterRun() {
       <thead><tr><th>Corrida</th><th>Data</th><th>Sono (h)</th><th>Score</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+}
+
+async function loadFirst10minHr() {
+  const r = await fetchJSON("/api/first10min_hr?count=10");
+  const sub = document.getElementById("first10-sub");
+  if (!r.runs.length) {
+    sub.textContent = "Sem dados suficientes.";
+    return;
+  }
+  const ceiling = r.z2_ceiling_bpm;
+  const overCount = r.runs.filter(x => x.avg_hr_first_10min > ceiling).length;
+  sub.textContent = `Limite Z2: ${ceiling}bpm · ${overCount} de ${r.runs.length} corridas já começam acima disso`;
+
+  const runsAsc = [...r.runs].reverse();
+  const labels = runsAsc.map(x => fmtDateTime(x.date).split(" ")[0]);
+  const values = runsAsc.map(x => x.avg_hr_first_10min);
+  const colors = values.map(v => v > ceiling ? cssVar("--status-critical") : cssVar("--zone-2"));
+
+  new Chart(document.getElementById("chart-first10"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors,
+        borderRadius: 4,
+        maxBarThickness: 40,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: cssVar("--surface-1"),
+          titleColor: cssVar("--text-primary"),
+          bodyColor: cssVar("--text-primary"),
+          borderColor: cssVar("--grid"),
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: { label: (ctx) => `${ctx.parsed.y}bpm nos primeiros 10min` }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: cssVar("--text-muted"), font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          grid: { color: cssVar("--grid") },
+          ticks: { color: cssVar("--text-muted"), font: { size: 10 } },
+          border: { display: false },
+        }
+      }
+    }
+  });
+}
+
+async function loadRunningDynamics() {
+  const r = await fetchJSON("/api/running_dynamics?count=10");
+  const wrap = document.getElementById("dynamics-wrap");
+  if (!r.runs.length) {
+    wrap.innerHTML = `<p class="muted">Sem dados suficientes.</p>`;
+    return;
+  }
+  const flag = (cond) => cond ? ' style="color:var(--status-warning); font-weight:650;"' : "";
+  const rows = r.runs.map(x => `
+    <tr>
+      <td class="name">${fmtDateTime(x.date).split(" ")[0]} <span class="muted">(${x.distance_km}km)</span></td>
+      <td>${fmtPace(x.pace_min_per_km)}</td>
+      <td${flag(x.avg_cadence_spm != null && x.avg_cadence_spm < 165)}>${x.avg_cadence_spm != null ? Math.round(x.avg_cadence_spm) : "—"}</td>
+      <td>${x.stride_length_cm ?? "—"}</td>
+      <td${flag(x.ground_contact_time_ms != null && x.ground_contact_time_ms > 290)}>${x.ground_contact_time_ms ?? "—"}</td>
+      <td${flag(x.vertical_oscillation_cm != null && x.vertical_oscillation_cm > 10)}>${x.vertical_oscillation_cm ?? "—"}</td>
+      <td${flag(x.vertical_ratio_pct != null && x.vertical_ratio_pct > 10)}>${x.vertical_ratio_pct ?? "—"}</td>
+    </tr>
+  `).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Corrida</th><th>Ritmo</th><th>Cadência (spm)</th><th>Passada (cm)</th>
+        <th>Contacto solo (ms)</th><th>Osc. vertical (cm)</th><th>Rácio vertical (%)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="muted" style="margin-top:8px; font-size:0.78rem;">Laranja = fora do intervalo típico (cadência &lt;165spm, contacto &gt;290ms, oscilação &gt;10cm, rácio &gt;10%).</p>
+  `;
 }
 
 async function loadZoneAnalysis() {
@@ -687,6 +803,8 @@ async function main() {
       loadVo2max(),
       loadSleepAfterRun(),
       loadZoneAnalysis(),
+      loadFirst10minHr(),
+      loadRunningDynamics(),
       loadRaceProjection(),
       loadActivities(),
     ]);
