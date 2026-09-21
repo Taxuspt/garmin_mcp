@@ -897,9 +897,164 @@ def api_running_dynamics(count: int = Query(default=10, ge=1, le=20)):
             "ground_contact_time_ms": round(s["groundContactTime"], 1) if s.get("groundContactTime") else None,
             "vertical_oscillation_cm": round(s["verticalOscillation"], 2) if s.get("verticalOscillation") else None,
             "vertical_ratio_pct": round(s["verticalRatio"], 2) if s.get("verticalRatio") else None,
+            "elevation_gain_m": round(s["elevationGain"]) if s.get("elevationGain") is not None else None,
         })
 
     return {"runs": out}
+
+
+@app.get("/api/pace_trend")
+def api_pace_trend(weeks: int = Query(default=8, ge=1, le=16)):
+    """Weekly average pace and elevation gain -- tracks speed gains over time."""
+    client = get_client()
+    today = datetime.date.today()
+    this_week_start = today - datetime.timedelta(days=today.weekday())  # Monday
+    range_start = this_week_start - datetime.timedelta(weeks=weeks - 1)
+
+    try:
+        activities = client.get_activities_by_date(
+            range_start.isoformat(), today.isoformat()
+        ) or []
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    running = [
+        a for a in activities
+        if (a.get("activityType") or {}).get("typeKey") in ("running", "trail_running", "track_running")
+    ]
+
+    buckets = {}
+    week_start = range_start
+    while week_start <= this_week_start:
+        buckets[week_start.isoformat()] = {
+            "distance_m": 0.0, "duration_s": 0.0, "sessions": 0,
+            "elevation_gain_m": 0.0, "best_pace": None,
+        }
+        week_start += datetime.timedelta(days=7)
+
+    for a in running:
+        try:
+            d = datetime.date.fromisoformat(a["startTimeLocal"][:10])
+        except (KeyError, ValueError):
+            continue
+        wk = d - datetime.timedelta(days=d.weekday())
+        key = wk.isoformat()
+        if key not in buckets:
+            continue
+        distance = a.get("distance") or 0
+        duration = a.get("duration") or 0
+        buckets[key]["distance_m"] += distance
+        buckets[key]["duration_s"] += duration
+        buckets[key]["sessions"] += 1
+        buckets[key]["elevation_gain_m"] += a.get("elevationGain") or 0
+        if distance and duration:
+            pace = (duration / 60) / (distance / 1000)
+            if buckets[key]["best_pace"] is None or pace < buckets[key]["best_pace"]:
+                buckets[key]["best_pace"] = pace
+
+    weeks_out = []
+    for k, v in sorted(buckets.items()):  # ascending
+        avg_pace = (v["duration_s"] / 60) / (v["distance_m"] / 1000) if v["distance_m"] else None
+        km = v["distance_m"] / 1000
+        weeks_out.append({
+            "week_start": k,
+            "km": round(km, 1),
+            "sessions": v["sessions"],
+            "avg_pace_min_per_km": round(avg_pace, 2) if avg_pace else None,
+            "best_pace_min_per_km": round(v["best_pace"], 2) if v["best_pace"] else None,
+            "elevation_gain_m": round(v["elevation_gain_m"]),
+            "elevation_gain_per_km": round(v["elevation_gain_m"] / km, 1) if km else None,
+        })
+    return {"weeks": weeks_out}
+
+
+@app.get("/api/weekly_closing")
+def api_weekly_closing():
+    """Closing report for the most recently fully-completed week (Monday-Sunday).
+
+    Flags flat-only running (low elevation gain per km) so hill work doesn't get
+    silently skipped, and compares pace/volume against the prior week.
+    """
+    client = get_client()
+    today = datetime.date.today()
+    this_week_start = today - datetime.timedelta(days=today.weekday())
+    closed_start = this_week_start - datetime.timedelta(days=7)
+    closed_end = this_week_start - datetime.timedelta(days=1)
+    prior_start = closed_start - datetime.timedelta(days=7)
+    prior_end = closed_start - datetime.timedelta(days=1)
+
+    def week_stats(start, end):
+        try:
+            activities = client.get_activities_by_date(start.isoformat(), end.isoformat()) or []
+        except Exception:
+            activities = []
+        running = [
+            a for a in activities
+            if (a.get("activityType") or {}).get("typeKey") in ("running", "trail_running", "track_running")
+        ]
+        distance_m = sum((a.get("distance") or 0) for a in running)
+        duration_s = sum((a.get("duration") or 0) for a in running)
+        elevation_m = sum((a.get("elevationGain") or 0) for a in running)
+        avg_pace = (duration_s / 60) / (distance_m / 1000) if distance_m else None
+        km = distance_m / 1000
+        flat_runs = sum(
+            1 for a in running
+            if a.get("distance") and ((a.get("elevationGain") or 0) / (a["distance"] / 1000)) < 5
+        )
+        return {
+            "sessions": len(running),
+            "km": round(km, 1),
+            "avg_pace_min_per_km": round(avg_pace, 2) if avg_pace else None,
+            "elevation_gain_m": round(elevation_m),
+            "elevation_gain_per_km": round(elevation_m / km, 1) if km else None,
+            "flat_runs": flat_runs,
+            "runs": [
+                {
+                    "name": a.get("activityName"),
+                    "date": a.get("startTimeLocal"),
+                    "distance_km": round((a.get("distance") or 0) / 1000, 2),
+                    "elevation_gain_m": round(a.get("elevationGain") or 0),
+                }
+                for a in running
+            ],
+        }
+
+    closed = week_stats(closed_start, closed_end)
+    prior = week_stats(prior_start, prior_end)
+    target_km = _week_target(closed_start.isoformat())
+
+    pace_delta = None
+    if closed["avg_pace_min_per_km"] and prior["avg_pace_min_per_km"]:
+        pace_delta = round(closed["avg_pace_min_per_km"] - prior["avg_pace_min_per_km"], 2)
+
+    flags = []
+    if closed["sessions"] and closed["flat_runs"] == closed["sessions"]:
+        flags.append(
+            f"Todas as {closed['sessions']} corrida(s) desta semana foram em terreno essencialmente "
+            "plano (<5m de ganho de elevação por km) -- nenhum trabalho de subida."
+        )
+    elif closed["sessions"] and closed["flat_runs"] / closed["sessions"] >= 0.5:
+        flags.append(
+            f"{closed['flat_runs']} de {closed['sessions']} corridas em terreno plano -- pouco "
+            "trabalho de subida essa semana."
+        )
+    if pace_delta is not None:
+        if pace_delta < -0.05:
+            flags.append(f"Ritmo médio melhorou {abs(pace_delta)}min/km vs semana anterior.")
+        elif pace_delta > 0.05:
+            flags.append(f"Ritmo médio piorou {pace_delta}min/km vs semana anterior (pode ser volume/calor/fadiga, não é necessariamente ruim).")
+    if not flags:
+        flags.append("Sem sinais particulares esta semana.")
+
+    return {
+        "week_start": closed_start.isoformat(),
+        "week_end": closed_end.isoformat(),
+        "closed": closed,
+        "prior": prior,
+        "target_km": target_km,
+        "pace_delta_min_per_km": pace_delta,
+        "flags": flags,
+    }
 
 
 @app.get("/api/plan")

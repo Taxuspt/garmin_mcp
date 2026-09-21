@@ -222,6 +222,17 @@
   .badge-completed { background: rgba(12,163,12,0.15); color: var(--status-good); }
   .badge-skipped { background: rgba(250,178,25,0.15); color: var(--status-warning); }
   .badge-cancelled { background: rgba(208,59,59,0.15); color: var(--status-critical); }
+
+  .wc-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin: 10px 0 14px;
+  }
+  .wc-stat .wc-label { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  .wc-stat .wc-value { font-size: 1.3rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .wc-flags { margin: 0; padding-left: 20px; font-size: 0.85rem; color: var(--text-secondary); }
+  .wc-flags li { margin-bottom: 4px; }
 </style>
 </head>
 <body>
@@ -235,6 +246,12 @@
 
   <div class="readiness" id="overtraining">
     <div class="label">A avaliar risco de overtraining…</div>
+  </div>
+
+  <div class="card section-gap" id="weekly-closing">
+    <h2 style="margin-bottom:2px;">Fechamento da semana</h2>
+    <div class="last-value" id="wc-sub">A carregar…</div>
+    <div id="wc-body"></div>
   </div>
 
   <div class="card section-gap">
@@ -302,6 +319,12 @@
       <div class="last-value" id="vo2-last"></div>
       <canvas id="chart-vo2"></canvas>
     </div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">Evolução de ritmo (ganho de velocidade)</h2>
+    <div class="last-value" id="pace-sub">A carregar…</div>
+    <canvas id="chart-pace"></canvas>
   </div>
 
   <div class="card section-gap">
@@ -748,6 +771,97 @@ async function loadVo2max() {
   }
 }
 
+async function loadPaceTrend() {
+  const p = await fetchJSON("/api/pace_trend?weeks=8");
+  const labels = p.weeks.map(w => fmtDate(w.week_start));
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  new Chart(document.getElementById("chart-pace"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Ritmo médio",
+          data: p.weeks.map(w => w.avg_pace_min_per_km),
+          borderColor: cssVar("--series-bb"),
+          backgroundColor: cssVar("--series-bb"),
+          borderWidth: 2, pointRadius: 3, tension: 0.25, spanGaps: false,
+        },
+        {
+          label: "Melhor ritmo",
+          data: p.weeks.map(w => w.best_pace_min_per_km),
+          borderColor: cssVar("--series-hr"),
+          backgroundColor: cssVar("--series-hr"),
+          borderWidth: 2, pointRadius: 3, tension: 0.25, spanGaps: false,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "bottom", labels: { color: muted, font: { size: 11 }, boxWidth: 10, boxHeight: 10 } },
+        tooltip: {
+          backgroundColor: surface, titleColor: ink, bodyColor: ink,
+          borderColor: grid, borderWidth: 1, padding: 10,
+          callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtPace(ctx.parsed.y)}` }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: muted, font: { size: 10 }, maxRotation: 0 }, border: { color: cssVar("--baseline") } },
+        y: {
+          reverse: true, // lower pace = faster = "up" on the chart
+          grid: { color: grid },
+          ticks: { color: muted, font: { size: 10 }, callback: (v) => fmtPace(v) },
+          border: { display: false },
+        },
+      }
+    }
+  });
+
+  const withData = p.weeks.filter(w => w.avg_pace_min_per_km != null);
+  if (withData.length >= 2) {
+    const first = withData[0], last = withData[withData.length - 1];
+    const delta = Math.round((last.avg_pace_min_per_km - first.avg_pace_min_per_km) * 60);
+    const dir = delta < 0 ? "mais rápido" : delta > 0 ? "mais lento" : "igual";
+    document.getElementById("pace-sub").textContent =
+      `${fmtDate(first.week_start)} → ${fmtDate(last.week_start)}: ${Math.abs(delta)}s/km ${dir} · eixo invertido (pra cima = mais rápido)`;
+  } else {
+    document.getElementById("pace-sub").textContent = "Eixo invertido: pra cima = mais rápido. Dados insuficientes pra comparar tendência ainda.";
+  }
+}
+
+async function loadWeeklyClosing() {
+  const w = await fetchJSON("/api/weekly_closing");
+  const sub = document.getElementById("wc-sub");
+  const body = document.getElementById("wc-body");
+  sub.textContent = `Semana de ${fmtDate(w.week_start)} a ${fmtDate(w.week_end)}`;
+
+  const targetTxt = w.target_km != null ? ` / ${w.target_km}km planejado` : "";
+  const paceTxt = w.closed.avg_pace_min_per_km != null ? fmtPace(w.closed.avg_pace_min_per_km) : "—";
+  const deltaTxt = w.pace_delta_min_per_km != null
+    ? (w.pace_delta_min_per_km < 0 ? `${Math.abs(Math.round(w.pace_delta_min_per_km * 60))}s/km mais rápido` : `${Math.round(w.pace_delta_min_per_km * 60)}s/km mais lento`)
+    : "sem comparação";
+
+  const stats = `
+    <div class="wc-stats">
+      <div class="wc-stat"><div class="wc-label">Volume</div><div class="wc-value">${w.closed.km}km${targetTxt}</div></div>
+      <div class="wc-stat"><div class="wc-label">Sessões</div><div class="wc-value">${w.closed.sessions}</div></div>
+      <div class="wc-stat"><div class="wc-label">Ritmo médio</div><div class="wc-value">${paceTxt}</div></div>
+      <div class="wc-stat"><div class="wc-label">vs semana anterior</div><div class="wc-value">${deltaTxt}</div></div>
+      <div class="wc-stat"><div class="wc-label">Ganho de elevação</div><div class="wc-value">${w.closed.elevation_gain_m}m</div></div>
+      <div class="wc-stat"><div class="wc-label">Elevação/km</div><div class="wc-value">${w.closed.elevation_gain_per_km ?? "—"}m/km</div></div>
+    </div>
+  `;
+  const flagsHtml = `<ul class="wc-flags">${w.flags.map(f => `<li>${f}</li>`).join("")}</ul>`;
+  body.innerHTML = stats + flagsHtml;
+}
+
 async function loadFitnessFreshness() {
   const f = await fetchJSON("/api/fitness_freshness?days=42");
   const labels = f.series.map(d => fmtDate(d.date));
@@ -899,17 +1013,18 @@ async function loadRunningDynamics() {
       <td${flag(x.ground_contact_time_ms != null && x.ground_contact_time_ms > 290)}>${x.ground_contact_time_ms ?? "—"}</td>
       <td${flag(x.vertical_oscillation_cm != null && x.vertical_oscillation_cm > 10)}>${x.vertical_oscillation_cm ?? "—"}</td>
       <td${flag(x.vertical_ratio_pct != null && x.vertical_ratio_pct > 10)}>${x.vertical_ratio_pct ?? "—"}</td>
+      <td${flag(x.distance_km > 3 && (x.elevation_gain_m ?? 0) / x.distance_km < 5)}>${x.elevation_gain_m ?? "—"}</td>
     </tr>
   `).join("");
   wrap.innerHTML = `
     <table>
       <thead><tr>
         <th>Corrida</th><th>Ritmo</th><th>Cadência (spm)</th><th>Passada (cm)</th>
-        <th>Contacto solo (ms)</th><th>Osc. vertical (cm)</th><th>Rácio vertical (%)</th>
+        <th>Contacto solo (ms)</th><th>Osc. vertical (cm)</th><th>Rácio vertical (%)</th><th>Elevação (m)</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <p class="muted" style="margin-top:8px; font-size:0.78rem;">Laranja = fora do intervalo típico (cadência &lt;165spm, contacto &gt;290ms, oscilação &gt;10cm, rácio &gt;10%).</p>
+    <p class="muted" style="margin-top:8px; font-size:0.78rem;">Laranja = fora do intervalo típico (cadência &lt;165spm, contacto &gt;290ms, oscilação &gt;10cm, rácio &gt;10%, elevação &lt;5m/km).</p>
   `;
 }
 
@@ -987,6 +1102,8 @@ async function main() {
       loadVolumeTrend(),
       loadVo2max(),
       loadFitnessFreshness(),
+      loadPaceTrend(),
+      loadWeeklyClosing(),
       loadSleepAfterRun(),
       loadFirst10minHr(),
       loadRunningDynamics(),
