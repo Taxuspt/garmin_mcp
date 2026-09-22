@@ -370,6 +370,12 @@ class _ToolFilter:
         return name not in self._disabled
 
     def tool(self, *args, **kwargs):
+        # Most tools return json.dumps(...) as str. FastMCP's default
+        # structured_output auto-detection then wraps that string again as
+        # structuredContent {"result": "<escaped json>"}, doubling payload
+        # size for clients that forward both blocks (issue #331). Opt out
+        # globally; callers can still pass structured_output=True explicitly.
+        kwargs.setdefault("structured_output", False)
         decorator = self._app.tool(*args, **kwargs)
         # Prefer the explicit registered name if given (@app.tool(name="x")),
         # so the env-var filter matches what the user actually configures.
