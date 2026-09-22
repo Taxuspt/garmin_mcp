@@ -224,6 +224,140 @@ def _format_pr_value(value: float, value_type: str) -> str:
     return str(value)
 
 
+def _as_goal_list(payload: Any) -> List[Dict[str, Any]]:
+    """Normalize Connect goal payloads to a list of dicts."""
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("goals", "items", "data"):
+            nested = payload.get(key)
+            if isinstance(nested, list):
+                return [item for item in nested if isinstance(item, dict)]
+        if any(key in payload for key in ("name", "goalType", "id", "type")):
+            return [payload]
+    return []
+
+
+def _is_connect_ui_goal(goal: Dict[str, Any]) -> bool:
+    """True for the current Connect Goals UI shape (distance/time accumulation)."""
+    progress = goal.get("progress")
+    return "name" in goal and (
+        isinstance(progress, dict)
+        or "distanceInMeters" in goal
+        or ("type" in goal and "goalType" not in goal)
+    )
+
+
+def _curate_connect_ui_goal(goal: Dict[str, Any]) -> Dict[str, Any]:
+    """Flatten Connect UI goal progress/remaining into LLM-friendly fields."""
+    progress = goal.get("progress") if isinstance(goal.get("progress"), dict) else {}
+    remaining = goal.get("remaining") if isinstance(goal.get("remaining"), dict) else {}
+    overage = goal.get("overage") if isinstance(goal.get("overage"), dict) else {}
+    curated = {
+        "id": goal.get("id"),
+        "name": goal.get("name"),
+        "type": goal.get("type"),
+        "activity_type": goal.get("activityType"),
+        "period": goal.get("period"),
+        "privacy": goal.get("privacy"),
+        "start_date": goal.get("startDate"),
+        "end_date": goal.get("endDate"),
+        "active": goal.get("active"),
+        "completed": goal.get("completed"),
+        "target_distance_meters": goal.get("distanceInMeters"),
+        "target_duration_seconds": goal.get("durationInSeconds"),
+        "target_calories": goal.get("caloriesInKiloCalories"),
+        "target_activities": goal.get("numberOfActivities"),
+        "progress_percent": progress.get("percent"),
+        "progress_distance_meters": progress.get("distanceInMeters"),
+        "progress_duration_seconds": progress.get("durationInSeconds"),
+        "progress_calories": progress.get("caloriesInKiloCalories"),
+        "progress_activities": progress.get("numberOfActivities"),
+        "progress_days": progress.get("days"),
+        "remaining_percent": remaining.get("percent"),
+        "remaining_distance_meters": remaining.get("distanceInMeters"),
+        "remaining_duration_seconds": remaining.get("durationInSeconds"),
+        "remaining_calories": remaining.get("caloriesInKiloCalories"),
+        "remaining_activities": remaining.get("numberOfActivities"),
+        "remaining_days": remaining.get("days"),
+        "overage_percent": overage.get("percent"),
+    }
+    return {key: value for key, value in curated.items() if value is not None}
+
+
+_GOALS_URL = "/goal-service/goal/goals"
+# goal-service only returns Connect UI goals (named distance/duration
+# accumulation targets) when the request carries the fetch-metadata header a
+# browser sends on a same-origin XHR; without it the list is silently empty.
+_GOALS_HEADERS = {"Sec-Fetch-Site": "same-origin"}
+# ``start`` is 1-based: ``start=0`` returns [] even when goals exist, which is
+# why python-garminconnect's get_goals() (it starts at 0) misses them.
+_GOALS_FIRST_INDEX = 1
+_GOALS_PAGE_SIZE = 100
+_GOALS_MAX_PAGES = 20
+
+
+def _fetch_goals_page(client: Any, status: str, start: int) -> List[Dict[str, Any]]:
+    """GET one page of goals the way Garmin Connect's Goals page does."""
+    url = getattr(client, "garmin_connect_goals_url", None)
+    if not isinstance(url, str) or not url:
+        url = _GOALS_URL
+    params = {
+        "status": status,
+        "start": str(start),
+        "limit": str(_GOALS_PAGE_SIZE),
+        "sortOrder": "asc",
+    }
+    return _as_goal_list(
+        client.connectapi(url, params=params, headers=dict(_GOALS_HEADERS))
+    )
+
+
+def _fetch_connect_goals(client: Any, status: str) -> List[Dict[str, Any]]:
+    """Fetch every goal for ``status`` with 1-based pagination."""
+    goals: List[Dict[str, Any]] = []
+    seen = set()
+    start = _GOALS_FIRST_INDEX
+    for _ in range(_GOALS_MAX_PAGES):
+        page = _fetch_goals_page(client, status, start)
+        new = []
+        for goal in page:
+            marker = goal.get("id")
+            if marker is None:
+                marker = json.dumps(goal, sort_keys=True, default=str)
+            if marker not in seen:
+                seen.add(marker)
+                new.append(goal)
+        goals.extend(new)
+        # Stop on a short page, or if the server ignored ``start`` and
+        # handed back goals we already have.
+        if len(page) < _GOALS_PAGE_SIZE or not new:
+            break
+        start += _GOALS_PAGE_SIZE
+    return goals
+
+
+def _collect_goals(client: Any, goal_type: str) -> List[Any]:
+    """Read goals like Connect's Goals page; fall back to the library call."""
+    try:
+        goals = _fetch_connect_goals(client, goal_type)
+    except Exception:
+        goals = []
+    if goals:
+        return [
+            _curate_connect_ui_goal(goal) if _is_connect_ui_goal(goal) else goal
+            for goal in goals
+        ]
+
+    legacy = client.get_goals(goal_type)
+    as_list = _as_goal_list(legacy)
+    if as_list:
+        return as_list
+    if legacy:
+        return [legacy]
+    return []
+
+
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
@@ -235,13 +369,23 @@ def register_tools(app):
 
     @app.tool()
     async def get_goals(goal_type: str = "active") -> str:
-        """Get Garmin Connect goals (active, future, or past)
+        """Get Garmin Connect goals (active, future, or past).
+
+        Reads goals the way Garmin Connect's Goals page does, so named
+        distance/time targets (e.g. a monthly cycling mileage goal) are
+        included with their progress and remaining amounts. Falls back to
+        python-garminconnect's get_goals() if that request returns nothing.
 
         Args:
             goal_type: Type of goals to retrieve. Options: "active", "future", or "past"
         """
         try:
-            goals = garmin_client.get_goals(goal_type)
+            goal_type = (goal_type or "active").strip().lower()
+            if goal_type not in {"active", "future", "past"}:
+                return (
+                    f"Invalid goal_type {goal_type!r}. Options: active, future, past."
+                )
+            goals = _collect_goals(garmin_client, goal_type)
             if not goals:
                 return f"No {goal_type} goals found."
             return json.dumps(goals, indent=2)
