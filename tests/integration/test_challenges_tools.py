@@ -79,6 +79,50 @@ async def test_get_goals_future(app_with_challenges, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_goals_returns_connect_ui_cycling_goal(
+    app_with_challenges, mock_garmin_client
+):
+    """Connect UI goals need Sec-Fetch-Site: same-origin and a 1-based start."""
+    connect_ui_goal = {
+        "id": 1,
+        "name": "GCC 2026",
+        "type": "distance_accumulation",
+        "distanceInMeters": 160934.0,
+        "startDate": "2026-09-01",
+        "endDate": "2026-09-30",
+        "activityType": "cycling",
+        "period": "one_month",
+        "progress": {"percent": 17, "distanceInMeters": 28089.0},
+        "remaining": {"percent": 83, "days": 13, "distanceInMeters": 132845.0},
+        "active": True,
+        "completed": False,
+    }
+    mock_garmin_client.garmin_connect_goals_url = "/goal-service/goal/goals"
+    mock_garmin_client.get_goals.return_value = []
+
+    def connectapi(url, params=None, headers=None):
+        params = params or {}
+        if (headers or {}).get("Sec-Fetch-Site") != "same-origin":
+            return []
+        if params.get("start") == "0" or params.get("status") != "active":
+            return []
+        return [connect_ui_goal]
+
+    mock_garmin_client.connectapi.side_effect = connectapi
+
+    result = await app_with_challenges.call_tool(
+        "get_goals",
+        {"goal_type": "active"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data[0]["name"] == "GCC 2026"
+    assert data[0]["activity_type"] == "cycling"
+    assert data[0]["progress_percent"] == 17
+    mock_garmin_client.get_goals.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_personal_record_tool(app_with_challenges, mock_garmin_client):
     """Test get_personal_record tool returns personal records"""
     # Setup mock
