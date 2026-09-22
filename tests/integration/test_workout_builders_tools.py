@@ -216,3 +216,61 @@ async def test_create_run_workout_exception(app_with_builders, mock_garmin_clien
     assert result is not None
     assert "Error" in result[0][0].text
     assert "Upload failed" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_run_interval_workout_success(app_with_builders, mock_garmin_client):
+    """create_run_interval_workout uploads the workout and returns the workout_id."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 2222222222,
+        "workoutName": "Threshold 3x6min",
+    }
+
+    result = await app_with_builders.call_tool(
+        "create_run_interval_workout",
+        {
+            "name": "Threshold 3x6min",
+            "repeats": 3,
+            "rep_seconds": 360,
+            "recovery_seconds": 180,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+            "hr_min": 172,
+            "hr_max": 180,
+        },
+    )
+
+    assert result is not None
+    payload = json.loads(result[0][0].text)
+    assert payload["status"] == "success"
+    assert payload["workout_id"] == 2222222222
+    mock_garmin_client.upload_workout.assert_called_once()
+
+    uploaded_json = mock_garmin_client.upload_workout.call_args[0][0]
+    steps = uploaded_json["workoutSegments"][0]["workoutSteps"]
+    assert steps[0]["stepType"]["stepTypeKey"] == "warmup"
+    assert steps[1]["type"] == "RepeatGroupDTO"
+    assert steps[1]["numberOfIterations"] == 3
+    assert steps[2]["stepType"]["stepTypeKey"] == "cooldown"
+
+
+@pytest.mark.asyncio
+async def test_create_run_interval_workout_exception(app_with_builders, mock_garmin_client):
+    """create_run_interval_workout returns an error string when the API raises an exception."""
+    mock_garmin_client.upload_workout.side_effect = Exception("Upload failed")
+
+    result = await app_with_builders.call_tool(
+        "create_run_interval_workout",
+        {
+            "name": "Threshold 3x6min",
+            "repeats": 3,
+            "rep_seconds": 360,
+            "recovery_seconds": 180,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+        },
+    )
+
+    assert result is not None
+    assert "Error" in result[0][0].text
+    assert "Upload failed" in result[0][0].text
