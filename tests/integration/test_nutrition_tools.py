@@ -1074,6 +1074,7 @@ async def test_set_nutrition_daily_settings_updates_all_fields(app_with_nutritio
     assert json.loads(result[0][0].text) == {
         "status": "updated", "date": "2024-01-15", "calorie_goal": 1850,
         "carbs_grams": 205, "fat_grams": 60, "protein_grams": 140,
+        "weight_goal_target_date": None,
     }
     expected = deepcopy(_CURRENT_SETTINGS)
     expected.update(calorieGoal=1800, macroGoals={"carbs": 200, "fat": 60, "protein": 140})
@@ -1081,6 +1082,64 @@ async def test_set_nutrition_daily_settings_updates_all_fields(app_with_nutritio
         "connectapi", "/nutrition-service/settings/2024-01-15", json=expected, api=True
     )
     assert original == _CURRENT_SETTINGS
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_reports_passed_weight_goal_target(
+    app_with_nutrition, mock_garmin_client
+):
+    """A weight-goal targetDate that is not after the date blocks the whole PUT.
+
+    Garmin answers "Goal targetDate must be after the asOfDate provided" and
+    names neither the field nor the weight goal, so explain it instead of
+    letting the request through.
+    """
+    mock_garmin_client.connectapi.return_value = deepcopy(_CURRENT_SETTINGS)
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-09-01", "calorie_goal": 1800},
+    )
+    text = result[0][0].text
+    assert "targetDate" in text and "2024-06-01" in text and "2024-09-01" in text
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_accepts_explicit_target_date(
+    app_with_nutrition, mock_garmin_client
+):
+    """An explicit target_date moves the goal deliberately and unblocks the update."""
+    mock_garmin_client.connectapi.return_value = deepcopy(_CURRENT_SETTINGS)
+    mock_garmin_client.client.put.return_value = {
+        "calorieGoal": 1800,
+        "macroGoals": _CURRENT_SETTINGS["macroGoals"],
+        "targetDate": "2024-12-31",
+    }
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-09-01", "calorie_goal": 1800, "target_date": "2024-12-31"},
+    )
+    payload = json.loads(result[0][0].text)
+    assert payload["status"] == "updated"
+    assert payload["weight_goal_target_date"] == "2024-12-31"
+    expected = deepcopy(_CURRENT_SETTINGS)
+    expected.update(targetDate="2024-12-31", calorieGoal=1800)
+    mock_garmin_client.client.put.assert_called_once_with(
+        "connectapi", "/nutrition-service/settings/2024-09-01", json=expected, api=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_set_nutrition_daily_settings_rejects_target_date_not_after_date(
+    app_with_nutrition, mock_garmin_client
+):
+    mock_garmin_client.connectapi.return_value = deepcopy(_CURRENT_SETTINGS)
+    result = await app_with_nutrition.call_tool(
+        "set_nutrition_daily_settings",
+        {"date": "2024-09-01", "calorie_goal": 1800, "target_date": "2024-09-01"},
+    )
+    assert "must be after" in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
 
 
 @pytest.mark.asyncio
