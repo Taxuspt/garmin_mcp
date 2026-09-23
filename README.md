@@ -545,6 +545,64 @@ When an HTTP transport is selected:
 
 The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
 
+### Running in Kubernetes (Helm)
+
+A Helm chart lives in [`chart/garmin-mcp`](chart/garmin-mcp). It renders a Deployment (single replica, `streamable-http`, `/healthz` probes), a Service, a PVC for token persistence, and an optional Ingress. All configuration is driven from `values.yaml`.
+
+Minimal install (recommended, works with MFA): authenticate once locally with `garmin-mcp-auth`, then hand the chart the resulting token file. No email or password reaches the cluster.
+
+```bash
+helm install garmin chart/garmin-mcp \
+  --set-file garmin.tokens.json=$HOME/.garminconnect/garmin_tokens.json
+```
+
+Or, for accounts **without** MFA, let the pod log in with credentials:
+
+```bash
+helm install garmin chart/garmin-mcp \
+  --set garmin.email="you@example.com" \
+  --set garmin.password="your-password"
+```
+
+Or with a values file:
+
+```yaml
+# my-values.yaml
+garmin:
+  email: you@example.com
+  password: your-password
+ingress:
+  enabled: true
+  host: garmin-mcp.example.com
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: "http://authelia.authelia.svc.cluster.local/api/authz/forward-auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://auth.example.com?rm=$request_method"
+    nginx.ingress.kubernetes.io/auth-response-headers: "Remote-User,Remote-Name,Remote-Email,Remote-Groups"
+```
+
+```bash
+helm install garmin chart/garmin-mcp -f my-values.yaml
+```
+
+Key values:
+
+| Value | Default | Purpose |
+| --- | --- | --- |
+| `garmin.tokens.json` / `garmin.tokens.base64` | `""` | Pre-generated tokens from `garmin-mcp-auth` (contents of `garmin_tokens.json` / `.garminconnect_base64`); recommended, MFA-friendly |
+| `garmin.email` / `garmin.password` | `""` | Credentials; the chart creates a Secret from them (MFA-free accounts only) |
+| `garmin.existingSecret` | `""` | Use a Secret you manage instead; key `GARMINTOKENS` (token JSON) or `GARMIN_EMAIL` + `GARMIN_PASSWORD` |
+| `garmin.isCn` | `false` | Use Garmin Connect China |
+| `transport.mode` | `streamable-http` | `streamable-http` \| `sse` (`stdio` is rejected: nothing can attach to a pod's stdin) |
+| `persistence.enabled` | `true` | PVC for Garmin OAuth tokens at `~/.garminconnect`; required in token mode |
+| `ingress.enabled` | `false` | Ingress fronting `ingress.path` (`/mcp`; use `/` for `sse`), auth delegated to e.g. Authelia |
+
+Notes:
+
+- Keep `replicaCount: 1`. The Garmin session and tokens are per-pod and FastMCP HTTP sessions are stateful; scaling beyond one would require stateless HTTP plus shared token storage.
+- The app serves `/mcp` with **no auth** — auth is expected to be enforced in front of it (the Ingress example wires up Authelia `forwardAuth`).
+- If your Garmin account requires **MFA**, the first login cannot complete inside a pod (MFA prompts need an interactive terminal). Pre-authenticate once with `garmin-mcp-auth` and pass the result via `--set-file garmin.tokens.json=...` (or the `GARMINTOKENS` key of `garmin.existingSecret`); an init container seeds the PVC from it on first boot. With MFA-free password login, the pod authenticates on first start and reuses the persisted tokens afterward.
+- The seed is applied **once**: later boots keep the token the app rotated on the PVC. To replace an expired token, upgrade with the new `garmin.tokens.json`, then delete `garmin_tokens.json` from the volume (`kubectl exec ... -- rm ~/.garminconnect/garmin_tokens.json`) and restart the pod.
+
 ### Garmin Connect China (garmin.cn)
 
 If you use Garmin Connect China (garmin.cn) instead of the international version, set the `GARMIN_IS_CN` environment variable to `true`:

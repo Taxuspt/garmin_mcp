@@ -1,0 +1,129 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/taxuspt/garmin_mcp
+  # Defaults to the chart's appVersion when empty; override with a release tag.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# --- Garmin Connect authentication ------------------------------------------
+# Choose ONE of three ways to authenticate (token mode wins if several are set):
+#
+#   A. Pre-generated tokens (RECOMMENDED for 2FA / not pushing credentials).
+#      Run `garmin-mcp-auth` locally once, then point the chart at the result.
+#      The token JSON is stored in a Secret and passed as $GARMINTOKENS; no
+#      email/password ever reaches the cluster, and MFA is handled at auth time.
+#        tokens.json   - contents of ~/.garminconnect/garmin_tokens.json
+#        tokens.base64 - contents of ~/.garminconnect_base64 (decoded by the chart)
+#      Easiest, paste nothing:
+#        helm install garmin chart/garmin-mcp \
+#          --set-file garmin.tokens.json=$HOME/.garminconnect/garmin_tokens.json
+#
+#   B. Credentials. The chart creates a Secret from email/password. Only works
+#      if the account has NO MFA (the pod cannot answer an MFA prompt).
+#      NOTE: values.yaml is usually committed — keep real creds in a separate
+#      untracked file passed with `-f`, or use existingSecret.
+#
+#   C. existingSecret. A Secret you manage (sealed-secrets, external-secrets…).
+#      It must contain GARMIN_EMAIL/GARMIN_PASSWORD, or GARMINTOKENS (token JSON).
+garmin:
+  # --- option A: tokens ---
+  tokens:
+    json: ""
+    base64: ""
+  # --- option B: credentials ---
+  email: ""
+  password: ""
+  # --- option C: bring your own Secret ---
+  existingSecret: ""
+  # Use Garmin Connect China (garmin.cn) instead of the international service.
+  isCn: false
+
+# --- Transport --------------------------------------------------------------
+# streamable-http (default) serves MCP at /mcp; sse serves /sse + /messages/.
+# stdio is rejected: a pod has no stdin for an MCP client to attach to.
+transport:
+  mode: streamable-http # streamable-http | sse
+  host: "0.0.0.0"
+  port: 8000
+
+# --- Token persistence ------------------------------------------------------
+# Garmin's DI refresh token ROTATES on every refresh, so the live token must be
+# stored somewhere that survives a pod restart — otherwise a cold start replays a
+# stale, already-invalidated token and login fails. When enabled, a PVC is mounted
+# at mountPath and $GARMINTOKENS points at it (directory mode), so the app writes
+# each rotated token back. On first boot an init container seeds the volume from
+# the Secret (tokens.json/base64 or existingSecret's GARMINTOKENS); later boots
+# keep the rotated token already on the PVC. In credentials mode the app logs in
+# and writes the volume itself. Keep this on: token mode (tokens.json/base64)
+# refuses to render without it, since the inline fallback logs the token JSON at
+# startup and loses every rotation on restart.
+persistence:
+  enabled: true
+  size: 64Mi
+  accessModes:
+    - ReadWriteOnce
+  storageClass: ""
+  # Mount an existing PVC instead of creating one.
+  existingClaim: ""
+  mountPath: /root/.garminconnect
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Auth is expected to be handled in front of the chart (e.g. Authelia). The app
+# serves /mcp with no auth of its own.
+ingress:
+  enabled: false
+  className: nginx
+  host: garmin-mcp.example.com
+  # Matches transport.mode=streamable-http. For sse set path: / (it needs both
+  # /sse and /messages/).
+  path: /mcp
+  pathType: Prefix
+  annotations: {}
+  # Example Authelia forwardAuth annotations (ingress-nginx):
+  #   nginx.ingress.kubernetes.io/auth-url: "http://authelia.authelia.svc.cluster.local/api/authz/forward-auth"
+  #   nginx.ingress.kubernetes.io/auth-signin: "https://auth.example.com?rm=$request_method"
+  #   nginx.ingress.kubernetes.io/auth-response-headers: "Remote-User,Remote-Name,Remote-Email,Remote-Groups"
+  tls: []
+  # - secretName: garmin-mcp-tls
+  #   hosts:
+  #     - garmin-mcp.example.com
+
+# Startup/readiness/liveness probes hit /healthz. Only meaningful for HTTP
+# transports; skipped automatically when transport.mode is "stdio". The startup
+# probe polls every startupPeriodSeconds and flips the pod Ready the moment the
+# app is serving (listening + logged into Garmin).
+probes:
+  enabled: true
+  # Poll interval while the app is starting; the pod goes Ready on the first 200.
+  startupPeriodSeconds: 10
+  # Max startup attempts before the pod is declared failed (~startupPeriodSeconds
+  # * this seconds). Covers Python import + the blocking Garmin login on boot.
+  startupFailureThreshold: 3
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Extra environment variables passed verbatim to the container.
+extraEnv: []
+# - name: GARMIN_DISABLED_TOOLS
+#   value: "upload_workout,delete_workout"
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
