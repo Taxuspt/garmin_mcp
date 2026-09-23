@@ -65,7 +65,7 @@ async def _cleanup_scheduled_workout(session, workout_id):
     try:
         result = await session.call_tool(
             "delete_workout",
-            arguments={"workout_id": workout_id},
+            arguments={"workout_id": workout_id, "confirm": True},
         )
         data = json.loads(result.content[0].text)
         if data.get("status") != "success":

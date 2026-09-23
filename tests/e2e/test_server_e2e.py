@@ -315,7 +315,7 @@ async def test_upload_workouts_tool():
                     if created_ids:
                         await session.call_tool(
                             "delete_workouts",
-                            arguments={"workout_ids": created_ids}
+                            arguments={"workout_ids": created_ids, "confirm": True}
                         )
                         print(f"\nCleaned up workout IDs: {created_ids}")
     except asyncio.TimeoutError:
@@ -345,10 +345,19 @@ async def test_delete_workouts_tool():
                 async with ClientSession(read, write) as session:
                     await session.initialize()
 
+                    # Without confirm, the tool must preview only and not delete.
+                    preview = await session.call_tool(
+                        "delete_workouts",
+                        arguments={"workout_ids": [0, 1]}
+                    )
+                    preview_data = json.loads(preview.content[0].text)
+                    assert preview_data["status"] == "needs_confirmation"
+                    assert preview_data["total"] == 2
+
                     # Use dummy IDs — expected to fail at the API level but handled gracefully
                     result = await session.call_tool(
                         "delete_workouts",
-                        arguments={"workout_ids": [0, 1]}
+                        arguments={"workout_ids": [0, 1], "confirm": True}
                     )
 
                     assert result is not None
@@ -435,7 +444,7 @@ async def test_schedule_workouts_inline_upload():
                     if created_ids:
                         await session.call_tool(
                             "delete_workouts",
-                            arguments={"workout_ids": created_ids}
+                            arguments={"workout_ids": created_ids, "confirm": True}
                         )
                         print(f"\nCleaned up workout IDs: {created_ids}")
     except asyncio.TimeoutError:
