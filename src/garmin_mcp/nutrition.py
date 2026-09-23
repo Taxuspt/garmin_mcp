@@ -8,6 +8,8 @@ from typing import Optional
 
 from garminconnect import GarminConnectConnectionError
 
+from garmin_mcp.write_errors import WriteTracker
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -726,6 +728,7 @@ def register_tools(app):
             serving_qty: Number of servings (default 1)
             source: Food namespace — "GARMIN" (default) or "FATSECRET"
         """
+        tracker = WriteTracker("log_custom_food", "Error logging food")
         try:
             from datetime import datetime, timezone
 
@@ -769,19 +772,16 @@ def register_tools(app):
                 ],
             }
             url = "/nutrition-service/food/logs"
+            tracker.sending()
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
+            tracker.committed()
             if not resp:
                 return "Food logged successfully."
             return json.dumps(resp, indent=2)
-        except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
-            return f"Error logging food: {e} | Response: {body}"
         except Exception as e:
-            return f"Error logging food: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def log_food(
@@ -809,6 +809,7 @@ def register_tools(app):
             fat: Fat in grams
             meal_time: Time in HH:MM:SS format (account timezone)
         """
+        tracker = WriteTracker("log_food", "Error logging food")
         try:
             from datetime import datetime, timezone
 
@@ -852,19 +853,16 @@ def register_tools(app):
                 ],
             }
             url = "/nutrition-service/food/logs/quickAdd"
+            tracker.sending()
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
+            tracker.committed()
             if not resp:
                 return "Food logged successfully."
             return json.dumps(resp, indent=2)
-        except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
-            return f"Error logging food: {e} | Response: {body}"
         except Exception as e:
-            return f"Error logging food: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def delete_food_log(log_id: str, meal_date: str) -> str:
@@ -879,17 +877,15 @@ def register_tools(app):
                 (from get_nutrition_daily_food_log)
             meal_date: Date of the log entry in YYYY-MM-DD format
         """
+        tracker = WriteTracker("delete_food_log", "Error deleting food log")
         try:
             url = f"/nutrition-service/food/logs/{meal_date}"
+            tracker.sending()
             garmin_client.client.delete("connectapi", url, json={"logIds": [log_id]}, api=True)
+            tracker.committed()
             return json.dumps({"status": "success", "log_id": log_id, "message": f"Food log entry {log_id} deleted successfully."}, indent=2)
-        except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
-            return f"Error deleting food log: {e} | Response: {body}"
         except Exception as e:
-            return f"Error deleting food log: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def upsert_and_log(
