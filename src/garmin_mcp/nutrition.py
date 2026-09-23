@@ -900,6 +900,7 @@ def register_tools(app):
         carbs: Optional[float] = None,
         protein: Optional[float] = None,
         fat: Optional[float] = None,
+        brand_name: Optional[str] = None,
         serving_unit: str = "G",
         number_of_units: float = 100,
         serving_qty: float = 1,
@@ -911,6 +912,12 @@ def register_tools(app):
         data and then logs it. This avoids duplicate food entries and removes
         the need for separate search → create → log round-trips.
 
+        Matching is by food_name alone — brand_name never affects find-or-create
+        lookup, so it can't cause a duplicate by missing an existing unbranded
+        record. If an existing match is found, brand_name is ignored (log-only);
+        it only takes effect when creating a new food. To brand an existing
+        unbranded food, use update_custom_food.
+
         Args:
             meal_date: Date in YYYY-MM-DD format
             meal_time: Time in HH:MM:SS format (account timezone); used to
@@ -920,6 +927,8 @@ def register_tools(app):
             carbs: Carbohydrates in grams per serving
             protein: Protein in grams per serving
             fat: Total fat in grams per serving
+            brand_name: Brand or vendor name, applied only when creating a new
+                food; ignored when food_name already exists
             serving_unit: Unit for serving size (e.g. "G", "ML", "OZ"). Default "G"
             number_of_units: Serving size in the specified unit. Default 100
             serving_qty: Number of servings to log (default 1)
@@ -962,14 +971,17 @@ def register_tools(app):
                 for key, value in optional_fields.items():
                     if value is not None:
                         nutrition[key] = _num_to_str(value)
+                food_meta: dict = {
+                    "foodName": food_name,
+                    "foodType": "GENERIC",
+                    "source": "GARMIN",
+                    "regionCode": "US",
+                    "languageCode": "en",
+                }
+                if brand_name is not None:
+                    food_meta["brandName"] = brand_name
                 create_payload = {
-                    "foodMetaData": {
-                        "foodName": food_name,
-                        "foodType": "GENERIC",
-                        "source": "GARMIN",
-                        "regionCode": "US",
-                        "languageCode": "en",
-                    },
+                    "foodMetaData": food_meta,
                     "nutritionContents": [nutrition],
                 }
                 create_resp = garmin_client.client.put(
