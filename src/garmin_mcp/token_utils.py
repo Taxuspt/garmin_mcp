@@ -6,6 +6,10 @@ from typing import Tuple
 
 from garminconnect import Garmin, GarminConnectConnectionError
 
+from garmin_mcp.garmin_cn_auth_patch import apply_garmin_cn_auth_patch
+
+apply_garmin_cn_auth_patch()
+
 
 def resolve_token_path(path: str) -> str:
     """Resolve environment variables and the user-home marker in a token path.
