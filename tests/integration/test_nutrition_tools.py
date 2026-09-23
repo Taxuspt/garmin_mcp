@@ -634,6 +634,128 @@ async def test_update_custom_food_brand_overrides_existing(app_with_nutrition, m
     assert payload["foodMetaData"]["brandName"] == "NewBrand"
 
 
+@pytest.mark.asyncio
+async def test_update_custom_food_preserves_serving_basis(app_with_nutrition, mock_garmin_client):
+    """serving_unit/number_of_units are omittable and preserved from the existing record.
+
+    Regression: these params used to default to "G"/100, so omitting them on a
+    non-default-basis food (e.g. a 355 ml beer) silently rewrote the serving
+    basis while leaving the per-serving macros untouched.
+    """
+    existing_food = {
+        "customFoods": [
+            {
+                "foodMetaData": {"foodId": "abc123", "foodName": "NA Beer"},
+                "nutritionContents": [
+                    {"servingId": "srv456", "servingUnit": "ML", "numberOfUnits": 355, "calories": 90}
+                ],
+            }
+        ]
+    }
+    mock_garmin_client.connectapi.return_value = existing_food
+    mock_garmin_client.client.put.return_value = {}
+
+    await app_with_nutrition.call_tool(
+        "update_custom_food",
+        {
+            "food_id": "abc123",
+            "serving_id": "srv456",
+            "food_name": "NA Beer",
+            "calories": 90,
+            # serving_unit, number_of_units intentionally omitted
+        },
+    )
+    nc = mock_garmin_client.client.put.call_args[1]["json"]["nutritionContents"][0]
+    assert nc["servingUnit"] == "ML"
+    assert nc["numberOfUnits"] == "355"
+
+
+@pytest.mark.asyncio
+async def test_update_custom_food_overrides_serving_basis(app_with_nutrition, mock_garmin_client):
+    """Caller-supplied serving_unit/number_of_units replace the existing basis."""
+    existing_food = {
+        "customFoods": [
+            {
+                "foodMetaData": {"foodId": "abc123", "foodName": "NA Beer"},
+                "nutritionContents": [
+                    {"servingId": "srv456", "servingUnit": "ML", "numberOfUnits": 355, "calories": 90}
+                ],
+            }
+        ]
+    }
+    mock_garmin_client.connectapi.return_value = existing_food
+    mock_garmin_client.client.put.return_value = {}
+
+    await app_with_nutrition.call_tool(
+        "update_custom_food",
+        {
+            "food_id": "abc123",
+            "serving_id": "srv456",
+            "food_name": "NA Beer",
+            "calories": 90,
+            "serving_unit": "OZ",
+            "number_of_units": 12,
+        },
+    )
+    nc = mock_garmin_client.client.put.call_args[1]["json"]["nutritionContents"][0]
+    assert nc["servingUnit"] == "OZ"
+    assert nc["numberOfUnits"] == "12"
+
+
+@pytest.mark.asyncio
+async def test_update_custom_food_partial_serving_override(app_with_nutrition, mock_garmin_client):
+    """Passing only number_of_units preserves the existing servingUnit."""
+    existing_food = {
+        "customFoods": [
+            {
+                "foodMetaData": {"foodId": "abc123", "foodName": "NA Beer"},
+                "nutritionContents": [
+                    {"servingId": "srv456", "servingUnit": "ML", "numberOfUnits": 355, "calories": 90}
+                ],
+            }
+        ]
+    }
+    mock_garmin_client.connectapi.return_value = existing_food
+    mock_garmin_client.client.put.return_value = {}
+
+    await app_with_nutrition.call_tool(
+        "update_custom_food",
+        {
+            "food_id": "abc123",
+            "serving_id": "srv456",
+            "food_name": "NA Beer",
+            "calories": 90,
+            "number_of_units": 500,
+        },
+    )
+    nc = mock_garmin_client.client.put.call_args[1]["json"]["nutritionContents"][0]
+    assert nc["servingUnit"] == "ML"
+    assert nc["numberOfUnits"] == "500"
+
+
+@pytest.mark.asyncio
+async def test_update_custom_food_defaults_serving_basis_without_existing_record(
+    app_with_nutrition, mock_garmin_client
+):
+    """No existing record found (lookup fails/empty) and no override supplied:
+    falls back to the create-time G/100 defaults, matching prior behavior."""
+    mock_garmin_client.connectapi.return_value = {"customFoods": []}
+    mock_garmin_client.client.put.return_value = {}
+
+    await app_with_nutrition.call_tool(
+        "update_custom_food",
+        {
+            "food_id": "abc123",
+            "serving_id": "srv456",
+            "food_name": "Simple Food",
+            "calories": 100,
+        },
+    )
+    nc = mock_garmin_client.client.put.call_args[1]["json"]["nutritionContents"][0]
+    assert nc["servingUnit"] == "G"
+    assert nc["numberOfUnits"] == "100"
+
+
 MOCK_MEALS = {
     "meals": [
         {"mealId": 20249, "mealName": "BREAKFAST", "startTime": "06:00:00", "endTime": "09:00:00"},
