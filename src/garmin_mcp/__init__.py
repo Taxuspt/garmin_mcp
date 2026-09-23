@@ -349,6 +349,31 @@ def _parse_transport_config() -> tuple[str, str, int]:
     return transport, http_host, http_port
 
 
+_TRUE_VALUES = ("1", "true", "yes", "on")
+_FALSE_VALUES = ("", "0", "false", "no", "off")
+
+
+def _resolve_stateless_http() -> bool:
+    """Read GARMIN_MCP_STATELESS_HTTP. Raises ValueError on unrecognized input.
+
+    Stateless mode serves each Streamable HTTP request on a fresh transport with
+    no Mcp-Session-Id, so there is no server-side session for the SDK to reap
+    after its idle timeout (30 min in mcp>=1.30). Without it, the first call after
+    an idle gap gets 404 "Session not found" and some clients (e.g. claude.ai
+    connectors) surface that as a failed tool call instead of replaying it. No
+    tool here relies on session state (progress, sampling, elicitation, server
+    push), so nothing is lost. Only affects the streamable-http transport.
+    """
+    raw = os.getenv("GARMIN_MCP_STATELESS_HTTP", "").strip().lower()
+    if raw in _TRUE_VALUES:
+        return True
+    if raw in _FALSE_VALUES:
+        return False
+    raise ValueError(
+        f"Invalid GARMIN_MCP_STATELESS_HTTP {raw!r}; expected true or false"
+    )
+
+
 class _ToolFilter:
     """Wraps a FastMCP app to conditionally register tools by function name.
 
@@ -568,9 +593,11 @@ def main():
     #   GARMIN_MCP_TRANSPORT - stdio (default) | streamable-http | sse
     #   GARMIN_MCP_HOST      - bind address for HTTP transports (default 127.0.0.1)
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
+    #   GARMIN_MCP_STATELESS_HTTP - true to run streamable-http without sessions
     try:
         enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
+        stateless_http = _resolve_stateless_http()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
@@ -605,7 +632,12 @@ def main():
 
     # Create the MCP app, wrapped so the env-var filter can drop tools.
     # host/port only matter for the HTTP transports; stdio ignores them.
-    fastmcp = FastMCP("Garmin Connect v1.0", host=http_host, port=http_port)
+    fastmcp = FastMCP(
+        "Garmin Connect v1.0",
+        host=http_host,
+        port=http_port,
+        stateless_http=stateless_http,
+    )
     app = _ToolFilter(fastmcp, enabled_tools, disabled_tools)
     if enabled_tools:
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
@@ -651,8 +683,9 @@ def main():
         async def healthz(_request: "Request") -> "PlainTextResponse":
             return PlainTextResponse("ok")
 
+        mode = " (stateless)" if stateless_http and transport == "streamable-http" else ""
         print(
-            f"Serving MCP over {transport} on {http_host}:{http_port}",
+            f"Serving MCP over {transport}{mode} on {http_host}:{http_port}",
             file=sys.stderr,
         )
 

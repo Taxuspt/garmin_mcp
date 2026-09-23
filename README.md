@@ -532,6 +532,7 @@ By default the server communicates over **stdio**, which is what Claude Desktop,
 - `GARMIN_MCP_TRANSPORT`: `stdio` (default), `streamable-http`, or `sse`
 - `GARMIN_MCP_HOST`: bind address for HTTP transports (default `127.0.0.1`; set to `0.0.0.0` only when the endpoint is fronted by an authenticating reverse proxy)
 - `GARMIN_MCP_PORT`: bind port for HTTP transports (default `8000`)
+- `GARMIN_MCP_STATELESS_HTTP`: set to `true` to run `streamable-http` without sessions (default `false`). The MCP SDK drops a stateful session after 30 minutes idle, so the first call after an idle gap gets `404 Session not found`; some clients (including claude.ai custom connectors) report that as a failed tool call rather than re-initializing and retrying. Stateless mode has no sessions to expire. No tool in this server depends on session state, so nothing is lost. Recommended for long-lived remote deployments.
 - `GARMIN_MCP_CALL_TIMEOUT`: per-request timeout in seconds for calls to Garmin (default `90`). Garmin's API occasionally stalls a single request indefinitely; without this bound the call hangs until the MCP client's own timeout fires and reports the whole server as unresponsive. On timeout the tool returns a clear, retry-able error instead. Set to `0` to disable the bound.
 
 ```bash
