@@ -323,6 +323,19 @@ class TestVerifyTokens:
         result = verify_tokens("/test/path")
         assert result is False
 
+    @patch("garmin_mcp.auth_cli.get_token_info")
+    def test_verify_china_tokens_uses_china_region(self, mock_get_info):
+        mock_get_info.return_value = {
+            "path": "/test/path",
+            "expanded_path": "/test/path",
+            "exists": True,
+            "valid": True,
+            "error": "",
+        }
+
+        assert verify_tokens("/test/path", is_cn=True) is True
+        mock_get_info.assert_called_once_with("/test/path", is_cn=True)
+
 
 class TestMain:
     """Tests for main function."""
@@ -435,6 +448,9 @@ class TestMain:
 class TestAuthenticateIsCn:
     """Tests for is_cn parameter in authenticate function."""
 
+    @pytest.mark.skipif(
+        sys.version_info < (3, 12), reason="China auth needs Python 3.12"
+    )
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
     @patch("garmin_mcp.auth_cli.Garmin")
