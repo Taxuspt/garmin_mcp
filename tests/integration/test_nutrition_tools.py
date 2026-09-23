@@ -1373,3 +1373,103 @@ async def test_set_nutrition_settings_rejects_invalid_macros(app_with_nutrition,
     )
     assert "cannot apply update" in result[0][0].text
     mock_garmin_client.client.put.assert_not_called()
+
+
+# structured write errors
+
+_LOG_FOOD_ARGS = {
+    "meal_date": "2024-01-15",
+    "meal_time": "12:00:00",
+    "name": "Test",
+    "calories": 100,
+    "carbs": 10,
+    "protein": 5,
+    "fat": 2,
+}
+
+
+@pytest.mark.asyncio
+async def test_log_food_garmin_rejection_is_structured(app_with_nutrition, mock_garmin_client):
+    """A Garmin 4xx on the write returns a structured, not-committed error"""
+    from garminconnect import GarminConnectConnectionError
+
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.side_effect = GarminConnectConnectionError(
+        "API Error 401 - "
+    )
+    result = await app_with_nutrition.call_tool("log_food", _LOG_FOOD_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "error"
+    assert data["tool"] == "log_food"
+    assert data["stage"] == "garmin_request"
+    assert data["upstream_status"] == 401
+    assert data["write_committed"] is False
+    assert data["correlation_id"]
+
+
+@pytest.mark.asyncio
+async def test_log_food_timeout_after_send_is_unknown(app_with_nutrition, mock_garmin_client):
+    """A read timeout on the write may have committed; say so rather than guess"""
+    import requests
+
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.side_effect = requests.exceptions.ReadTimeout("timed out")
+    result = await app_with_nutrition.call_tool("log_food", _LOG_FOOD_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] == "unknown"
+    mock_garmin_client.client.put.assert_called_once()  # never auto-retried
+
+
+@pytest.mark.asyncio
+async def test_log_food_meal_lookup_failure_is_not_committed(app_with_nutrition, mock_garmin_client):
+    """A failure in the pre-write meal lookup never reaches the write"""
+    import requests
+
+    mock_garmin_client.connectapi.side_effect = requests.exceptions.ReadTimeout("timed out")
+    result = await app_with_nutrition.call_tool("log_food", _LOG_FOOD_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_log_custom_food_error_is_structured(app_with_nutrition, mock_garmin_client):
+    """log_custom_food returns the same structured error shape"""
+    from garminconnect import GarminConnectConnectionError
+
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.side_effect = GarminConnectConnectionError(
+        "API Error 400 - Required Parameter meal id is null"
+    )
+    result = await app_with_nutrition.call_tool(
+        "log_custom_food",
+        {"meal_date": "2024-01-15", "meal_time": "12:00:00", "food_id": "abc", "serving_id": "s"},
+    )
+    data = json.loads(result[0][0].text)
+    assert data["tool"] == "log_custom_food"
+    assert data["upstream_status"] == 400
+    assert data["upstream_body"] == "Required Parameter meal id is null"
+
+
+@pytest.mark.asyncio
+async def test_delete_food_log_error_is_structured(app_with_nutrition, mock_garmin_client):
+    """delete_food_log returns the same structured error shape"""
+    import requests
+
+    mock_garmin_client.client.delete.side_effect = requests.exceptions.ConnectTimeout("no route")
+    result = await app_with_nutrition.call_tool(
+        "delete_food_log", {"log_id": "581f7dc8797f421f8d7eea83e5d2c939", "meal_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["tool"] == "delete_food_log"
+    assert data["message"].startswith("Error deleting food log")
+    assert data["write_committed"] is False
+
+
+@pytest.mark.asyncio
+async def test_log_food_success_shape_unchanged(app_with_nutrition, mock_garmin_client):
+    """The success path still returns the plain message"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool("log_food", _LOG_FOOD_ARGS)
+    assert result[0][0].text == "Food logged successfully."
