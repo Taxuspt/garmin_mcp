@@ -696,8 +696,8 @@ async def test_upload_workout_rejects_target_type_mismatch(app_with_workouts, mo
     )
 
     assert "targetType mismatch" in result[0][0].text
-    # ID 6 is valid for 'pace.zone' (running) and 'power.between' (cycling), not 'heart.rate'
-    assert "workoutTargetTypeId 6 is one of" in result[0][0].text
+    # ID 6 is pace.zone, not heart.rate.
+    assert "workoutTargetTypeId 6 is 'pace.zone', not 'heart.rate'" in result[0][0].text
     assert "not 'heart.rate'" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
@@ -856,8 +856,8 @@ async def test_upload_workout_rejects_secondary_target_type_mismatch(app_with_wo
     )
 
     assert "secondaryTargetType mismatch" in result[0][0].text
-    # ID 6 is valid for 'pace.zone' (running) and 'power.between' (cycling), not 'heart.rate'
-    assert "workoutTargetTypeId 6 is one of" in result[0][0].text
+    # ID 6 is pace.zone, not heart.rate.
+    assert "workoutTargetTypeId 6 is 'pace.zone', not 'heart.rate'" in result[0][0].text
     assert "not 'heart.rate'" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
@@ -923,7 +923,7 @@ async def test_upload_workout_rejects_nested_secondary_target_type_mismatch(
 
 
 # ---------------------------------------------------------------------------
-# Cycling power target tests (Issue #155)
+# Cycling power target tests (Issue #155 regression)
 # ---------------------------------------------------------------------------
 
 def _cycling_workout_with_steps(steps, name="Cycling Validation Workout"):
@@ -939,11 +939,12 @@ def _cycling_workout_with_steps(steps, name="Cycling Validation Workout"):
 
 
 @pytest.mark.asyncio
-async def test_upload_cycling_workout_power_between_accepted(app_with_workouts, mock_garmin_client):
-    """Cycling absolute watt range (power.between) uses workoutTargetTypeId 6.
+async def test_upload_cycling_workout_absolute_watts_accepted(app_with_workouts, mock_garmin_client):
+    """Cycling absolute watts use ID 2/power.zone without zoneNumber.
 
-    Fix for Issue #155: power.between must use ID 6, not ID 2.
-    ID 6 is valid for both 'pace.zone' (running) and 'power.between' (cycling).
+    Garmin uses the payload shape to distinguish a named power zone from a
+    custom watt range. A live upload/download probe encodes this shape as a
+    power target in the FIT workout.
     """
     import json as json_module
 
@@ -958,7 +959,7 @@ async def test_upload_cycling_workout_power_between_accepted(app_with_workouts, 
             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
             "endConditionValue": 600.0,
-            "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "power.between"},
+            "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
             "targetValueOne": 200,
             "targetValueTwo": 250,
         }],
@@ -976,15 +977,19 @@ async def test_upload_cycling_workout_power_between_accepted(app_with_workouts, 
 
     called_data = mock_garmin_client.upload_workout.call_args[0][0]
     step = called_data["workoutSegments"][0]["workoutSteps"][0]
-    assert step["targetType"]["workoutTargetTypeId"] == 6
-    assert step["targetType"]["workoutTargetTypeKey"] == "power.between"
+    assert step["targetType"]["workoutTargetTypeId"] == 2
+    assert step["targetType"]["workoutTargetTypeKey"] == "power.zone"
     assert step["targetValueOne"] == 200
     assert step["targetValueTwo"] == 250
+    assert "zoneNumber" not in step
 
 
 @pytest.mark.asyncio
-async def test_upload_cycling_workout_power_zone_accepted(app_with_workouts, mock_garmin_client):
-    """Cycling zone-based power (power.zone) uses workoutTargetTypeId 2 with zoneNumber."""
+@pytest.mark.parametrize("zone_number", [3, 4.0])
+async def test_upload_cycling_workout_power_zone_accepted(
+    app_with_workouts, mock_garmin_client, zone_number
+):
+    """Named power zones accept integer JSON values and integral floats."""
     import json as json_module
 
     mock_garmin_client.upload_workout.return_value = {
@@ -999,7 +1004,7 @@ async def test_upload_cycling_workout_power_zone_accepted(app_with_workouts, moc
             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
             "endConditionValue": 1200.0,
             "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
-            "zoneNumber": 3,
+            "zoneNumber": zone_number,
         }],
         name="Cycling Power Zone Test",
     )
@@ -1016,19 +1021,28 @@ async def test_upload_cycling_workout_power_zone_accepted(app_with_workouts, moc
     step = called_data["workoutSegments"][0]["workoutSteps"][0]
     assert step["targetType"]["workoutTargetTypeId"] == 2
     assert step["targetType"]["workoutTargetTypeKey"] == "power.zone"
-    assert step["zoneNumber"] == 3
+    assert step["zoneNumber"] == zone_number
 
 
 @pytest.mark.asyncio
-async def test_upload_cycling_workout_wrong_id_for_power_between_rejected(
-    app_with_workouts, mock_garmin_client
+@pytest.mark.parametrize(
+    "target_type",
+    [
+        {"workoutTargetTypeKey": "power.between"},
+        {
+            "workoutTargetTypeId": 6,
+            "workoutTargetTypeKey": "power.between",
+        },
+        {
+            "workoutTargetTypeId": 9,
+            "workoutTargetTypeKey": "power.between",
+        },
+    ],
+)
+async def test_upload_cycling_workout_rejects_legacy_power_between_target(
+    app_with_workouts, mock_garmin_client, target_type
 ):
-    """Using workoutTargetTypeId 2 with key 'power.between' is the root cause of Issue #155.
-
-    Garmin silently treats ID 2 as 'power.zone' regardless of the key string, so
-    the stored workout comes back as target_type='power.zone' instead of 'power.between'.
-    The validator catches this mismatch before upload.
-    """
+    """Reject the legacy key independently of a missing or misleading ID."""
     workout_data = _cycling_workout_with_steps(
         [{
             "type": "ExecutableStepDTO",
@@ -1036,7 +1050,7 @@ async def test_upload_cycling_workout_wrong_id_for_power_between_rejected(
             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
             "endConditionValue": 600.0,
-            "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.between"},
+            "targetType": target_type,
             "targetValueOne": 200,
             "targetValueTwo": 250,
         }],
@@ -1048,9 +1062,9 @@ async def test_upload_cycling_workout_wrong_id_for_power_between_rejected(
         {"workout_data": workout_data}
     )
 
-    assert "targetType mismatch" in result[0][0].text
-    # ID 2 maps to 'power.zone' only (single key) so the error names it directly
-    assert "workoutTargetTypeId 2 is 'power.zone', not 'power.between'" in result[0][0].text
+    assert "workoutTargetTypeKey 'power.between' is unsupported" in result[0][0].text
+    assert "use workoutTargetTypeId 2 / 'power.zone'" in result[0][0].text
+    assert "targetValueOne/targetValueTwo and no zoneNumber" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
 
@@ -1060,7 +1074,7 @@ async def test_upload_cycling_workout_wrong_id_for_power_zone_rejected(
 ):
     """Using workoutTargetTypeId 6 with key 'power.zone' is a mismatch.
 
-    ID 6 is valid for 'pace.zone' and 'power.between' only, not 'power.zone'.
+    ID 6 is pace.zone, not power.zone.
     """
     workout_data = _cycling_workout_with_steps(
         [{
@@ -1081,17 +1095,220 @@ async def test_upload_cycling_workout_wrong_id_for_power_zone_rejected(
     )
 
     assert "targetType mismatch" in result[0][0].text
-    # ID 6 has two valid keys (pace.zone, power.between) so the error lists both
-    assert "workoutTargetTypeId 6 is one of" in result[0][0].text
-    assert "not 'power.zone'" in result[0][0].text
+    assert "workoutTargetTypeId 6 is 'pace.zone', not 'power.zone'" in result[0][0].text
     mock_garmin_client.upload_workout.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_upload_cycling_workout_power_between_in_repeat_group(
+async def test_upload_cycling_workout_pace_target_remains_valid(
     app_with_workouts, mock_garmin_client
 ):
-    """power.between targets inside RepeatGroupDTO steps are accepted."""
+    """The power fix must not block an intentional cycling speed target."""
+    import json as json_module
+
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 200004,
+        "workoutName": "Cycling Speed Target",
+    }
+    workout_data = _cycling_workout_with_steps(
+        [{
+            "type": "ExecutableStepDTO",
+            "stepOrder": 1,
+            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+            "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+            "endConditionValue": 600.0,
+            "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"},
+            "targetValueOne": 150,
+            "targetValueTwo": 160,
+        }],
+        name="Cycling Speed Target",
+    )
+
+    result = await app_with_workouts.call_tool("upload_workout", {"workout_data": workout_data})
+
+    assert json_module.loads(result[0][0].text)["status"] == "success"
+    mock_garmin_client.upload_workout.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_cycling_workout_rejects_zone_and_range_during_normalization(
+    app_with_workouts, mock_garmin_client
+):
+    """Shared target normalization rejects a named zone plus custom bounds."""
+    workout_data = _cycling_workout_with_steps(
+        [{
+            "type": "ExecutableStepDTO",
+            "stepOrder": 1,
+            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+            "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+            "endConditionValue": 600.0,
+            "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
+            "zoneNumber": 4,
+            "targetValueOne": 150,
+            "targetValueTwo": 160,
+        }],
+        name="Ambiguous Cycling Power Target",
+    )
+
+    result = await app_with_workouts.call_tool("upload_workout", {"workout_data": workout_data})
+
+    assert "mixes zoneNumber=4 with custom range fields" in result[0][0].text
+    assert "use either a named zone or a custom range" in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_values", "expected_error"),
+    [
+        ({}, "requires zoneNumber or a targetValueOne/targetValueTwo watt range"),
+        ({"targetValueOne": 250}, "requires both targetValueOne and targetValueTwo"),
+        (
+            {"targetValueOne": 300, "targetValueTwo": 250},
+            "power target low value cannot exceed high value",
+        ),
+        ({"targetValueOne": -1, "targetValueTwo": 250}, "must be non-negative"),
+        ({"targetValueOne": float("inf"), "targetValueTwo": 250}, "must be finite"),
+        ({"targetValueOne": "200", "targetValueTwo": 250}, "must be numeric"),
+        ({"targetValueOne": True, "targetValueTwo": 250}, "must be numeric"),
+        ({"zoneNumber": True}, "must be an integer between 1 and 7"),
+        ({"zoneNumber": 4.5}, "must be an integer between 1 and 7"),
+        ({"zoneNumber": "04"}, "must be an integer between 1 and 7"),
+        ({"zoneNumber": 8}, "must be an integer between 1 and 7"),
+    ],
+)
+async def test_upload_cycling_workout_rejects_invalid_power_target_values(
+    app_with_workouts, mock_garmin_client, target_values, expected_error
+):
+    """Reject malformed power targets before Garmin can reinterpret them."""
+    step = {
+        "type": "ExecutableStepDTO",
+        "stepOrder": 1,
+        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+        "endConditionValue": 600.0,
+        "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
+        **target_values,
+    }
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": _cycling_workout_with_steps([step])},
+    )
+
+    assert expected_error in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target_values", "expected_error"),
+    [
+        ({"targetValueOne": 250}, "requires both targetValueOne and targetValueTwo"),
+        (
+            {"targetValueOne": 300, "targetValueTwo": 250},
+            "power target low value cannot exceed high value",
+        ),
+        ({"targetValueOne": -1, "targetValueTwo": 250}, "must be non-negative"),
+    ],
+)
+async def test_upload_cycling_workout_validates_power_values_from_id_without_key(
+    app_with_workouts, mock_garmin_client, target_values, expected_error
+):
+    """Known numeric IDs remain authoritative when the key is omitted."""
+    step = {
+        "type": "ExecutableStepDTO",
+        "stepOrder": 1,
+        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+        "endConditionValue": 600.0,
+        "targetType": {"workoutTargetTypeId": 2},
+        **target_values,
+    }
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": _cycling_workout_with_steps([step])},
+    )
+
+    assert expected_error in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_cycling_workout_secondary_absolute_watts_accepted(
+    app_with_workouts, mock_garmin_client
+):
+    """Secondary custom watt targets use their secondary value fields."""
+    import json as json_module
+
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 200005,
+        "workoutName": "Cycling Secondary Power Target",
+    }
+    step = {
+        "type": "ExecutableStepDTO",
+        "stepOrder": 1,
+        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+        "endConditionValue": 600.0,
+        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+        "secondaryTargetType": {
+            "workoutTargetTypeId": 2,
+            "workoutTargetTypeKey": "power.zone",
+        },
+        "secondaryTargetValueOne": 200,
+        "secondaryTargetValueTwo": 250,
+    }
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": _cycling_workout_with_steps([step])},
+    )
+
+    assert json_module.loads(result[0][0].text)["status"] == "success"
+    mock_garmin_client.upload_workout.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_cycling_workout_rejects_ambiguous_secondary_power_target(
+    app_with_workouts, mock_garmin_client
+):
+    """Shared normalization also protects secondary power targets."""
+    step = {
+        "type": "ExecutableStepDTO",
+        "stepOrder": 1,
+        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+        "endConditionValue": 600.0,
+        "targetType": {
+            "workoutTargetTypeId": 1,
+            "workoutTargetTypeKey": "no.target",
+        },
+        "secondaryTargetType": {
+            "workoutTargetTypeId": 2,
+            "workoutTargetTypeKey": "power.zone",
+        },
+        "secondaryZoneNumber": 4,
+        "secondaryTargetValueOne": 200,
+        "secondaryTargetValueTwo": 250,
+    }
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout",
+        {"workout_data": _cycling_workout_with_steps([step])},
+    )
+
+    assert "mixes secondaryZoneNumber=4 with custom range fields" in result[0][0].text
+    assert "use either a named zone or a custom range" in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_cycling_workout_absolute_watts_in_repeat_group(
+    app_with_workouts, mock_garmin_client
+):
+    """Absolute power.zone watt ranges inside RepeatGroupDTO are accepted."""
     import json as json_module
 
     mock_garmin_client.upload_workout.return_value = {
@@ -1121,7 +1338,7 @@ async def test_upload_cycling_workout_power_between_in_repeat_group(
                         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                         "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
                         "endConditionValue": 300.0,
-                        "targetType": {"workoutTargetTypeId": 6, "workoutTargetTypeKey": "power.between"},
+                        "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
                         "targetValueOne": 250,
                         "targetValueTwo": 300,
                     },
@@ -1157,8 +1374,8 @@ async def test_upload_cycling_workout_power_between_in_repeat_group(
 
     called_data = mock_garmin_client.upload_workout.call_args[0][0]
     interval_step = called_data["workoutSegments"][0]["workoutSteps"][1]["workoutSteps"][0]
-    assert interval_step["targetType"]["workoutTargetTypeId"] == 6
-    assert interval_step["targetType"]["workoutTargetTypeKey"] == "power.between"
+    assert interval_step["targetType"]["workoutTargetTypeId"] == 2
+    assert interval_step["targetType"]["workoutTargetTypeKey"] == "power.zone"
     assert interval_step["targetValueOne"] == 250
     assert interval_step["targetValueTwo"] == 300
 

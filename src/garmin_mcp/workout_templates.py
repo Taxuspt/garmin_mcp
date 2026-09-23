@@ -260,17 +260,17 @@ WORKOUT_STRUCTURE_REFERENCE = {
     },
     "targetType_values": {
         "1": {"workoutTargetTypeKey": "no.target", "description": "No specific target"},
-        "2": {"workoutTargetTypeKey": "power.zone", "description": "Cycling power zone 1-7 (use zoneNumber; based on FTP %). Do NOT use for absolute watt targets."},
+        "2": {"workoutTargetTypeKey": "power.zone", "description": "Cycling power target: use zoneNumber 1-7 for an FTP zone, or targetValueOne/targetValueTwo for an absolute watt range (omit zoneNumber)."},
         "4": {"workoutTargetTypeKey": "heart.rate.zone", "description": "Heart rate zone (use zoneNumber 1-5 for named zones, or targetValueOne/targetValueTwo for custom bpm range)"},
-        "6 (running/swim)": {
+        "6": {
             "workoutTargetTypeKey": "pace.zone",
             "description": (
-                "Pace zone for running or swimming (use zoneNumber, or "
+                "Pace/speed target (use zoneNumber, or "
                 "step-level targetValueOne/targetValueTwo in m/s for a "
-                "custom range)"
+                "custom range). Not cycling power; using ID 6 for watts "
+                "makes Garmin devices display a speed target."
             ),
-        },
-        "6 (cycling)": {"workoutTargetTypeKey": "power.between", "description": "Cycling absolute watt range (use targetValueOne=low_watts, targetValueTwo=high_watts). Use this instead of power.zone when targeting specific watts, NOT zone numbers."}
+        }
     },
     "sportType_values": {
         "1": {"sportTypeKey": "running"},
