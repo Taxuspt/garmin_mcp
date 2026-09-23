@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diário de Saúde — Ricardo Runnn</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface-1:   #fcfcfb;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+
+    --series-bb:      #2a78d6; /* blue - body battery */
+    --series-hrv:     #eb6834; /* orange - HRV */
+    --series-score:   #1baf7a; /* aqua - sleep score */
+    --series-hr:      #e34948; /* red - resting HR */
+    --series-fitness: #4a3aa7; /* violet - chronic load */
+    --series-fatigue: #008300; /* green - acute load */
+
+    --status-good:     #0ca30c;
+    --status-warning:  #fab219;
+    --status-critical: #d03b3b;
+
+    /* Sequential blue ramp for ordinal HR zones (Z1 light -> Z5 dark) */
+    --zone-1: #cde2fb;
+    --zone-2: #9ec5f4;
+    --zone-3: #5598e7;
+    --zone-4: #256abf;
+    --zone-5: #104281;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:        #0d0d0d;
+      --surface-1:   #1a1a19;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:        #2c2c2a;
+      --baseline:    #383835;
+      --border:      rgba(255,255,255,0.10);
+
+      --series-bb:      #3987e5;
+      --series-hrv:     #d95926;
+      --series-score:   #199e70;
+      --series-hr:      #e66767;
+      --series-fitness: #9085e9;
+      --series-fatigue: #008300;
+
+      --status-good:     #0ca30c;
+      --status-warning:  #fab219;
+      --status-critical: #d03b3b;
+
+      /* Sequential blue ramp, lighter overall so it stays visible on the dark surface */
+      --zone-1: #cde2fb;
+      --zone-2: #86b6ef;
+      --zone-3: #5598e7;
+      --zone-4: #3987e5;
+      --zone-5: #2a78d6;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; font-weight: 650; margin: 0 0 4px; }
+  .subtitle { color: var(--text-secondary); font-size: 0.9rem; margin: 0 0 20px; }
+
+  .readiness {
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    border-left: 5px solid var(--text-muted);
+  }
+  .readiness.apto { border-left-color: var(--status-good); }
+  .readiness.cautela { border-left-color: var(--status-warning); }
+  .readiness.nao_apto { border-left-color: var(--status-critical); }
+  .readiness .label { font-size: 1.15rem; font-weight: 700; margin-bottom: 4px; }
+  .readiness .plan { color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 10px; }
+  .readiness ul { margin: 0; padding-left: 20px; font-size: 0.85rem; color: var(--text-secondary); }
+  .readiness li { margin-bottom: 2px; }
+
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .tile .label { color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+  .tile .value { font-size: 1.7rem; font-weight: 650; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .tile .sub { color: var(--text-muted); font-size: 0.8rem; margin-top: 2px; }
+
+  .volume-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .volume-card h2 { font-size: 0.95rem; font-weight: 650; margin: 0 0 4px; }
+  .volume-card .sub { color: var(--text-muted); font-size: 0.8rem; }
+  .volume-bar-wrap { flex: 1; min-width: 200px; }
+  .volume-bar-track { background: var(--grid); border-radius: 6px; height: 10px; overflow: hidden; margin-top: 8px; }
+  .volume-bar-fill { background: var(--series-bb); height: 100%; border-radius: 6px; }
+  .volume-nums { font-variant-numeric: tabular-nums; font-weight: 650; font-size: 1.1rem; white-space: nowrap; }
+
+  .charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .card h2 { font-size: 0.95rem; font-weight: 650; margin: 0 0 2px; }
+  .card .last-value { color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+  .card canvas { max-height: 220px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  td.name { font-variant-numeric: normal; color: var(--text-primary); font-weight: 500; }
+  .muted { color: var(--text-muted); }
+  .error { color: var(--series-hr); font-size: 0.85rem; padding: 8px 0; }
+  .section-gap { margin-bottom: 20px; }
+
+  .zone-bar-track {
+    display: flex;
+    height: 22px;
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 10px 0 14px;
+  }
+  .zone-bar-seg { height: 100%; }
+  .zone-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    font-size: 0.82rem;
+  }
+  .zone-legend .item { display: flex; align-items: center; gap: 6px; }
+  .zone-legend .dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .zone-legend .pct { font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  #chart-voltrend { cursor: pointer; }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    max-width: 640px;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 20px 22px;
+  }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .modal-header h2 { font-size: 1.05rem; margin: 0; }
+  .modal-close {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 1.4rem; line-height: 1; cursor: pointer; padding: 4px 8px;
+  }
+  .modal-close:hover { color: var(--text-primary); }
+  .modal-card h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.02em; color: var(--text-secondary); margin: 16px 0 6px; }
+  .modal-card ul { margin: 0; padding-left: 20px; font-size: 0.88rem; line-height: 1.5; }
+  .modal-card li { margin-bottom: 6px; }
+  .modal-card .modal-sub { color: var(--text-muted); font-size: 0.82rem; }
+
+  tr.plan-today { background: rgba(255,255,255,0.04); }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 650;
+    padding: 2px 8px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  .badge-pending { background: rgba(137,135,129,0.2); color: var(--text-secondary); }
+  .badge-completed { background: rgba(12,163,12,0.15); color: var(--status-good); }
+  .badge-skipped { background: rgba(250,178,25,0.15); color: var(--status-warning); }
+  .badge-cancelled { background: rgba(208,59,59,0.15); color: var(--status-critical); }
+
+  .cal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 10px; }
+  .cal-header h2 { font-size: 0.95rem; font-weight: 650; margin: 0; }
+  .cal-year-nav { display: flex; align-items: center; gap: 10px; }
+  .cal-year-nav button {
+    background: none; border: none; color: var(--text-secondary);
+    font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  }
+  .cal-year-nav button:hover:not(:disabled) { background: var(--grid); color: var(--text-primary); }
+  .cal-year-nav button:disabled { opacity: 0.3; cursor: default; }
+  .cal-year-nav .cal-year-label { font-weight: 700; font-size: 1.05rem; min-width: 3.5ch; text-align: center; }
+
+  .cal-overview {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 24px; margin-bottom: 20px; flex-wrap: wrap;
+  }
+  .cal-sparkline-block { flex: 1; min-width: 220px; }
+  .cal-sparkline { display: flex; align-items: flex-end; gap: 2px; height: 56px; }
+  .cal-sparkline .bar { flex: 1; background: var(--series-bb); border-radius: 1px; min-height: 2px; }
+  .cal-sparkline-label { color: var(--text-muted); font-size: 0.72rem; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.02em; }
+  .cal-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+  .cal-stat-value { font-size: 1.6rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .cal-stat.primary .cal-stat-value { color: var(--series-bb); }
+  .cal-stat-label { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.02em; }
+
+  .cal-months { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .cal-month {
+    background: var(--page); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; min-height: 132px; display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .cal-month.current { background: var(--series-bb); border-color: var(--series-bb); }
+  .cal-month.current .cal-month-name, .cal-month.current .cal-month-hours, .cal-month.current .cal-month-hours-label { color: #ffffff; }
+  .cal-month.future { opacity: 0.45; }
+  .cal-month-name { text-align: right; text-transform: uppercase; color: var(--text-muted); font-size: 0.8rem; font-weight: 650; letter-spacing: 0.03em; }
+  .cal-month-hours { font-size: 1.6rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .cal-month-hours-label { color: var(--text-muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  .cal-month-bars { display: flex; align-items: flex-end; gap: 1.5px; height: 38px; margin-top: 10px; }
+  .cal-month-bars .bar { flex: 1; background: var(--text-primary); opacity: 0.7; border-radius: 1px; min-height: 2px; }
+  .cal-month.current .cal-month-bars .bar { background: #ffffff; opacity: 0.9; }
+
+  .wc-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin: 10px 0 14px;
+  }
+  .wc-stat .wc-label { color: var(--text-muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  .wc-stat .wc-value { font-size: 1.3rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .wc-flags { margin: 0; padding-left: 20px; font-size: 0.85rem; color: var(--text-secondary); }
+  .wc-flags li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Diário de Saúde — Ricardo Runnn</h1>
+  <p class="subtitle" id="subtitle">A carregar…</p>
+
+  <div class="readiness" id="readiness">
+    <div class="label">A avaliar prontidão…</div>
+  </div>
+
+  <div class="readiness" id="overtraining">
+    <div class="label">A avaliar risco de overtraining…</div>
+  </div>
+
+  <div class="card section-gap" id="weekly-closing">
+    <h2 style="margin-bottom:2px;">Fechamento da semana</h2>
+    <div class="last-value" id="wc-sub">A carregar…</div>
+    <div id="wc-body"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:12px;">Plano de treino</h2>
+    <div id="plan-wrap"></div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="volume-card" id="volume-card">
+    <div>
+      <h2>Volume da semana</h2>
+      <div class="sub" id="volume-sub">A carregar…</div>
+    </div>
+    <div class="volume-bar-wrap">
+      <div class="volume-nums" id="volume-nums">—</div>
+      <div class="volume-bar-track"><div class="volume-bar-fill" id="volume-bar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:12px;">Atividades recentes</h2>
+    <div id="activities-wrap"></div>
+  </div>
+
+  <div class="card section-gap" id="cal-wrap">
+    <div class="cal-header">
+      <h2>Calendário de treinamento</h2>
+      <div class="cal-year-nav">
+        <button id="cal-year-prev" aria-label="Ano anterior">&lsaquo;</button>
+        <span class="cal-year-label" id="cal-year-label">—</span>
+        <button id="cal-year-next" aria-label="Próximo ano">&rsaquo;</button>
+      </div>
+    </div>
+    <div class="cal-overview">
+      <div class="cal-sparkline-block">
+        <div class="cal-sparkline" id="cal-sparkline"></div>
+        <div class="cal-sparkline-label" id="cal-weeks-label">52 semanas</div>
+      </div>
+      <div class="cal-stats">
+        <div class="cal-stat primary"><div class="cal-stat-value" id="cal-hours">—</div><div class="cal-stat-label">Horas</div></div>
+        <div class="cal-stat"><div class="cal-stat-value" id="cal-km">—</div><div class="cal-stat-label">Quilómetros</div></div>
+        <div class="cal-stat"><div class="cal-stat-value" id="cal-pr">—</div><div class="cal-stat-label">Recordes pessoais</div></div>
+        <div class="cal-stat"><div class="cal-stat-value" id="cal-activities">—</div><div class="cal-stat-label">Atividades</div></div>
+      </div>
+    </div>
+    <div class="cal-months" id="cal-months"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">Volume semanal (6 semanas)</h2>
+    <div class="last-value" id="voltrend-sub">Clique numa semana para ver a avaliação biomecânica, se houver.</div>
+    <canvas id="chart-voltrend"></canvas>
+  </div>
+
+  <div class="modal-overlay" id="biomech-modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="biomech-modal-title">Avaliação biomecânica</h2>
+        <button class="modal-close" id="biomech-modal-close" aria-label="Fechar">&times;</button>
+      </div>
+      <div id="biomech-modal-body"></div>
+    </div>
+  </div>
+
+  <div class="charts" id="charts">
+    <div class="card">
+      <h2>Body Battery (14 dias)</h2>
+      <div class="last-value" id="bb-last"></div>
+      <canvas id="chart-bb"></canvas>
+    </div>
+    <div class="card">
+      <h2>HRV — última noite (14 dias)</h2>
+      <div class="last-value" id="hrv-last"></div>
+      <canvas id="chart-hrv"></canvas>
+    </div>
+    <div class="card">
+      <h2>Sono — score (14 noites)</h2>
+      <div class="last-value" id="score-last"></div>
+      <canvas id="chart-score"></canvas>
+    </div>
+    <div class="card">
+      <h2>FC em repouso (14 dias)</h2>
+      <div class="last-value" id="hr-last"></div>
+      <canvas id="chart-hr"></canvas>
+    </div>
+    <div class="card">
+      <h2>VO2max (90 dias)</h2>
+      <div class="last-value" id="vo2-last"></div>
+      <canvas id="chart-vo2"></canvas>
+    </div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">Evolução de ritmo (ganho de velocidade)</h2>
+    <div class="last-value" id="pace-sub">A carregar…</div>
+    <canvas id="chart-pace"></canvas>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">Fitness &amp; Freshness (42 dias)</h2>
+    <div class="last-value" id="ff-last">A carregar…</div>
+    <canvas id="chart-ff"></canvas>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:4px;">Sono na noite após o treino</h2>
+    <div class="last-value" id="sleepload-sub">A carregar…</div>
+    <div id="sleepload-wrap"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:2px;">FC média nos primeiros 10 minutos</h2>
+    <div class="last-value" id="first10-sub">A carregar…</div>
+    <canvas id="chart-first10"></canvas>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:4px;">Métricas de corrida (biomecânica)</h2>
+    <div class="last-value" id="dynamics-sub">Cadência, passada, tempo de contacto e oscilação vertical — últimas corridas.</div>
+    <div id="dynamics-wrap"></div>
+  </div>
+
+  <div class="card section-gap">
+    <h2 style="margin-bottom:4px;">Projeção de prova (fórmula de Riegel)</h2>
+    <div class="last-value" id="race-sub">Estimativa matemática a partir do teu tempo atual — não é garantia de prova real.</div>
+    <div id="race-wrap"></div>
+  </div>
+</div>
+
+<script>
+// Loaded globally but only opted into on the one chart that needs it
+// (stacked weekly volume-by-zone), so other charts stay label-free.
+if (window.ChartDataLabels) {
+  Chart.register(ChartDataLabels);
+  Chart.defaults.set("plugins.datalabels", { display: false });
+}
+
+const css = getComputedStyle(document.documentElement);
+const cssVar = (name) => css.getPropertyValue(name).trim();
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
+}
+
+function fmtPace(minPerKm) {
+  if (minPerKm == null) return "—";
+  const m = Math.floor(minPerKm);
+  const s = Math.round((minPerKm - m) * 60);
+  return `${m}:${String(s).padStart(2, "0")}/km`;
+}
+
+function fmtDateTime(raw) {
+  // raw looks like "2026-09-17 20:12:51" -> "17/09 20:12"
+  if (!raw) return "—";
+  const d = new Date(raw.replace(" ", "T"));
+  if (isNaN(d)) return raw;
+  const datePart = d.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" });
+  const timePart = d.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" });
+  return `${datePart} ${timePart}`;
+}
+
+function lineChart(canvasId, labels, values, colorVar, unit, yStepSize, spanGaps = true) {
+  const color = cssVar(colorVar);
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  return new Chart(document.getElementById(canvasId), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: color,
+        backgroundColor: color,
+        borderWidth: 2,
+        pointRadius: 0,
+        pointHoverRadius: 5,
+        pointHoverBackgroundColor: color,
+        pointHoverBorderColor: surface,
+        pointHoverBorderWidth: 2,
+        tension: 0.25,
+        spanGaps,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: surface,
+          titleColor: ink,
+          bodyColor: ink,
+          borderColor: grid,
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: (ctx) => ctx.parsed.y == null ? "sem dados" : `${ctx.parsed.y} ${unit}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: muted, font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          grid: { color: grid },
+          ticks: {
+            color: muted,
+            font: { size: 10 },
+            ...(yStepSize ? { stepSize: yStepSize, callback: (v) => Number(v.toFixed(1)) } : {}),
+          },
+          border: { display: false },
+        }
+      }
+    }
+  });
+}
+
+function barChart(canvasId, labels, values, colorVar, unit) {
+  const color = cssVar(colorVar);
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  return new Chart(document.getElementById(canvasId), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: color,
+        borderRadius: 4,
+        maxBarThickness: 40,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: surface,
+          titleColor: ink,
+          bodyColor: ink,
+          borderColor: grid,
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: {
+            label: (ctx) => ctx.parsed.y == null ? "sem dados" : `${ctx.parsed.y} ${unit}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: muted, font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          grid: { color: grid },
+          ticks: { color: muted, font: { size: 10 } },
+          border: { display: false },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+function stackedZoneBarChart(canvasId, labels, weeks, onBarClick) {
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  // Z1 and Z2 merged into a single "recovery/base" portion (both are easy effort).
+  const groups = [
+    { label: "Z1-Z2", zones: [1, 2], colorVar: "--zone-2" },
+    { label: "Z3", zones: [3], colorVar: "--zone-3" },
+    { label: "Z4", zones: [4], colorVar: "--zone-4" },
+    { label: "Z5", zones: [5], colorVar: "--zone-5" },
+  ];
+  const datasets = groups.map(g => ({
+    label: g.label,
+    data: weeks.map(w => g.zones.reduce((sum, z) => sum + (w.zones.find(x => x.zone === z)?.km ?? 0), 0)),
+    pctData: weeks.map(w => g.zones.reduce((sum, z) => sum + (w.zones.find(x => x.zone === z)?.pct ?? 0), 0)),
+    backgroundColor: cssVar(g.colorVar),
+    borderRadius: 3,
+    maxBarThickness: 40,
+    datalabels: {
+      display: (ctx) => (ctx.dataset.pctData?.[ctx.dataIndex] ?? 0) >= 8,
+      color: "#ffffff",
+      font: { size: 10, weight: "650" },
+      formatter: (_value, ctx) => `${ctx.dataset.pctData[ctx.dataIndex]}%`,
+    },
+  }));
+
+  return new Chart(document.getElementById(canvasId), {
+    type: "bar",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: (evt, elements, chart) => {
+        if (!onBarClick) return;
+        const points = chart.getElementsAtEventForMode(evt, "index", { intersect: false }, true);
+        if (points.length) onBarClick(points[0].index);
+      },
+      onHover: (evt, elements) => {
+        evt.native.target.style.cursor = elements.length ? "pointer" : "default";
+      },
+      plugins: {
+        legend: {
+          display: true,
+          position: "bottom",
+          labels: { color: muted, font: { size: 11 }, boxWidth: 10, boxHeight: 10 },
+        },
+        tooltip: {
+          backgroundColor: surface,
+          titleColor: ink,
+          bodyColor: ink,
+          borderColor: grid,
+          borderWidth: 1,
+          padding: 10,
+          callbacks: {
+            label: (ctx) => {
+              const pct = ctx.dataset.pctData?.[ctx.dataIndex];
+              return `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}km${pct != null ? ` (${pct}%)` : ""}`;
+            },
+          }
+        }
+      },
+      scales: {
+        x: {
+          stacked: true,
+          grid: { display: false },
+          ticks: { color: muted, font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          stacked: true,
+          grid: { color: grid },
+          ticks: { color: muted, font: { size: 10 } },
+          border: { display: false },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+function lastValue(arr, key) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (arr[i][key] != null) return arr[i][key];
+  }
+  return null;
+}
+
+function tile(label, value, sub) {
+  const div = document.createElement("div");
+  div.className = "tile";
+  div.innerHTML = `<div class="label">${label}</div><div class="value">${value ?? "—"}</div>${sub ? `<div class="sub">${sub}</div>` : ""}`;
+  return div;
+}
+
+async function loadPlan() {
+  const p = await fetchJSON("/api/plan");
+  const wrap = document.getElementById("plan-wrap");
+  if (!p.sessions.length) {
+    wrap.innerHTML = `<p class="muted">Sem sessões no plano.</p>`;
+    return;
+  }
+  const badgeClass = {
+    pending: "badge-pending",
+    completed: "badge-completed",
+    skipped: "badge-skipped",
+    cancelled: "badge-cancelled",
+  };
+  const rows = p.sessions.map(s => {
+    const isToday = s.planned_at === p.today;
+    return `
+    <tr class="${isToday ? "plan-today" : ""}">
+      <td>${fmtDate(s.planned_at)}${isToday ? ' <span class="muted">(hoje)</span>' : ""}</td>
+      <td class="name">${s.description}</td>
+      <td><span class="badge ${badgeClass[s.status] ?? "badge-pending"}">${s.status}</span></td>
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Data</th><th>Sessão</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function loadReadiness() {
+  const r = await fetchJSON("/api/readiness");
+  const el = document.getElementById("readiness");
+  el.className = `readiness ${r.verdict}`;
+  let planHtml;
+  if (r.today_plan) {
+    planHtml = `Proposto hoje: <strong>${r.today_plan.description}</strong>`;
+  } else if (r.next_plan) {
+    planHtml = `Sem sessão planeada para hoje. Próxima: <strong>${fmtDate(r.next_plan.planned_at)} — ${r.next_plan.description}</strong>`;
+  } else {
+    planHtml = "Sem sessão planeada para hoje nem próximas sessões no plano.";
+  }
+  const reasonsHtml = r.reasons.map(x => `<li>${x}</li>`).join("");
+  el.innerHTML = `
+    <div class="label">${r.label}</div>
+    <div class="plan">${planHtml}</div>
+    <ul>${reasonsHtml}</ul>
+  `;
+}
+
+function fmtTime(date) {
+  return date.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+async function loadSummary() {
+  const s = await fetchJSON("/api/summary");
+  document.getElementById("subtitle").textContent = `Dados de ${s.date} · atualizado às ${fmtTime(new Date())}`;
+  const tiles = document.getElementById("tiles");
+  tiles.appendChild(tile("Body Battery", s.body_battery, s.body_battery_lowest != null ? `min ${s.body_battery_lowest} / max ${s.body_battery_highest}` : "/ 100"));
+  tiles.appendChild(tile("FC repouso", s.resting_hr, "bpm"));
+  tiles.appendChild(tile("Stress médio", s.avg_stress, null));
+}
+
+async function loadRecovery() {
+  const r = await fetchJSON("/api/recovery?days=14");
+  const labels = r.days.map(d => fmtDate(d.date));
+
+  lineChart("chart-bb", labels, r.days.map(d => d.body_battery), "--series-bb", "/100");
+  lineChart("chart-hrv", labels, r.days.map(d => d.hrv_avg), "--series-hrv", "ms");
+  lineChart("chart-score", labels, r.days.map(d => d.sleep_score), "--series-score", "/100", undefined, false);
+  lineChart("chart-hr", labels, r.days.map(d => d.resting_hr), "--series-hr", "bpm");
+
+  const bb = lastValue(r.days, "body_battery");
+  const hrv = lastValue(r.days, "hrv_avg");
+  const sc = lastValue(r.days, "sleep_score");
+  const hr = lastValue(r.days, "resting_hr");
+
+  document.getElementById("bb-last").textContent = bb != null ? `Último valor: ${bb}/100` : "Sem dados recentes";
+  document.getElementById("hrv-last").textContent = hrv != null ? `Última noite: ${hrv}ms` : "Sem dados recentes";
+  document.getElementById("score-last").textContent = sc != null ? `Última noite: ${sc}/100` : "Sem dados recentes";
+  document.getElementById("hr-last").textContent = hr != null ? `Último valor: ${hr}bpm` : "Sem dados recentes";
+}
+
+async function loadOvertrainingRisk() {
+  const o = await fetchJSON("/api/overtraining_risk");
+  const el = document.getElementById("overtraining");
+  const verdictClass = o.verdict === "baixo" ? "apto" : (o.verdict === "moderado" ? "cautela" : "nao_apto");
+  el.className = `readiness ${verdictClass}`;
+  const reasonsHtml = o.reasons.map(x => `<li>${x}</li>`).join("");
+  const gapsHtml = o.data_gaps.length
+    ? `<div class="plan muted">Nota: ${o.data_gaps.join(" · ")}</div>`
+    : "";
+  el.innerHTML = `
+    <div class="label">${o.label}</div>
+    <div class="plan">Tendência dos últimos ${o.period_days} dias (HRV, FC repouso, sono)</div>
+    <ul>${reasonsHtml}</ul>
+    ${gapsHtml}
+  `;
+}
+
+function openBiomechModal(weekStart, note) {
+  const overlay = document.getElementById("biomech-modal-overlay");
+  const title = document.getElementById("biomech-modal-title");
+  const body = document.getElementById("biomech-modal-body");
+  const weekLabel = fmtDate(weekStart);
+
+  if (!note) {
+    title.textContent = `Semana de ${weekLabel}`;
+    body.innerHTML = `<p class="modal-sub">Sem avaliação biomecânica registrada para esta semana.</p>`;
+  } else {
+    title.textContent = note.title || `Semana de ${weekLabel}`;
+    const findings = (note.findings || []).map(f => `<li>${f}</li>`).join("");
+    const recs = (note.recommendations || []).map(r => `<li>${r}</li>`).join("");
+    body.innerHTML = `
+      <div class="modal-sub">Registrado em ${note.recorded_at ?? "—"} · período analisado: ${note.period_analyzed ?? "—"}</div>
+      <h3>Achados</h3>
+      <ul>${findings}</ul>
+      <h3>Recomendações</h3>
+      <ul>${recs}</ul>
+      ${note.next_review ? `<h3>Próxima revisão</h3><p class="modal-sub">${note.next_review}</p>` : ""}
+    `;
+  }
+  overlay.classList.add("open");
+}
+
+function setupBiomechModalClose() {
+  const overlay = document.getElementById("biomech-modal-overlay");
+  document.getElementById("biomech-modal-close").addEventListener("click", () => overlay.classList.remove("open"));
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.classList.remove("open"); });
+}
+
+async function loadVolumeTrend() {
+  const [v, notes] = await Promise.all([
+    fetchJSON("/api/volume_trend?weeks=6"),
+    fetchJSON("/api/biomechanics_notes").catch(() => ({})),
+  ]);
+  const labels = v.weeks.map(w => fmtDate(w.week_start));
+  stackedZoneBarChart("chart-voltrend", labels, v.weeks, (index) => {
+    const week = v.weeks[index];
+    openBiomechModal(week.week_start, notes[week.week_start]);
+  });
+  const current = v.weeks[v.weeks.length - 1];
+  document.getElementById("voltrend-sub").textContent =
+    `Semana atual (a partir de ${fmtDate(current.week_start)}): ${current.km}km em ${current.sessions} sessão(ões) · cor = zona de FC (Z2 até ${v.z2_ceiling_bpm}bpm) · clique numa barra para ver a avaliação biomecânica`;
+}
+
+async function loadVo2max() {
+  const v = await fetchJSON("/api/vo2max_trend?days=90");
+  const labels = v.series.map(d => fmtDate(d.date));
+  lineChart("chart-vo2", labels, v.series.map(d => d.vo2_max), "--series-hrv", "", 0.5);
+  if (v.latest != null) {
+    const sign = v.change > 0 ? "+" : "";
+    document.getElementById("vo2-last").textContent =
+      `Atual: ${v.latest} (${sign}${v.change} em 90 dias)`;
+  } else {
+    document.getElementById("vo2-last").textContent = "Sem dados";
+  }
+}
+
+async function loadPaceTrend() {
+  const p = await fetchJSON("/api/pace_trend?weeks=8");
+  const labels = p.weeks.map(w => fmtDate(w.week_start));
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  new Chart(document.getElementById("chart-pace"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Ritmo médio",
+          data: p.weeks.map(w => w.avg_pace_min_per_km),
+          borderColor: cssVar("--series-bb"),
+          backgroundColor: cssVar("--series-bb"),
+          borderWidth: 2, pointRadius: 3, tension: 0.25, spanGaps: false,
+        },
+        {
+          label: "Melhor ritmo",
+          data: p.weeks.map(w => w.best_pace_min_per_km),
+          borderColor: cssVar("--series-hr"),
+          backgroundColor: cssVar("--series-hr"),
+          borderWidth: 2, pointRadius: 3, tension: 0.25, spanGaps: false,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "bottom", labels: { color: muted, font: { size: 11 }, boxWidth: 10, boxHeight: 10 } },
+        tooltip: {
+          backgroundColor: surface, titleColor: ink, bodyColor: ink,
+          borderColor: grid, borderWidth: 1, padding: 10,
+          callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtPace(ctx.parsed.y)}` }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: muted, font: { size: 10 }, maxRotation: 0 }, border: { color: cssVar("--baseline") } },
+        y: {
+          reverse: true, // lower pace = faster = "up" on the chart
+          grid: { color: grid },
+          ticks: { color: muted, font: { size: 10 }, callback: (v) => fmtPace(v) },
+          border: { display: false },
+        },
+      }
+    }
+  });
+
+  const withData = p.weeks.filter(w => w.avg_pace_min_per_km != null);
+  if (withData.length >= 2) {
+    const first = withData[0], last = withData[withData.length - 1];
+    const delta = Math.round((last.avg_pace_min_per_km - first.avg_pace_min_per_km) * 60);
+    const dir = delta < 0 ? "mais rápido" : delta > 0 ? "mais lento" : "igual";
+    document.getElementById("pace-sub").textContent =
+      `${fmtDate(first.week_start)} → ${fmtDate(last.week_start)}: ${Math.abs(delta)}s/km ${dir} · eixo invertido (pra cima = mais rápido)`;
+  } else {
+    document.getElementById("pace-sub").textContent = "Eixo invertido: pra cima = mais rápido. Dados insuficientes pra comparar tendência ainda.";
+  }
+}
+
+async function loadWeeklyClosing() {
+  const w = await fetchJSON("/api/weekly_closing");
+  const sub = document.getElementById("wc-sub");
+  const body = document.getElementById("wc-body");
+  sub.textContent = `Semana de ${fmtDate(w.week_start)} a ${fmtDate(w.week_end)}`;
+
+  const targetTxt = w.target_km != null ? ` / ${w.target_km}km planejado` : "";
+  const paceTxt = w.closed.avg_pace_min_per_km != null ? fmtPace(w.closed.avg_pace_min_per_km) : "—";
+  const deltaTxt = w.pace_delta_min_per_km != null
+    ? (w.pace_delta_min_per_km < 0 ? `${Math.abs(Math.round(w.pace_delta_min_per_km * 60))}s/km mais rápido` : `${Math.round(w.pace_delta_min_per_km * 60)}s/km mais lento`)
+    : "sem comparação";
+
+  const stats = `
+    <div class="wc-stats">
+      <div class="wc-stat"><div class="wc-label">Volume</div><div class="wc-value">${w.closed.km}km${targetTxt}</div></div>
+      <div class="wc-stat"><div class="wc-label">Sessões</div><div class="wc-value">${w.closed.sessions}</div></div>
+      <div class="wc-stat"><div class="wc-label">Ritmo médio</div><div class="wc-value">${paceTxt}</div></div>
+      <div class="wc-stat"><div class="wc-label">vs semana anterior</div><div class="wc-value">${deltaTxt}</div></div>
+      <div class="wc-stat"><div class="wc-label">Ganho de elevação</div><div class="wc-value">${w.closed.elevation_gain_m}m</div></div>
+      <div class="wc-stat"><div class="wc-label">Elevação/km</div><div class="wc-value">${w.closed.elevation_gain_per_km ?? "—"}m/km</div></div>
+    </div>
+  `;
+  const flagsHtml = `<ul class="wc-flags">${w.flags.map(f => `<li>${f}</li>`).join("")}</ul>`;
+  body.innerHTML = stats + flagsHtml;
+}
+
+async function loadFitnessFreshness() {
+  const f = await fetchJSON("/api/fitness_freshness?days=42");
+  const labels = f.series.map(d => fmtDate(d.date));
+  const grid = cssVar("--grid");
+  const muted = cssVar("--text-muted");
+  const surface = cssVar("--surface-1");
+  const ink = cssVar("--text-primary");
+
+  new Chart(document.getElementById("chart-ff"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Fitness (carga crônica)",
+          data: f.series.map(d => d.fitness),
+          borderColor: cssVar("--series-fitness"),
+          backgroundColor: cssVar("--series-fitness"),
+          borderWidth: 2, pointRadius: 0, tension: 0.25, spanGaps: true,
+        },
+        {
+          label: "Fadiga (carga aguda)",
+          data: f.series.map(d => d.fatigue),
+          borderColor: cssVar("--series-fatigue"),
+          backgroundColor: cssVar("--series-fatigue"),
+          borderWidth: 2, pointRadius: 0, tension: 0.25, spanGaps: true,
+        },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "bottom", labels: { color: muted, font: { size: 11 }, boxWidth: 10, boxHeight: 10 } },
+        tooltip: {
+          backgroundColor: surface, titleColor: ink, bodyColor: ink,
+          borderColor: grid, borderWidth: 1, padding: 10,
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: muted, font: { size: 10 }, maxRotation: 0 }, border: { color: cssVar("--baseline") } },
+        y: { grid: { color: grid }, ticks: { color: muted, font: { size: 10 } }, border: { display: false }, beginAtZero: true },
+      }
+    }
+  });
+
+  if (f.latest) {
+    document.getElementById("ff-last").textContent =
+      `Hoje: fitness ${f.latest.fitness} · fadiga ${f.latest.fatigue} · forma (razão) ${f.latest.ratio} — ${f.latest.status ?? "sem status"}`;
+  } else {
+    document.getElementById("ff-last").textContent = "Sem dados de carga de treino ainda.";
+  }
+}
+
+async function loadSleepAfterRun() {
+  const s = await fetchJSON("/api/sleep_after_run?count=8");
+  const wrap = document.getElementById("sleepload-wrap");
+  const sub = document.getElementById("sleepload-sub");
+  const withData = s.runs.filter(r => r.sleep_hours != null).length;
+  sub.textContent = `${withData} de ${s.runs.length} corridas com dados de sono na noite seguinte`;
+  const rows = s.runs.map(r => `
+    <tr>
+      <td class="name">${r.run_name ?? "—"} <span class="muted">(${r.run_distance_km}km)</span></td>
+      <td>${r.run_date}</td>
+      <td>${r.sleep_hours != null ? r.sleep_hours + "h" : "—"}</td>
+      <td>${r.sleep_score != null ? r.sleep_score + "/100" : "—"}</td>
+    </tr>
+  `).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Corrida</th><th>Data</th><th>Sono (h)</th><th>Score</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function loadFirst10minHr() {
+  const r = await fetchJSON("/api/first10min_hr?count=10");
+  const sub = document.getElementById("first10-sub");
+  if (!r.runs.length) {
+    sub.textContent = "Sem dados suficientes.";
+    return;
+  }
+  const ceiling = r.z2_ceiling_bpm;
+  const overCount = r.runs.filter(x => x.avg_hr_first_10min > ceiling).length;
+  sub.textContent = `Limite Z2: ${ceiling}bpm · ${overCount} de ${r.runs.length} corridas já começam acima disso`;
+
+  const labels = r.runs.map(x => fmtDateTime(x.date).split(" ")[0]);
+  const values = r.runs.map(x => x.avg_hr_first_10min);
+  const colors = values.map(v => v > ceiling ? cssVar("--status-critical") : cssVar("--zone-2"));
+
+  new Chart(document.getElementById("chart-first10"), {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors,
+        borderRadius: 4,
+        maxBarThickness: 40,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: cssVar("--surface-1"),
+          titleColor: cssVar("--text-primary"),
+          bodyColor: cssVar("--text-primary"),
+          borderColor: cssVar("--grid"),
+          borderWidth: 1,
+          padding: 10,
+          displayColors: false,
+          callbacks: { label: (ctx) => `${ctx.parsed.y}bpm nos primeiros 10min` }
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: cssVar("--text-muted"), font: { size: 10 }, maxRotation: 0 },
+          border: { color: cssVar("--baseline") },
+        },
+        y: {
+          grid: { color: cssVar("--grid") },
+          ticks: { color: cssVar("--text-muted"), font: { size: 10 } },
+          border: { display: false },
+        }
+      }
+    }
+  });
+}
+
+async function loadRunningDynamics() {
+  const r = await fetchJSON("/api/running_dynamics?count=10");
+  const wrap = document.getElementById("dynamics-wrap");
+  if (!r.runs.length) {
+    wrap.innerHTML = `<p class="muted">Sem dados suficientes.</p>`;
+    return;
+  }
+  const flag = (cond) => cond ? ' style="color:var(--status-warning); font-weight:650;"' : "";
+  const rows = r.runs.map(x => `
+    <tr>
+      <td class="name">${fmtDateTime(x.date).split(" ")[0]} <span class="muted">(${x.distance_km}km)</span></td>
+      <td>${fmtPace(x.pace_min_per_km)}</td>
+      <td${flag(x.avg_cadence_spm != null && x.avg_cadence_spm < 165)}>${x.avg_cadence_spm != null ? Math.round(x.avg_cadence_spm) : "—"}</td>
+      <td>${x.stride_length_cm ?? "—"}</td>
+      <td${flag(x.ground_contact_time_ms != null && x.ground_contact_time_ms > 290)}>${x.ground_contact_time_ms ?? "—"}</td>
+      <td${flag(x.vertical_oscillation_cm != null && x.vertical_oscillation_cm > 10)}>${x.vertical_oscillation_cm ?? "—"}</td>
+      <td${flag(x.vertical_ratio_pct != null && x.vertical_ratio_pct > 10)}>${x.vertical_ratio_pct ?? "—"}</td>
+      <td${flag(x.distance_km > 3 && (x.elevation_gain_m ?? 0) / x.distance_km < 5)}>${x.elevation_gain_m ?? "—"}</td>
+    </tr>
+  `).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Corrida</th><th>Ritmo</th><th>Cadência (spm)</th><th>Passada (cm)</th>
+        <th>Contacto solo (ms)</th><th>Osc. vertical (cm)</th><th>Rácio vertical (%)</th><th>Elevação (m)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="muted" style="margin-top:8px; font-size:0.78rem;">Laranja = fora do intervalo típico (cadência &lt;165spm, contacto &gt;290ms, oscilação &gt;10cm, rácio &gt;10%, elevação &lt;5m/km).</p>
+  `;
+}
+
+async function loadVolume() {
+  const v = await fetchJSON("/api/weekly_volume");
+  const sub = document.getElementById("volume-sub");
+  const nums = document.getElementById("volume-nums");
+  const bar = document.getElementById("volume-bar");
+  sub.textContent = `Semana de ${v.week_start} a ${v.week_end} · ${v.sessions_count} corrida(s)`;
+  if (v.target_km != null) {
+    nums.textContent = `${v.real_km} / ${v.target_km} km`;
+    const pct = Math.min(100, (v.real_km / v.target_km) * 100);
+    bar.style.width = `${pct}%`;
+  } else {
+    nums.textContent = `${v.real_km} km`;
+    bar.style.width = "0%";
+  }
+}
+
+async function loadRaceProjection() {
+  const p = await fetchJSON("/api/race_projection");
+  const wrap = document.getElementById("race-wrap");
+  const rows = p.projections.map(proj => {
+    const mins = Math.floor(proj.projected_minutes);
+    const secs = Math.round((proj.projected_minutes - mins) * 60);
+    const timeStr = `${mins}:${String(secs).padStart(2, "0")}`;
+    const paceMin = Math.floor(proj.pace_min_per_km);
+    const paceSec = Math.round((proj.pace_min_per_km - paceMin) * 60);
+    return `<tr>
+      <td>${proj.distance_km}km</td>
+      <td>${timeStr}</td>
+      <td>${paceMin}:${String(paceSec).padStart(2, "0")}/km</td>
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Distância</th><th>Tempo projetado</th><th>Ritmo</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+const MONTH_NAMES_PT = ["JAN.", "FEV.", "MAR.", "ABR.", "MAI.", "JUN.", "JUL.", "AGO.", "SET.", "OUT.", "NOV.", "DEZ."];
+let calYear = new Date().getFullYear();
+
+function barsHtml(values) {
+  const max = Math.max(1, ...values);
+  return values.map(v => `<div class="bar" style="height:${Math.max(2, (v / max) * 100)}%"></div>`).join("");
+}
+
+async function loadTrainingCalendar(year) {
+  const wrap = document.getElementById("cal-wrap");
+  wrap.style.opacity = "0.5";
+  let c;
+  try {
+    c = await fetchJSON(`/api/training_calendar?year=${year}`);
+  } finally {
+    wrap.style.opacity = "1";
+  }
+  calYear = c.year;
+  const thisYear = new Date().getFullYear();
+
+  document.getElementById("cal-year-label").textContent = c.year;
+  document.getElementById("cal-year-next").disabled = c.year >= thisYear;
+  document.getElementById("cal-weeks-label").textContent = `${c.weeks.length} semanas`;
+  document.getElementById("cal-sparkline").innerHTML = barsHtml(c.weeks.map(w => w.hours));
+
+  document.getElementById("cal-hours").textContent = c.totals.hours.toLocaleString("pt-PT", { maximumFractionDigits: 0 });
+  document.getElementById("cal-km").textContent = c.totals.km.toLocaleString("pt-PT", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  document.getElementById("cal-pr").textContent = c.totals.personal_records;
+  document.getElementById("cal-activities").textContent = c.totals.activities;
+
+  const now = new Date();
+  document.getElementById("cal-months").innerHTML = c.months.map(m => {
+    const isCurrent = c.year === now.getFullYear() && m.month === now.getMonth() + 1;
+    const isFuture = c.year > now.getFullYear() || (c.year === now.getFullYear() && m.month > now.getMonth() + 1);
+    const hoursBlock = isFuture ? "<div></div>" : `
+      <div>
+        <div class="cal-month-hours">${Math.round(m.hours)}</div>
+        <div class="cal-month-hours-label">Horas</div>
+      </div>`;
+    return `
+      <div class="cal-month ${isCurrent ? "current" : ""} ${isFuture ? "future" : ""}">
+        <div class="cal-month-name">${MONTH_NAMES_PT[m.month - 1]}</div>
+        ${hoursBlock}
+        <div class="cal-month-bars">${barsHtml(m.days)}</div>
+      </div>`;
+  }).join("");
+}
+
+function setupCalendarNav() {
+  document.getElementById("cal-year-prev").addEventListener("click", () => loadTrainingCalendar(calYear - 1));
+  document.getElementById("cal-year-next").addEventListener("click", () => loadTrainingCalendar(calYear + 1));
+}
+
+async function loadActivities() {
+  const a = await fetchJSON("/api/activities?limit=8");
+  const wrap = document.getElementById("activities-wrap");
+  if (!a.activities.length) {
+    wrap.innerHTML = `<p class="muted">Sem atividades recentes.</p>`;
+    return;
+  }
+  const rows = a.activities.map(act => `
+    <tr>
+      <td class="name">${act.name ?? "—"}</td>
+      <td>${fmtDateTime(act.start_time)}</td>
+      <td>${act.distance_km != null ? act.distance_km + " km" : "—"}</td>
+      <td>${act.duration_min != null ? act.duration_min + " min" : "—"}</td>
+      <td>${act.avg_hr ?? "—"}</td>
+    </tr>
+  `).join("");
+  wrap.innerHTML = `
+    <table>
+      <thead><tr><th>Nome</th><th>Início</th><th>Dist.</th><th>Dur.</th><th>FC méd.</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function main() {
+  setupBiomechModalClose();
+  setupCalendarNav();
+  try {
+    await Promise.all([
+      loadReadiness(),
+      loadPlan(),
+      loadOvertrainingRisk(),
+      loadSummary(),
+      loadRecovery(),
+      loadVolume(),
+      loadTrainingCalendar(calYear),
+      loadVolumeTrend(),
+      loadVo2max(),
+      loadFitnessFreshness(),
+      loadPaceTrend(),
+      loadWeeklyClosing(),
+      loadSleepAfterRun(),
+      loadFirst10minHr(),
+      loadRunningDynamics(),
+      loadRaceProjection(),
+      loadActivities(),
+    ]);
+  } catch (err) {
+    document.getElementById("subtitle").innerHTML = `<span class="error">Erro a carregar dados: ${err.message}</span>`;
+    console.error(err);
+  }
+}
+
+main();
+</script>
+</body>
+</html>
