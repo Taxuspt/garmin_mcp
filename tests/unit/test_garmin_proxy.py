@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from garminconnect import (
     GarminConnectAuthenticationError,
     GarminConnectConnectionError,
+    GarminConnectNotFoundError,
     GarminConnectTooManyRequestsError,
 )
 
@@ -51,6 +52,12 @@ class TestGarminProxy:
         exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
         assert str(exc.value).startswith("Garmin Connect request failed: timeout.")
         assert "unreachable" in str(exc.value)
+
+    def test_not_found_error_is_not_reported_as_unreachable(self):
+        proxy = self._proxy(get_activity=GarminConnectNotFoundError("404 for id 1"))
+        exc = pytest.raises(GarminConnectNotFoundError, proxy.get_activity)
+        assert str(exc.value).startswith("Garmin Connect resource not found: 404 for id 1.")
+        assert "unreachable" not in str(exc.value)
 
     def test_empty_original_message_still_gets_hint(self):
         proxy = self._proxy(get_steps_data=GarminConnectConnectionError())
