@@ -668,9 +668,19 @@ def register_tools(app):
     async def delete_custom_food(food_id: str) -> str:
         """Delete a custom food from the user's Garmin nutrition library
 
-        Permanently removes a custom food entry. The food must not be
-        actively referenced in a logged meal to be deleted.
-        Use get_custom_foods to find the foodId.
+        Permanently removes a custom food entry — this cannot be undone and
+        the deleted food's name/brand/nutrition data cannot be recovered from
+        the API afterward. Confirm the foodId is correct before calling.
+
+        Deleting a food does NOT require it to be unreferenced: existing food
+        log entries that already reference this food are NOT blocked or
+        removed — they remain in the log (their nutrition still counts toward
+        daily totals) but are marked inactive (foodInactive: true) and can no
+        longer be edited/re-logged from the library.
+
+        Use get_custom_foods to find the foodId, and match on the exact
+        foodId (not just a name search) — Garmin's search can return loosely
+        related results for a given search term, not just exact matches.
 
         Args:
             food_id: ID of the custom food to delete — a 32-char hex string
