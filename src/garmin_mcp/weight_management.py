@@ -32,14 +32,14 @@ def register_tools(app):
                 return f"No weight measurements found between {start_date} and {end_date}."
 
             # API returns nested structure: {dailyWeightSummaries: [{allWeightMetrics: [...]}]}
-            daily_summaries = data.get("dailyWeightSummaries", [])
+            daily_summaries = data.get("dailyWeightSummaries") or []
             if not daily_summaries:
                 return f"No weight measurements found between {start_date} and {end_date}."
 
             # Extract all measurements from daily summaries
             all_measurements = []
             for day in daily_summaries:
-                metrics = day.get("allWeightMetrics", [])
+                metrics = day.get("allWeightMetrics") or []
                 all_measurements.extend(metrics)
 
             # Curate the response
@@ -73,7 +73,7 @@ def register_tools(app):
             )
 
             # Include average if available
-            total_avg = data.get("totalAverage", {})
+            total_avg = data.get("totalAverage") or {}
             if total_avg.get("weight"):
                 curated["average_weight_grams"] = total_avg["weight"]
                 curated["average_weight_kg"] = round(total_avg["weight"] / 1000, 2)
@@ -95,7 +95,7 @@ def register_tools(app):
                 return f"No weight measurements found for {date}."
 
             # API returns nested structure: {dateWeightList: [...]}
-            weight_list = data.get("dateWeightList", [])
+            weight_list = data.get("dateWeightList") or []
             if not weight_list:
                 return f"No weight measurements found for {date}."
 
@@ -123,7 +123,7 @@ def register_tools(app):
                 curated["measurements"].append(measurement)
 
             # Include average if available
-            total_avg = data.get("totalAverage", {})
+            total_avg = data.get("totalAverage") or {}
             if total_avg.get("weight"):
                 curated["average_weight_grams"] = total_avg["weight"]
                 curated["average_weight_kg"] = round(total_avg["weight"] / 1000, 2)

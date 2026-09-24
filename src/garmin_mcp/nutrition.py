@@ -3,6 +3,7 @@ Nutrition/food logging functions for Garmin Connect MCP Server
 """
 import datetime
 import json
+import re
 from copy import deepcopy
 from typing import Optional
 
@@ -64,6 +65,113 @@ def resolve_weight_goal_target_date(stored_target, date, target_date=None):
         )
 
     return None, None
+
+
+def _extract_http_status(exc: Exception) -> Optional[int]:
+    """Return an HTTP status code from structured exception fields when available.
+
+    The installed garminconnect client sometimes raises bare
+    GarminConnectConnectionError instances with only a status-bearing message,
+    so fall back to parsing the numeric code from that stable library format.
+    """
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+
+    while pending:
+        current = pending.pop(0)
+        if current is None:
+            continue
+
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+
+        response = getattr(current, "response", None)
+        if response is not None:
+            status = getattr(response, "status_code", None)
+            if isinstance(status, int):
+                return status
+
+        error = getattr(current, "error", None)
+        error_response = getattr(error, "response", None)
+        if error_response is not None:
+            status = getattr(error_response, "status_code", None)
+            if isinstance(status, int):
+                return status
+
+        pending.append(getattr(current, "__cause__", None))
+        pending.append(getattr(current, "__context__", None))
+
+    message = str(exc)
+    match = re.search(r"\b(?:API Error|HTTP)\s+(\d{3})\b", message)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _has_http_status(exc: Exception, status_code: int) -> bool:
+    return _extract_http_status(exc) == status_code
+
+
+def _iter_exception_texts(exc: Exception) -> list[str]:
+    """Collect human-readable exception/response text for predicate matching."""
+    texts: list[str] = []
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+
+    while pending:
+        current = pending.pop(0)
+        if current is None:
+            continue
+
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+
+        message = str(current)
+        if message:
+            texts.append(message)
+
+        response = getattr(current, "response", None)
+        response_text = getattr(response, "text", None)
+        if isinstance(response_text, str) and response_text:
+            texts.append(response_text)
+
+        error = getattr(current, "error", None)
+        error_response = getattr(error, "response", None)
+        error_text = getattr(error_response, "text", None)
+        if isinstance(error_text, str) and error_text:
+            texts.append(error_text)
+
+        pending.append(getattr(current, "__cause__", None))
+        pending.append(getattr(current, "__context__", None))
+
+    return texts
+
+
+def _is_custom_food_unsupported_403(exc: Exception) -> bool:
+    """Return True only for the known Garmin 403 unsupported-feature response."""
+    if not _has_http_status(exc, 403):
+        return False
+
+    patterns = (
+        "custom food unsupported",
+        "custom foods unsupported",
+        "custom food not supported",
+        "custom foods not supported",
+    )
+    return any(
+        any(pattern in text.lower() for pattern in patterns)
+        for text in _iter_exception_texts(exc)
+    )
+
+
+def _response_text_from_connection_error(exc: GarminConnectConnectionError) -> str:
+    if hasattr(exc, "error") and hasattr(exc.error, "response"):
+        return getattr(exc.error.response, "text", "")
+    return ""
 
 
 def configure(client):
@@ -394,6 +502,8 @@ def register_tools(app):
                 return "No custom foods found."
             return json.dumps(data, indent=2)
         except Exception as e:
+            if _is_custom_food_unsupported_403(e):
+                return "No custom foods found; Garmin custom food API returned HTTP 403 Forbidden."
             return f"Error retrieving custom foods: {str(e)}"
 
     @app.tool()
@@ -410,6 +520,8 @@ def register_tools(app):
                 return "No serving units found."
             return json.dumps(data, indent=2)
         except Exception as e:
+            if _is_custom_food_unsupported_403(e):
+                return "No serving units found; Garmin custom food API returned HTTP 403 Forbidden."
             return f"Error retrieving serving units: {str(e)}"
 
     @app.tool()
@@ -512,9 +624,7 @@ def register_tools(app):
                 return "Custom food created (no response data returned)."
             return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
+            body = _response_text_from_connection_error(e)
             return f"Error creating custom food: {e} | Response: {body}"
         except Exception as e:
             return f"Error creating custom food: {str(e)}"
@@ -591,7 +701,7 @@ def register_tools(app):
                         "includeContent": "true",
                     },
                 )
-                foods = search_data.get("customFoods", []) if isinstance(search_data, dict) else []
+                foods = (search_data.get("customFoods") or []) if isinstance(search_data, dict) else []
                 for f in foods:
                     if str(f.get("foodMetaData", {}).get("foodId", "")) == food_id:
                         existing_nutrition = (f.get("nutritionContents") or [{}])[0]
@@ -657,9 +767,7 @@ def register_tools(app):
                 return "Custom food updated (no response data returned)."
             return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
+            body = _response_text_from_connection_error(e)
             return f"Error updating custom food: {e} | Response: {body}"
         except Exception as e:
             return f"Error updating custom food: {str(e)}"
@@ -743,7 +851,7 @@ def register_tools(app):
             if meal_id is None:
                 snacks = next((m for m in meals if m.get("mealName") == "SNACKS"), None)
                 if snacks is None:
-                    return f"Error logging food: could not match meal for time '{meal_time}' and no SNACKS meal found."
+                    return f"No nutrition meal windows found for {meal_date}; cannot log custom food at '{meal_time}'."
                 meal_id = snacks["mealId"]
 
             log_timestamp = datetime.now(timezone.utc).strftime(
@@ -776,9 +884,7 @@ def register_tools(app):
                 return "Food logged successfully."
             return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
+            body = _response_text_from_connection_error(e)
             return f"Error logging food: {e} | Response: {body}"
         except Exception as e:
             return f"Error logging food: {str(e)}"
@@ -827,7 +933,7 @@ def register_tools(app):
             if meal_id is None:
                 snacks = next((m for m in meals if m.get("mealName") == "SNACKS"), None)
                 if snacks is None:
-                    return f"Error logging food: could not match meal for time '{meal_time}' and no SNACKS meal found."
+                    return f"No nutrition meal windows found for {meal_date}; cannot log food at '{meal_time}'."
                 meal_id = snacks["mealId"]
 
             now = datetime.now(timezone.utc)
@@ -859,9 +965,7 @@ def register_tools(app):
                 return "Food logged successfully."
             return json.dumps(resp, indent=2)
         except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
+            body = _response_text_from_connection_error(e)
             return f"Error logging food: {e} | Response: {body}"
         except Exception as e:
             return f"Error logging food: {str(e)}"
@@ -884,9 +988,16 @@ def register_tools(app):
             garmin_client.client.delete("connectapi", url, json={"logIds": [log_id]}, api=True)
             return json.dumps({"status": "success", "log_id": log_id, "message": f"Food log entry {log_id} deleted successfully."}, indent=2)
         except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
+            if _has_http_status(e, 404):
+                return json.dumps(
+                    {
+                        "status": "not_found",
+                        "log_id": log_id,
+                        "message": f"Food log entry {log_id} was not found.",
+                    },
+                    indent=2,
+                )
+            body = _response_text_from_connection_error(e)
             return f"Error deleting food log: {e} | Response: {body}"
         except Exception as e:
             return f"Error deleting food log: {str(e)}"
@@ -937,7 +1048,7 @@ def register_tools(app):
                     "includeContent": "true",
                 },
             )
-            foods = search_data.get("customFoods", []) if isinstance(search_data, dict) else []
+            foods = (search_data.get("customFoods") or []) if isinstance(search_data, dict) else []
 
             food_id = None
             serving_id = None
@@ -993,7 +1104,7 @@ def register_tools(app):
                             "includeContent": "true",
                         },
                     )
-                    lookup_foods = lookup_data.get("customFoods", []) if isinstance(lookup_data, dict) else []
+                    lookup_foods = (lookup_data.get("customFoods") or []) if isinstance(lookup_data, dict) else []
                     for f in lookup_foods:
                         meta = f.get("foodMetaData", f)
                         if meta.get("foodName", "").lower() == food_name.lower():
@@ -1018,7 +1129,7 @@ def register_tools(app):
             if meal_id is None:
                 snacks = next((m for m in meals if m.get("mealName") == "SNACKS"), None)
                 if snacks is None:
-                    return f"Error logging food: could not match meal for time '{meal_time}' and no SNACKS meal found."
+                    return f"No nutrition meal windows found for {meal_date}; cannot log food at '{meal_time}'."
                 meal_id = snacks["mealId"]
 
             # 4. Log
@@ -1049,9 +1160,7 @@ def register_tools(app):
                 return "Food logged successfully."
             return json.dumps(log_resp, indent=2)
         except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
+            body = _response_text_from_connection_error(e)
             return f"Error in upsert_and_log: {e} | Response: {body}"
         except Exception as e:
             return f"Error in upsert_and_log: {str(e)}"

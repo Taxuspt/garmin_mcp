@@ -9,6 +9,7 @@ from copy import deepcopy
 import pytest
 from unittest.mock import Mock, call
 from mcp.server.fastmcp import FastMCP
+from garminconnect import GarminConnectConnectionError
 
 from garmin_mcp import nutrition
 
@@ -20,6 +21,12 @@ def app_with_nutrition(mock_garmin_client):
     app = FastMCP("Test Nutrition")
     app = nutrition.register_tools(app)
     return app
+
+
+def _connection_error_with_status(status_code: int, message: str = "API error"):
+    exc = GarminConnectConnectionError(message)
+    exc.response = Mock(status_code=status_code)
+    return exc
 
 
 # get_nutrition_daily_food_log tests
@@ -322,6 +329,32 @@ async def test_get_custom_foods_empty(app_with_nutrition, mock_garmin_client):
     assert "No custom foods found" in result[0][0].text
 
 
+@pytest.mark.asyncio
+async def test_get_custom_foods_forbidden_is_an_error(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test get_custom_foods preserves generic Garmin 403 failures"""
+    mock_garmin_client.connectapi.side_effect = _connection_error_with_status(
+        403, "localized or non-English message"
+    )
+    result = await app_with_nutrition.call_tool("get_custom_foods", {})
+    assert result[0][0].text == "Error retrieving custom foods: localized or non-English message"
+
+
+@pytest.mark.asyncio
+async def test_get_custom_foods_unsupported_forbidden_is_unavailable(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test get_custom_foods downgrades only the unsupported-feature 403"""
+    mock_garmin_client.connectapi.side_effect = _connection_error_with_status(
+        403, "Custom foods not supported for this account"
+    )
+    result = await app_with_nutrition.call_tool("get_custom_foods", {})
+    assert result[0][0].text == (
+        "No custom foods found; Garmin custom food API returned HTTP 403 Forbidden."
+    )
+
+
 # get_custom_food_serving_units tests
 
 @pytest.mark.asyncio
@@ -342,6 +375,32 @@ async def test_get_custom_food_serving_units_error(app_with_nutrition, mock_garm
     mock_garmin_client.connectapi.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool("get_custom_food_serving_units", {})
     assert "Error retrieving serving units" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_get_custom_food_serving_units_forbidden_is_an_error(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test get_custom_food_serving_units preserves generic Garmin 403 failures"""
+    mock_garmin_client.connectapi.side_effect = _connection_error_with_status(
+        403, "localized or non-English message"
+    )
+    result = await app_with_nutrition.call_tool("get_custom_food_serving_units", {})
+    assert result[0][0].text == "Error retrieving serving units: localized or non-English message"
+
+
+@pytest.mark.asyncio
+async def test_get_custom_food_serving_units_unsupported_forbidden_is_unavailable(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test get_custom_food_serving_units downgrades only the unsupported-feature 403"""
+    mock_garmin_client.connectapi.side_effect = _connection_error_with_status(
+        403, "custom food unsupported in this region"
+    )
+    result = await app_with_nutrition.call_tool("get_custom_food_serving_units", {})
+    assert result[0][0].text == (
+        "No serving units found; Garmin custom food API returned HTTP 403 Forbidden."
+    )
 
 
 # create_custom_food tests
@@ -409,6 +468,38 @@ async def test_create_custom_food_error(app_with_nutrition, mock_garmin_client):
     assert "Error creating custom food" in result[0][0].text
 
 
+@pytest.mark.asyncio
+async def test_create_custom_food_forbidden_is_an_error(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test create_custom_food preserves generic Garmin 403 failures"""
+    mock_garmin_client.client.put.side_effect = _connection_error_with_status(
+        403, "localized or non-English message"
+    )
+    result = await app_with_nutrition.call_tool(
+        "create_custom_food",
+        {"food_name": "Test", "calories": 100},
+    )
+    assert result[0][0].text == (
+        "Error creating custom food: localized or non-English message | Response: "
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_custom_food_forbidden_falls_back_to_status_in_message(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test create_custom_food still surfaces 403s parsed from library text"""
+    mock_garmin_client.client.put.side_effect = GarminConnectConnectionError(
+        "API Error 403 - acceso denegado"
+    )
+    result = await app_with_nutrition.call_tool(
+        "create_custom_food",
+        {"food_name": "Test", "calories": 100},
+    )
+    assert result[0][0].text == "Error creating custom food: API Error 403 - acceso denegado | Response: "
+
+
 # update_custom_food tests
 
 @pytest.mark.asyncio
@@ -458,6 +549,29 @@ async def test_update_custom_food(app_with_nutrition, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_update_custom_food_handles_null_food_metadata(
+    app_with_nutrition, mock_garmin_client
+):
+    """A search result with foodMetaData=null must not abort the update."""
+    mock_garmin_client.connectapi.return_value = {
+        "customFoods": [{"foodMetaData": None, "nutritionContents": None}]
+    }
+    mock_garmin_client.client.put.return_value = {}
+
+    result = await app_with_nutrition.call_tool(
+        "update_custom_food",
+        {
+            "food_id": "abc123",
+            "serving_id": "srv456",
+            "food_name": "Simple Food",
+            "calories": 100,
+        },
+    )
+
+    assert "Error" not in result[0][0].text
+
+
+@pytest.mark.asyncio
 async def test_update_custom_food_204(app_with_nutrition, mock_garmin_client):
     """Test update_custom_food with 204 response"""
     mock_garmin_client.client.put.return_value = {}
@@ -487,6 +601,28 @@ async def test_update_custom_food_error(app_with_nutrition, mock_garmin_client):
         }
     )
     assert "Error updating custom food" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_update_custom_food_forbidden_is_an_error(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test update_custom_food preserves generic Garmin 403 failures"""
+    mock_garmin_client.client.put.side_effect = _connection_error_with_status(
+        403, "localized or non-English message"
+    )
+    result = await app_with_nutrition.call_tool(
+        "update_custom_food",
+        {
+            "food_id": "abc123",
+            "serving_id": "srv456",
+            "food_name": "Test",
+            "calories": 100,
+        },
+    )
+    assert result[0][0].text == (
+        "Error updating custom food: localized or non-English message | Response: "
+    )
 
 
 @pytest.mark.asyncio
@@ -728,6 +864,58 @@ async def test_log_food_error(app_with_nutrition, mock_garmin_client):
     assert "Error logging food" in result[0][0].text
 
 
+@pytest.mark.asyncio
+async def test_log_food_forbidden_is_an_error(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test log_food preserves generic Garmin 403 failures"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.side_effect = _connection_error_with_status(
+        403, "localized or non-English message"
+    )
+    result = await app_with_nutrition.call_tool(
+        "log_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "name": "Test",
+            "calories": 100,
+            "carbs": 10,
+            "protein": 5,
+            "fat": 2,
+        },
+    )
+    assert result[0][0].text == (
+        "Error logging food: localized or non-English message | Response: "
+    )
+
+
+@pytest.mark.asyncio
+async def test_log_food_without_meal_windows_is_unavailable(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test log_food reports missing meal windows as unavailable data"""
+    mock_garmin_client.connectapi.return_value = {"meals": []}
+
+    result = await app_with_nutrition.call_tool(
+        "log_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "name": "Test",
+            "calories": 100,
+            "carbs": 10,
+            "protein": 5,
+            "fat": 2,
+        },
+    )
+
+    assert result[0][0].text == (
+        "No nutrition meal windows found for 2024-01-15; "
+        "cannot log food at '12:00:00'."
+    )
+
+
 # log_custom_food tests
 
 @pytest.mark.asyncio
@@ -802,6 +990,29 @@ async def test_log_custom_food_error(app_with_nutrition, mock_garmin_client):
     assert "Error logging food" in result[0][0].text
 
 
+@pytest.mark.asyncio
+async def test_log_custom_food_forbidden_is_an_error(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test log_custom_food preserves generic Garmin 403 failures"""
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.side_effect = _connection_error_with_status(
+        403, "localized or non-English message"
+    )
+    result = await app_with_nutrition.call_tool(
+        "log_custom_food",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "food_id": "abc123",
+            "serving_id": "srv456",
+        },
+    )
+    assert result[0][0].text == (
+        "Error logging food: localized or non-English message | Response: "
+    )
+
+
 # delete_custom_food tests
 
 @pytest.mark.asyncio
@@ -858,6 +1069,46 @@ async def test_delete_food_log_error(app_with_nutrition, mock_garmin_client):
         {"log_id": "99001", "meal_date": "2024-01-15"}
     )
     assert "Error deleting food log" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_delete_food_log_not_found(app_with_nutrition, mock_garmin_client):
+    """Test delete_food_log uses structured HTTP status for not_found data"""
+    mock_garmin_client.client.delete.side_effect = _connection_error_with_status(
+        404, "localized or non-English message"
+    )
+    result = await app_with_nutrition.call_tool(
+        "delete_food_log",
+        {"log_id": "-1", "meal_date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data == {
+        "status": "not_found",
+        "log_id": "-1",
+        "message": "Food log entry -1 was not found.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_food_log_not_found_falls_back_to_status_in_message(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test delete_food_log falls back to the library's stable status text"""
+    mock_garmin_client.client.delete.side_effect = GarminConnectConnectionError(
+        "API Error 404 - recurso inexistente"
+    )
+    result = await app_with_nutrition.call_tool(
+        "delete_food_log",
+        {"log_id": "-1", "meal_date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data == {
+        "status": "not_found",
+        "log_id": "-1",
+        "message": "Food log entry -1 was not found.",
+    }
 
 
 # upsert_and_log tests
@@ -1037,7 +1288,6 @@ async def test_delete_food_log_accepts_hex_uuid(app_with_nutrition, mock_garmin_
         "connectapi", "/nutrition-service/food/logs/2024-01-15",
         json={"logIds": [hex_log_id]}, api=True
     )
-
 
 # set_nutrition_daily_settings tests
 
@@ -1373,3 +1623,25 @@ async def test_set_nutrition_settings_rejects_invalid_macros(app_with_nutrition,
     )
     assert "cannot apply update" in result[0][0].text
     mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_forbidden_is_an_error(
+    app_with_nutrition, mock_garmin_client
+):
+    """Test upsert_and_log preserves generic Garmin 403 failures"""
+    mock_garmin_client.connectapi.side_effect = GarminConnectConnectionError(
+        "API Error 403 - HTTP 403 Forbidden"
+    )
+    result = await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "food_name": "Test Food",
+            "calories": 100,
+        },
+    )
+    assert result[0][0].text == (
+        "Error in upsert_and_log: API Error 403 - HTTP 403 Forbidden | Response: "
+    )

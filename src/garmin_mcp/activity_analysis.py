@@ -1625,21 +1625,22 @@ def register_tools(app):
             parsed["activity_id"] = activity_id
 
             # W/kg: fetch body weight matched to activity date
-            start_time_str = parsed.get("session", {}).get("start_time", "")
+            session = parsed.get("session") or {}
+            start_time_str = session.get("start_time", "")
             activity_date = start_time_str[:10] if start_time_str else None
             if activity_date:
                 weight_kg = _get_rider_weight_kg(activity_date)
                 if weight_kg:
                     parsed["rider_weight_kg"] = weight_kg
                     # W/kg for session avg power and NP
-                    avg_w = parsed["session"].get("avg_power_w")
-                    np_w = parsed["session"].get("normalized_power_w")
+                    avg_w = session.get("avg_power_w")
+                    np_w = session.get("normalized_power_w")
                     if avg_w:
-                        parsed["session"]["avg_w_per_kg"] = round(avg_w / weight_kg, 2)
+                        session["avg_w_per_kg"] = round(avg_w / weight_kg, 2)
                     if np_w:
-                        parsed["session"]["normalized_w_per_kg"] = round(np_w / weight_kg, 2)
+                        session["normalized_w_per_kg"] = round(np_w / weight_kg, 2)
                     # W/kg per climb
-                    for climb in parsed.get("climbs", []):
+                    for climb in (parsed.get("climbs") or []):
                         climb_w = climb.get("avg_power_w")
                         if climb_w:
                             climb["avg_w_per_kg"] = round(climb_w / weight_kg, 2)
@@ -1687,10 +1688,10 @@ def register_tools(app):
             # Filter by sport type
             cycling_activities = [
                 a for a in activities
-                if activity_type.lower() in str(a.get("activityType", {}).get("typeKey", "")).lower()
-                or activity_type.lower() in str(a.get("activityType", {}).get("parentTypeId", "")).lower()
-                or "cycling" in str(a.get("activityType", {}).get("typeKey", "")).lower()
-                or "biking" in str(a.get("activityType", {}).get("typeKey", "")).lower()
+                if activity_type.lower() in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                or activity_type.lower() in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
+                or "cycling" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                or "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
             ]
 
             if not cycling_activities:
