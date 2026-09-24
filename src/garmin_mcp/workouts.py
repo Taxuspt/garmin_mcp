@@ -465,7 +465,7 @@ def _curate_workout_step(step: dict) -> dict:
 
 def _curate_workout_segment(segment: dict) -> dict:
     """Extract essential segment information including workout steps"""
-    sport_type = segment.get('sportType', {})
+    sport_type = segment.get('sportType') or {}
 
     curated = {
         "order": segment.get('segmentOrder'),

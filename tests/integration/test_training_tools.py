@@ -1400,3 +1400,22 @@ async def test_hrv_trend_without_nightly_values(app_with_training, mock_garmin_c
     data = json.loads(result[0][0].text)
     assert data["period_avg_hrv_ms"] is None
     assert data["trend"] == [{"date": "2026-09-05", "weekly_avg_hrv_ms": 60}]
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_handles_null_cycling_vo2(app_with_training, mock_garmin_client):
+    """Garmin returns cycling=null when no cycling estimate exists."""
+    import copy
+
+    status_with_null_cycling = copy.deepcopy(MOCK_TRAINING_STATUS)
+    status_with_null_cycling["mostRecentVO2Max"]["cycling"] = None
+    mock_garmin_client.get_training_status.return_value = status_with_null_cycling
+
+    result = await app_with_training.call_tool(
+        "get_training_status",
+        {"date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["vo2_max"] == 52.5
+    assert "cycling_vo2_max" not in data

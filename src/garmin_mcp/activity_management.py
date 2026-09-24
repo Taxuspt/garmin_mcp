@@ -137,7 +137,7 @@ def register_tools(app):
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
-                    "type": a.get('activityType', {}).get('typeKey'),
+                    "type": (a.get('activityType') or {}).get('typeKey'),
                     "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
@@ -170,8 +170,8 @@ def register_tools(app):
                 return f"No activities found for {date}"
 
             # Extract just the activities, not the embedded HR data
-            activities_data = data.get('ActivitiesForDay', {})
-            payload = activities_data.get('payload', [])
+            activities_data = data.get('ActivitiesForDay') or {}
+            payload = activities_data.get('payload') or []
 
             if not payload:
                 return f"No activities found for {date}"
@@ -186,7 +186,7 @@ def register_tools(app):
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
-                    "type": a.get('activityType', {}).get('typeKey'),
+                    "type": (a.get('activityType') or {}).get('typeKey'),
                     "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
@@ -226,9 +226,9 @@ def register_tools(app):
                 return f"No activity found with ID {activity_id}"
 
             # Extract summary data
-            summary = activity.get('summaryDTO', {})
-            activity_type = activity.get('activityTypeDTO', {})
-            metadata = activity.get('metadataDTO', {})
+            summary = activity.get('summaryDTO') or {}
+            activity_type = activity.get('activityTypeDTO') or {}
+            metadata = activity.get('metadataDTO') or {}
 
             curated = {
                 "id": activity.get('activityId'),
@@ -549,7 +549,7 @@ def register_tools(app):
                 return f"No splits found for activity with ID {activity_id}"
 
             # Curate the splits data
-            laps = splits.get('lapDTOs', [])
+            laps = splits.get('lapDTOs') or []
 
             curated = {
                 "activity_id": splits.get('activityId'),
@@ -586,7 +586,7 @@ def register_tools(app):
                     "workout_step_index": lap.get('wktStepIndex'),
                 }
 
-                length_dtos = lap.get('lengthDTOs', [])
+                length_dtos = lap.get('lengthDTOs') or []
                 if length_dtos:
                     lap_data["lengths"] = []
                     for length in length_dtos:
@@ -724,7 +724,9 @@ def register_tools(app):
                 "wind_direction_degrees": weather.get('windDirection'),
                 "wind_direction_compass": weather.get('windDirectionCompassPoint'),
                 "wind_gust": weather.get('windGust'),
-                "weather_description": weather_type_dto.get('desc'),
+                "weather_type": weather_type_dto.get('weatherTypeName'),
+                "weather_description": weather_type_dto.get('desc') or weather_type_dto.get('weatherTypeDesc'),
+                "location": weather.get('issueLocation'),
                 "station_id": station_dto.get('id'),
                 "station_name": station_dto.get('name'),
                 "issue_time": weather.get('issueDate'),
@@ -866,7 +868,7 @@ def register_tools(app):
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
-                    "type": a.get('activityType', {}).get('typeKey'),
+                    "type": (a.get('activityType') or {}).get('typeKey'),
                     "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
