@@ -1,0 +1,90 @@
+{
+  "name": "Karl",
+  "timezone": "Europe/Berlin",
+  "goal": {
+    "race": "Berliner Halbmarathon 2027",
+    "race_date": "2027-04-04",
+    "distance_m": 21097.5,
+    "target_seconds": 5099
+  },
+  "plan_start": "2026-09-28",
+  "fitness": {
+    "start_vdot": 49.0,
+    "max_hr": 196,
+    "rest_hr": 50
+  },
+  "volume": {
+    "start_run_km": 34,
+    "peak_run_km": 62,
+    "start_hours": 10.5,
+    "peak_hours": 13.5,
+    "long_run_cap_km": 24
+  },
+  "notifications": {
+    "morning_brief_hour": 6,
+    "weekly_review_weekday": 6,
+    "weekly_review_hour": 19
+  },
+  "sailing_source": "Google Sheet 'Team HL Planungstabelle 26/27' – Regatten + Helms Vorschlag; Vilamoura-Blöcke ca. 10 Tage",
+  "sailing": [
+    {
+      "title": "Optiregatta",
+      "start": "2026-10-10",
+      "end": "2026-10-11",
+      "regatta_from": "2026-10-10"
+    },
+    {
+      "title": "IDM Chiemsee? / Reise + Vilamoura",
+      "start": "2026-10-15",
+      "end": "2026-10-26",
+      "regatta_from": "2026-10-15",
+      "tentative": true,
+      "regatta_to": "2026-10-18"
+    },
+    {
+      "title": "Junior Europeans Vilamoura",
+      "start": "2026-11-10",
+      "end": "2026-11-19",
+      "regatta_from": "2026-11-15"
+    },
+    {
+      "title": "GP1 Vilamoura",
+      "start": "2026-11-26",
+      "end": "2026-12-05",
+      "regatta_from": "2026-12-02"
+    },
+    {
+      "title": "Youth Worlds Vilamoura? + Camp Sagres/Portimão",
+      "start": "2026-12-12",
+      "end": "2026-12-25",
+      "regatta_from": "2026-12-12",
+      "regatta_to": "2026-12-15",
+      "tentative": true
+    },
+    {
+      "title": "GP2 Vilamoura",
+      "start": "2027-02-17",
+      "end": "2027-02-26",
+      "regatta_from": "2027-02-23"
+    },
+    {
+      "title": "Vilamoura (oder Abi-Fokus?)",
+      "start": "2027-03-01",
+      "end": "2027-03-10",
+      "tentative": true
+    },
+    {
+      "title": "MSC?",
+      "start": "2027-03-11",
+      "end": "2027-03-14",
+      "regatta_from": "2027-03-11",
+      "tentative": true
+    },
+    {
+      "title": "Vilamoura geblieben? (Helms Vorschlag)",
+      "start": "2027-03-15",
+      "end": "2027-03-20",
+      "tentative": true
+    }
+  ]
+}

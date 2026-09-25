@@ -23,3 +23,7 @@ playground/*
 scratch/*
 tests/fixtures/captured/*
 !tests/fixtures/captured/poc_walk_run.json
+
+# garmin-coach local state and build output
+.coach-data/
+_site/

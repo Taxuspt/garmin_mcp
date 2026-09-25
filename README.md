@@ -2,6 +2,8 @@
 
 # Garmin MCP Server
 
+> **HM Coach:** Adaptiver Trainingsplan, Einheiten-Bewertung per Push und Handy-Dashboard auf Basis dieses Servers – siehe [`coach/README.md`](coach/README.md).
+
 This Model Context Protocol (MCP) server connects to Garmin Connect and exposes your fitness and health data to Claude and other MCP-compatible clients.
 
 Garmin's API is accessed via the awesome [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library.

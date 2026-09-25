@@ -1,0 +1,3658 @@
+{
+ "generated_at": "2026-10-22T19:30",
+ "athlete": "Karl",
+ "goal": {
+  "race": "Berliner Halbmarathon 2027",
+  "date": "2027-04-04",
+  "days_to_go": 164,
+  "target": "1:24:59",
+  "target_pace": "4:02",
+  "predicted": "1:29:31",
+  "predicted_s": 5371,
+  "target_s": 5099.0,
+  "vdot": 51.3,
+  "goal_vdot": 54.5,
+  "plan_start": "2026-09-28",
+  "week_no": 4,
+  "weeks_total": 27
+ },
+ "today": {
+  "date": "2026-10-22",
+  "readiness": {
+   "score": 29,
+   "level": "red",
+   "reasons": [
+    "Garmin Readiness 34",
+    "Form -24"
+   ]
+  },
+  "wellness": {
+   "date": "2026-10-22",
+   "hrv": 39,
+   "hrv_week": 58,
+   "hrv_status": "UNBALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 55,
+   "sleep_h": 7.3,
+   "readiness": 34,
+   "readiness_level": "LOW",
+   "rhr": 54,
+   "body_battery": 44
+  },
+  "note": null,
+  "sessions": [
+   {
+    "id": "2026-10-22-sail-training",
+    "date": "2026-10-22",
+    "sport": "sail",
+    "profile": "sail",
+    "key": false,
+    "priority": true,
+    "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+    "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+    "duration_min": 240,
+    "status": "done",
+    "activity_id": "20000594348",
+    "score": null
+   }
+  ],
+  "next": "Morgen: Segeltraining: IDM Chiemsee? / Reise + Vilamoura (240') + Morgenlauf (6,5 km)"
+ },
+ "week": {
+  "start": "2026-10-19",
+  "phase_label": "Grundlage 1",
+  "deload": false,
+  "planned_km": 13.0,
+  "planned_h": 1.1,
+  "actual": {
+   "run_km": 6.6,
+   "hours": 0.6,
+   "sail_h": 15.7,
+   "by_sport": {
+    "sail": 15.73,
+    "run": 0.61
+   }
+  },
+  "days": [
+   {
+    "date": "2026-10-19",
+    "weekday": "Mo",
+    "sessions": [
+     {
+      "id": "2026-10-19-sail-training",
+      "date": "2026-10-19",
+      "sport": "sail",
+      "profile": "sail",
+      "key": false,
+      "priority": true,
+      "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+      "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+      "duration_min": 240,
+      "status": "done",
+      "activity_id": "20000578456",
+      "score": null
+     }
+    ],
+    "unplanned": [],
+    "note": null
+   },
+   {
+    "date": "2026-10-20",
+    "weekday": "Di",
+    "sessions": [
+     {
+      "id": "2026-10-20-sail-training",
+      "date": "2026-10-20",
+      "sport": "sail",
+      "profile": "sail",
+      "key": false,
+      "priority": true,
+      "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+      "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+      "duration_min": 240,
+      "status": "done",
+      "activity_id": "20000581307",
+      "score": null
+     },
+     {
+      "id": "2026-10-20-run-easy",
+      "date": "2026-10-20",
+      "sport": "run",
+      "profile": "easy",
+      "key": false,
+      "title": "Morgenlauf",
+      "detail": "35' locker morgens vor dem Segeln, am Ende 5×20\" Steigerungen",
+      "distance_km": 6.5,
+      "duration_min": 34,
+      "pace_key": "easy",
+      "pace_range": [
+       301,
+       331
+      ],
+      "pace_label": "5:01–5:31 /km",
+      "status": "done",
+      "activity_id": "20000584718",
+      "score": 100
+     }
+    ],
+    "unplanned": [],
+    "note": null
+   },
+   {
+    "date": "2026-10-21",
+    "weekday": "Mi",
+    "sessions": [
+     {
+      "id": "2026-10-21-sail-training",
+      "date": "2026-10-21",
+      "sport": "sail",
+      "profile": "sail",
+      "key": false,
+      "priority": true,
+      "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+      "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+      "duration_min": 240,
+      "status": "done",
+      "activity_id": "20000585740",
+      "score": null
+     }
+    ],
+    "unplanned": [],
+    "note": null
+   },
+   {
+    "date": "2026-10-22",
+    "weekday": "Do",
+    "sessions": [
+     {
+      "id": "2026-10-22-sail-training",
+      "date": "2026-10-22",
+      "sport": "sail",
+      "profile": "sail",
+      "key": false,
+      "priority": true,
+      "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+      "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+      "duration_min": 240,
+      "status": "done",
+      "activity_id": "20000594348",
+      "score": null
+     }
+    ],
+    "unplanned": [],
+    "note": null
+   },
+   {
+    "date": "2026-10-23",
+    "weekday": "Fr",
+    "sessions": [
+     {
+      "id": "2026-10-23-sail-training",
+      "date": "2026-10-23",
+      "sport": "sail",
+      "profile": "sail",
+      "key": false,
+      "priority": true,
+      "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+      "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+      "duration_min": 240,
+      "status": "planned"
+     },
+     {
+      "id": "2026-10-23-run-easy",
+      "date": "2026-10-23",
+      "sport": "run",
+      "profile": "easy",
+      "key": false,
+      "title": "Morgenlauf",
+      "detail": "35' locker morgens vor dem Segeln",
+      "distance_km": 6.5,
+      "duration_min": 34,
+      "pace_key": "easy",
+      "pace_range": [
+       301,
+       331
+      ],
+      "pace_label": "5:01–5:31 /km",
+      "status": "planned"
+     }
+    ],
+    "unplanned": [],
+    "note": null
+   },
+   {
+    "date": "2026-10-24",
+    "weekday": "Sa",
+    "sessions": [
+     {
+      "id": "2026-10-24-sail-training",
+      "date": "2026-10-24",
+      "sport": "sail",
+      "profile": "sail",
+      "key": false,
+      "priority": true,
+      "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+      "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+      "duration_min": 240,
+      "status": "planned"
+     }
+    ],
+    "unplanned": [],
+    "note": null
+   },
+   {
+    "date": "2026-10-25",
+    "weekday": "So",
+    "sessions": [
+     {
+      "id": "2026-10-25-sail-training",
+      "date": "2026-10-25",
+      "sport": "sail",
+      "profile": "sail",
+      "key": false,
+      "priority": true,
+      "title": "Segeltraining: IDM Chiemsee? / Reise + Vilamoura",
+      "detail": "Segeln hat Priorität – Training am Wasser (Termin noch offen)",
+      "duration_min": 240,
+      "status": "planned"
+     }
+    ],
+    "unplanned": [],
+    "note": null
+   }
+  ]
+ },
+ "plan": [
+  {
+   "start": "2026-09-28",
+   "index": 0,
+   "phase": "reset",
+   "phase_label": "Übergang",
+   "deload": false,
+   "race_week": false,
+   "run_km": 27.1,
+   "hours": 8.9,
+   "scale": 1.0,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "past",
+   "key_sessions": [
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "locker, gerne im Gelände",
+     "distance_km": 9.2,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ],
+   "actual": {
+    "run_km": 14.5,
+    "hours": 6.4,
+    "sail_h": 0.0,
+    "by_sport": {
+     "strength": 1.51,
+     "bike": 3.58,
+     "run": 1.34
+    }
+   }
+  },
+  {
+   "start": "2026-10-05",
+   "index": 1,
+   "phase": "reset",
+   "phase_label": "Übergang",
+   "deload": false,
+   "race_week": false,
+   "run_km": 22.2,
+   "hours": 7.2,
+   "scale": 1.0,
+   "reentry": false,
+   "sailing_days": 2,
+   "sailing": [
+    "Optiregatta"
+   ],
+   "status": "past",
+   "key_sessions": [
+    {
+     "day": "Fr",
+     "title": "Langer Lauf",
+     "detail": "locker, gerne im Gelände",
+     "distance_km": 9.2,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ],
+   "actual": {
+    "run_km": 28.9,
+    "hours": 7.1,
+    "sail_h": 10.1,
+    "by_sport": {
+     "strength": 0.77,
+     "run": 2.65,
+     "bike": 2.38,
+     "row": 1.32,
+     "sail": 10.1
+    }
+   }
+  },
+  {
+   "start": "2026-10-12",
+   "index": 2,
+   "phase": "base1",
+   "phase_label": "Grundlage 1",
+   "deload": false,
+   "race_week": false,
+   "run_km": 9.0,
+   "hours": 4.3,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 4,
+   "sailing": [
+    "IDM Chiemsee? / Reise + Vilamoura"
+   ],
+   "status": "past",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "Hügelsprints",
+     "detail": "2–3 km ein, 8×10 s bergauf maximal, dazwischen voll erholen, 2 km aus",
+     "distance_km": 9.0,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ],
+   "actual": {
+    "run_km": 6.5,
+    "hours": 4.1,
+    "sail_h": 18.9,
+    "by_sport": {
+     "strength": 1.01,
+     "bike": 2.5,
+     "sail": 18.95,
+     "run": 0.58
+    }
+   }
+  },
+  {
+   "start": "2026-10-19",
+   "index": 3,
+   "phase": "base1",
+   "phase_label": "Grundlage 1",
+   "deload": false,
+   "race_week": false,
+   "run_km": 13.0,
+   "hours": 1.1,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 7,
+   "sailing": [
+    "IDM Chiemsee? / Reise + Vilamoura"
+   ],
+   "status": "current",
+   "key_sessions": [],
+   "actual": {
+    "run_km": 6.6,
+    "hours": 0.6,
+    "sail_h": 15.7,
+    "by_sport": {
+     "sail": 15.73,
+     "run": 0.61
+    }
+   }
+  },
+  {
+   "start": "2026-10-26",
+   "index": 4,
+   "phase": "base1",
+   "phase_label": "Grundlage 1",
+   "deload": false,
+   "race_week": false,
+   "run_km": 40.6,
+   "hours": 10.2,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 1,
+   "sailing": [
+    "IDM Chiemsee? / Reise + Vilamoura"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "Bergläufe",
+     "detail": "2–3 km ein, 6×45 s zügig bergauf, Trab zurück, 2 km aus",
+     "distance_km": 8.2,
+     "pace_label": "5:01–5:31 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Steigerungslauf",
+     "detail": "locker beginnen, letzte 20' @ M-Tempo",
+     "distance_km": 8.2,
+     "pace_label": "4:27–4:36 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "gleichmäßig locker",
+     "distance_km": 11.6,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-11-02",
+   "index": 5,
+   "phase": "base1",
+   "phase_label": "Grundlage 1",
+   "deload": true,
+   "race_week": false,
+   "run_km": 30.9,
+   "hours": 8.3,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Do",
+     "title": "Schwelle kurz",
+     "detail": "2 km ein, 2×8' @ T-Tempo 2' Trabpause, 2 km aus",
+     "distance_km": 7.4,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf (Entlastung)",
+     "detail": "gleichmäßig locker",
+     "distance_km": 10.5,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-11-09",
+   "index": 6,
+   "phase": "base1",
+   "phase_label": "Grundlage 1",
+   "deload": false,
+   "race_week": false,
+   "run_km": 27.5,
+   "hours": 2.4,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 6,
+   "sailing": [
+    "Junior Europeans Vilamoura"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Mo",
+     "title": "Langer Lauf",
+     "detail": "gleichmäßig locker",
+     "distance_km": 14.5,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-11-16",
+   "index": 7,
+   "phase": "base1",
+   "phase_label": "Grundlage 1",
+   "deload": false,
+   "race_week": false,
+   "run_km": 28.3,
+   "hours": 5.8,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 4,
+   "sailing": [
+    "Junior Europeans Vilamoura"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Fr",
+     "title": "Fahrtspiel",
+     "detail": "2–3 km ein, 10×1' zügig / 1' locker, 2 km aus",
+     "distance_km": 8.9,
+     "pace_label": "3:47–3:55 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "gleichmäßig locker",
+     "distance_km": 12.7,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-11-23",
+   "index": 8,
+   "phase": "base2",
+   "phase_label": "Grundlage 2",
+   "deload": false,
+   "race_week": false,
+   "run_km": 17.3,
+   "hours": 4.9,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 4,
+   "sailing": [
+    "GP1 Vilamoura"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "Intervalle 800 m",
+     "detail": "2–3 km ein, 6×800 m @ I-Tempo, 2' Trabpause, 2 km aus",
+     "distance_km": 10.8,
+     "pace_label": "3:47–3:55 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-11-30",
+   "index": 9,
+   "phase": "base2",
+   "phase_label": "Grundlage 2",
+   "deload": true,
+   "race_week": false,
+   "run_km": 18.3,
+   "hours": 1.6,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 6,
+   "sailing": [
+    "GP1 Vilamoura"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "So",
+     "title": "Langer Lauf (Entlastung)",
+     "detail": "gleichmäßig locker",
+     "distance_km": 11.8,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-12-07",
+   "index": 10,
+   "phase": "base2",
+   "phase_label": "Grundlage 2",
+   "deload": false,
+   "race_week": false,
+   "run_km": 19.4,
+   "hours": 7.2,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 2,
+   "sailing": [
+    "Youth Worlds Vilamoura? + Camp Sagres/Portimão"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "Intervalle 800 m",
+     "detail": "2–3 km ein, 7×800 m @ I-Tempo, 2' Trabpause, 2 km aus",
+     "distance_km": 9.7,
+     "pace_label": "3:47–3:55 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Schwelle",
+     "detail": "2–3 km ein, 3×10' @ T-Tempo, 2' Trabpause, 2 km aus",
+     "distance_km": 9.7,
+     "pace_label": "4:08–4:15 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-12-14",
+   "index": 11,
+   "phase": "base2",
+   "phase_label": "Grundlage 2",
+   "deload": false,
+   "race_week": false,
+   "run_km": 13.0,
+   "hours": 1.1,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 7,
+   "sailing": [
+    "Youth Worlds Vilamoura? + Camp Sagres/Portimão"
+   ],
+   "status": "future",
+   "key_sessions": []
+  },
+  {
+   "start": "2026-12-21",
+   "index": 12,
+   "phase": "base2",
+   "phase_label": "Grundlage 2",
+   "deload": false,
+   "race_week": false,
+   "run_km": 35.2,
+   "hours": 4.4,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 5,
+   "sailing": [
+    "Youth Worlds Vilamoura? + Camp Sagres/Portimão"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "letzte 3 km @ M-Tempo",
+     "distance_km": 14.5,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2026-12-28",
+   "index": 13,
+   "phase": "base2",
+   "phase_label": "Grundlage 2",
+   "deload": true,
+   "race_week": false,
+   "run_km": 32.8,
+   "hours": 8.0,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Do",
+     "title": "Schwelle kurz",
+     "detail": "2 km ein, 2×8' @ T-Tempo 2' Trabpause, 2 km aus",
+     "distance_km": 7.9,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf (Entlastung)",
+     "detail": "gleichmäßig locker",
+     "distance_km": 11.1,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-01-04",
+   "index": 14,
+   "phase": "build",
+   "phase_label": "Aufbau",
+   "deload": false,
+   "race_week": false,
+   "run_km": 52.6,
+   "hours": 11.9,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "VO2max 1000 m",
+     "detail": "2–3 km ein, 6×1000 m @ I-Tempo, 2:30' Trabpause, 2 km aus",
+     "distance_km": 12.6,
+     "pace_label": "3:47–3:55 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Tempodauerlauf",
+     "detail": "2–3 km ein, 20' @ T-Tempo am Stück, 2 km aus",
+     "distance_km": 12.6,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "letzte 5 km @ M-Tempo",
+     "distance_km": 17.9,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-01-11",
+   "index": 15,
+   "phase": "build",
+   "phase_label": "Aufbau",
+   "deload": false,
+   "race_week": false,
+   "run_km": 53.8,
+   "hours": 12.0,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "VO2max 1200 m",
+     "detail": "2–3 km ein, 5×1200 m @ I-Tempo, 3' Trabpause, 2 km aus",
+     "distance_km": 12.9,
+     "pace_label": "3:47–3:55 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Schwelle",
+     "detail": "2–3 km ein, 3×12' @ T-Tempo, 2' Trabpause, 2 km aus",
+     "distance_km": 12.9,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "gleichmäßig locker",
+     "distance_km": 18.3,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-01-18",
+   "index": 16,
+   "phase": "build",
+   "phase_label": "Aufbau",
+   "deload": false,
+   "race_week": false,
+   "run_km": 55.0,
+   "hours": 12.1,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "VO2max 1600 m",
+     "detail": "2–3 km ein, 4×1600 m @ I-Tempo, 3' Trabpause, 2 km aus",
+     "distance_km": 13.2,
+     "pace_label": "3:47–3:55 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Tempodauerlauf",
+     "detail": "2–3 km ein, 25' @ T-Tempo am Stück, 2 km aus",
+     "distance_km": 13.2,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "letzte 6 km @ M-Tempo",
+     "distance_km": 18.7,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-01-25",
+   "index": 17,
+   "phase": "build",
+   "phase_label": "Aufbau",
+   "deload": true,
+   "race_week": false,
+   "run_km": 42.2,
+   "hours": 9.8,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Do",
+     "title": "Schwelle kurz",
+     "detail": "2 km ein, 2×8' @ T-Tempo 2' Trabpause, 2 km aus",
+     "distance_km": 10.1,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf (Entlastung)",
+     "detail": "gleichmäßig locker",
+     "distance_km": 14.4,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-02-01",
+   "index": 18,
+   "phase": "build",
+   "phase_label": "Aufbau",
+   "deload": false,
+   "race_week": false,
+   "run_km": 57.6,
+   "hours": 12.3,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "VO2max 1000 m",
+     "detail": "2–3 km ein, 7×1000 m @ I-Tempo, 2:30' Trabpause, 2 km aus",
+     "distance_km": 13.8,
+     "pace_label": "3:47–3:55 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Schwelle",
+     "detail": "2–3 km ein, 2×20' @ T-Tempo, 3' Trabpause, 2 km aus",
+     "distance_km": 13.8,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "letzte 4 km @ HM-Tempo",
+     "distance_km": 19.6,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-02-08",
+   "index": 19,
+   "phase": "build",
+   "phase_label": "Aufbau",
+   "deload": false,
+   "race_week": false,
+   "run_km": 58.8,
+   "hours": 12.4,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "VO2max 1200 m",
+     "detail": "2–3 km ein, 6×1200 m @ I-Tempo, 3' Trabpause, 2 km aus",
+     "distance_km": 14.1,
+     "pace_label": "3:47–3:55 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Schwelle",
+     "detail": "2–3 km ein, 4×10' @ T-Tempo, 90\" Trabpause, 2 km aus",
+     "distance_km": 14.1,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf",
+     "detail": "gleichmäßig locker",
+     "distance_km": 20.0,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-02-15",
+   "index": 20,
+   "phase": "build",
+   "phase_label": "Aufbau",
+   "deload": false,
+   "race_week": false,
+   "run_km": 27.4,
+   "hours": 3.1,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 5,
+   "sailing": [
+    "GP2 Vilamoura"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "VO2max 2000 m",
+     "detail": "2–3 km ein, 3×2000 m @ I-Tempo, 4' Trabpause, 2 km aus",
+     "distance_km": 14.4,
+     "pace_label": "3:47–3:55 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-02-22",
+   "index": 21,
+   "phase": "specific",
+   "phase_label": "HM-spezifisch",
+   "deload": true,
+   "race_week": false,
+   "run_km": 26.8,
+   "hours": 2.4,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 5,
+   "sailing": [
+    "GP2 Vilamoura"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "So",
+     "title": "Langer Lauf (Entlastung)",
+     "detail": "gleichmäßig locker",
+     "distance_km": 13.3,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-03-01",
+   "index": 22,
+   "phase": "specific",
+   "phase_label": "HM-spezifisch",
+   "deload": false,
+   "race_week": false,
+   "run_km": 13.0,
+   "hours": 1.1,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 7,
+   "sailing": [
+    "Vilamoura (oder Abi-Fokus?)"
+   ],
+   "status": "future",
+   "key_sessions": []
+  },
+  {
+   "start": "2027-03-08",
+   "index": 23,
+   "phase": "specific",
+   "phase_label": "HM-spezifisch",
+   "deload": false,
+   "race_week": false,
+   "run_km": 6.5,
+   "hours": 0.6,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 7,
+   "sailing": [
+    "MSC?",
+    "Vilamoura (oder Abi-Fokus?)"
+   ],
+   "status": "future",
+   "key_sessions": []
+  },
+  {
+   "start": "2027-03-15",
+   "index": 24,
+   "phase": "specific",
+   "phase_label": "HM-spezifisch",
+   "deload": false,
+   "race_week": false,
+   "run_km": 31.5,
+   "hours": 2.8,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 6,
+   "sailing": [
+    "Vilamoura geblieben? (Helms Vorschlag)"
+   ],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "So",
+     "title": "Langer Lauf HM-spezifisch",
+     "detail": "darin 10 km @ HM-Tempo",
+     "distance_km": 18.5,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-03-22",
+   "index": 25,
+   "phase": "taper",
+   "phase_label": "Taper",
+   "deload": false,
+   "race_week": false,
+   "run_km": 37.9,
+   "hours": 8.2,
+   "scale": 1.03,
+   "reentry": true,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "HM-Schärfe",
+     "detail": "2–3 km ein, 3×2 km @ HM-Tempo, 2' Trabpause, 2 km aus",
+     "distance_km": 9.1,
+     "pace_label": "4:12–4:18 /km"
+    },
+    {
+     "day": "Do",
+     "title": "Schwelle kurz",
+     "detail": "2–3 km ein, 3×1600 m @ T-Tempo, 90\" Trabpause, 2 km aus",
+     "distance_km": 9.1,
+     "pace_label": "4:08–4:15 /km"
+    },
+    {
+     "day": "So",
+     "title": "Langer Lauf kurz",
+     "detail": "darin 5 km @ HM-Tempo",
+     "distance_km": 12.9,
+     "pace_label": "5:01–5:31 /km"
+    }
+   ]
+  },
+  {
+   "start": "2027-03-29",
+   "index": 26,
+   "phase": "taper",
+   "phase_label": "Taper",
+   "deload": false,
+   "race_week": true,
+   "run_km": 33.1,
+   "hours": 3.2,
+   "scale": 1.03,
+   "reentry": false,
+   "sailing_days": 0,
+   "sailing": [],
+   "status": "future",
+   "key_sessions": [
+    {
+     "day": "Di",
+     "title": "Aktivierung",
+     "detail": "2 km ein, 4×1 km @ HM-Tempo, 2' Trabpause, 2 km aus",
+     "distance_km": 5.4,
+     "pace_label": "4:12–4:18 /km"
+    },
+    {
+     "day": "So",
+     "title": "Berliner Halbmarathon 2027",
+     "detail": "Wettkampf – Ziel unter 1:25",
+     "distance_km": 21.1,
+     "pace_label": "4:12–4:18 /km"
+    }
+   ]
+  }
+ ],
+ "history": [
+  {
+   "start": "2026-08-03",
+   "run_km": 35.8,
+   "hours": 7.2,
+   "sail_h": 0.0,
+   "by_sport": {
+    "run": 3.09,
+    "strength": 0.94,
+    "bike": 3.13
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-08-10",
+   "run_km": 19.0,
+   "hours": 6.7,
+   "sail_h": 0.0,
+   "by_sport": {
+    "run": 1.63,
+    "strength": 1.82,
+    "bike": 3.24
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-08-17",
+   "run_km": 18.5,
+   "hours": 7.0,
+   "sail_h": 0.0,
+   "by_sport": {
+    "run": 1.61,
+    "strength": 1.97,
+    "bike": 3.4
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-08-24",
+   "run_km": 25.7,
+   "hours": 4.6,
+   "sail_h": 0.0,
+   "by_sport": {
+    "strength": 1.04,
+    "run": 2.2,
+    "bike": 1.37
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-08-31",
+   "run_km": 32.6,
+   "hours": 7.8,
+   "sail_h": 0.0,
+   "by_sport": {
+    "run": 2.85,
+    "strength": 1.72,
+    "bike": 3.26
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-09-07",
+   "run_km": 25.3,
+   "hours": 7.1,
+   "sail_h": 0.0,
+   "by_sport": {
+    "strength": 1.78,
+    "run": 2.18,
+    "bike": 3.17
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-09-14",
+   "run_km": 27.5,
+   "hours": 6.4,
+   "sail_h": 0.0,
+   "by_sport": {
+    "run": 2.38,
+    "bike": 3.16,
+    "strength": 0.82
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-09-21",
+   "run_km": 33.0,
+   "hours": 8.0,
+   "sail_h": 0.0,
+   "by_sport": {
+    "run": 2.93,
+    "strength": 1.96,
+    "bike": 3.08
+   },
+   "planned_km": null,
+   "planned_h": null
+  },
+  {
+   "start": "2026-09-28",
+   "run_km": 14.5,
+   "hours": 6.4,
+   "sail_h": 0.0,
+   "by_sport": {
+    "strength": 1.51,
+    "bike": 3.58,
+    "run": 1.34
+   },
+   "planned_km": 27.1,
+   "planned_h": 8.9
+  },
+  {
+   "start": "2026-10-05",
+   "run_km": 28.9,
+   "hours": 7.1,
+   "sail_h": 10.1,
+   "by_sport": {
+    "strength": 0.77,
+    "run": 2.65,
+    "bike": 2.38,
+    "row": 1.32,
+    "sail": 10.1
+   },
+   "planned_km": 22.2,
+   "planned_h": 7.2
+  },
+  {
+   "start": "2026-10-12",
+   "run_km": 6.5,
+   "hours": 4.1,
+   "sail_h": 18.9,
+   "by_sport": {
+    "strength": 1.01,
+    "bike": 2.5,
+    "sail": 18.95,
+    "run": 0.58
+   },
+   "planned_km": 9.0,
+   "planned_h": 4.3
+  },
+  {
+   "start": "2026-10-19",
+   "run_km": 6.6,
+   "hours": 0.6,
+   "sail_h": 15.7,
+   "by_sport": {
+    "sail": 15.73,
+    "run": 0.61
+   },
+   "planned_km": 13.0,
+   "planned_h": 1.1
+  }
+ ],
+ "pmc": [
+  {
+   "date": "2026-06-25",
+   "load": 189.0,
+   "ctl": 15.8,
+   "atl": 58.9,
+   "tsb": -27.3
+  },
+  {
+   "date": "2026-06-26",
+   "load": 32.0,
+   "ctl": 16.2,
+   "atl": 55.3,
+   "tsb": -43.1
+  },
+  {
+   "date": "2026-06-27",
+   "load": 162.0,
+   "ctl": 19.6,
+   "atl": 69.5,
+   "tsb": -39.2
+  },
+  {
+   "date": "2026-06-28",
+   "load": 107.0,
+   "ctl": 21.7,
+   "atl": 74.5,
+   "tsb": -49.9
+  },
+  {
+   "date": "2026-06-29",
+   "load": 0.0,
+   "ctl": 21.2,
+   "atl": 64.6,
+   "tsb": -52.9
+  },
+  {
+   "date": "2026-06-30",
+   "load": 59.0,
+   "ctl": 22.0,
+   "atl": 63.9,
+   "tsb": -43.5
+  },
+  {
+   "date": "2026-07-01",
+   "load": 30.0,
+   "ctl": 22.2,
+   "atl": 59.4,
+   "tsb": -41.8
+  },
+  {
+   "date": "2026-07-02",
+   "load": 190.0,
+   "ctl": 26.2,
+   "atl": 76.7,
+   "tsb": -37.1
+  },
+  {
+   "date": "2026-07-03",
+   "load": 34.0,
+   "ctl": 26.4,
+   "atl": 71.1,
+   "tsb": -50.6
+  },
+  {
+   "date": "2026-07-04",
+   "load": 126.0,
+   "ctl": 28.7,
+   "atl": 78.4,
+   "tsb": -44.7
+  },
+  {
+   "date": "2026-07-05",
+   "load": 99.0,
+   "ctl": 30.4,
+   "atl": 81.1,
+   "tsb": -49.7
+  },
+  {
+   "date": "2026-07-06",
+   "load": 0.0,
+   "ctl": 29.6,
+   "atl": 70.3,
+   "tsb": -50.8
+  },
+  {
+   "date": "2026-07-07",
+   "load": 46.0,
+   "ctl": 30.0,
+   "atl": 67.1,
+   "tsb": -40.7
+  },
+  {
+   "date": "2026-07-08",
+   "load": 32.0,
+   "ctl": 30.1,
+   "atl": 62.4,
+   "tsb": -37.1
+  },
+  {
+   "date": "2026-07-09",
+   "load": 168.0,
+   "ctl": 33.3,
+   "atl": 76.5,
+   "tsb": -32.3
+  },
+  {
+   "date": "2026-07-10",
+   "load": 26.0,
+   "ctl": 33.1,
+   "atl": 69.7,
+   "tsb": -43.1
+  },
+  {
+   "date": "2026-07-11",
+   "load": 133.0,
+   "ctl": 35.5,
+   "atl": 78.2,
+   "tsb": -36.6
+  },
+  {
+   "date": "2026-07-12",
+   "load": 110.0,
+   "ctl": 37.3,
+   "atl": 82.4,
+   "tsb": -42.7
+  },
+  {
+   "date": "2026-07-13",
+   "load": 0.0,
+   "ctl": 36.4,
+   "atl": 71.4,
+   "tsb": -45.2
+  },
+  {
+   "date": "2026-07-14",
+   "load": 0.0,
+   "ctl": 35.5,
+   "atl": 61.9,
+   "tsb": -35.1
+  },
+  {
+   "date": "2026-07-15",
+   "load": 38.0,
+   "ctl": 35.6,
+   "atl": 58.7,
+   "tsb": -26.4
+  },
+  {
+   "date": "2026-07-16",
+   "load": 161.0,
+   "ctl": 38.5,
+   "atl": 72.4,
+   "tsb": -23.2
+  },
+  {
+   "date": "2026-07-17",
+   "load": 30.0,
+   "ctl": 38.3,
+   "atl": 66.7,
+   "tsb": -33.8
+  },
+  {
+   "date": "2026-07-18",
+   "load": 0.0,
+   "ctl": 37.4,
+   "atl": 57.8,
+   "tsb": -28.4
+  },
+  {
+   "date": "2026-07-19",
+   "load": 108.0,
+   "ctl": 39.1,
+   "atl": 64.5,
+   "tsb": -20.4
+  },
+  {
+   "date": "2026-07-20",
+   "load": 0.0,
+   "ctl": 38.2,
+   "atl": 55.9,
+   "tsb": -25.4
+  },
+  {
+   "date": "2026-07-21",
+   "load": 62.0,
+   "ctl": 38.7,
+   "atl": 56.7,
+   "tsb": -17.8
+  },
+  {
+   "date": "2026-07-22",
+   "load": 32.0,
+   "ctl": 38.6,
+   "atl": 53.4,
+   "tsb": -18.0
+  },
+  {
+   "date": "2026-07-23",
+   "load": 170.0,
+   "ctl": 41.7,
+   "atl": 69.0,
+   "tsb": -14.9
+  },
+  {
+   "date": "2026-07-24",
+   "load": 32.0,
+   "ctl": 41.4,
+   "atl": 64.0,
+   "tsb": -27.3
+  },
+  {
+   "date": "2026-07-25",
+   "load": 122.0,
+   "ctl": 43.3,
+   "atl": 71.8,
+   "tsb": -22.6
+  },
+  {
+   "date": "2026-07-26",
+   "load": 103.0,
+   "ctl": 44.7,
+   "atl": 75.9,
+   "tsb": -28.4
+  },
+  {
+   "date": "2026-07-27",
+   "load": 0.0,
+   "ctl": 43.7,
+   "atl": 65.8,
+   "tsb": -31.2
+  },
+  {
+   "date": "2026-07-28",
+   "load": 0.0,
+   "ctl": 42.7,
+   "atl": 57.0,
+   "tsb": -22.1
+  },
+  {
+   "date": "2026-07-29",
+   "load": 34.0,
+   "ctl": 42.4,
+   "atl": 54.0,
+   "tsb": -14.4
+  },
+  {
+   "date": "2026-07-30",
+   "load": 171.0,
+   "ctl": 45.5,
+   "atl": 69.6,
+   "tsb": -11.5
+  },
+  {
+   "date": "2026-07-31",
+   "load": 33.0,
+   "ctl": 45.2,
+   "atl": 64.7,
+   "tsb": -24.1
+  },
+  {
+   "date": "2026-08-01",
+   "load": 118.0,
+   "ctl": 46.9,
+   "atl": 71.8,
+   "tsb": -19.5
+  },
+  {
+   "date": "2026-08-02",
+   "load": 98.0,
+   "ctl": 48.1,
+   "atl": 75.3,
+   "tsb": -24.9
+  },
+  {
+   "date": "2026-08-03",
+   "load": 0.0,
+   "ctl": 47.0,
+   "atl": 65.3,
+   "tsb": -27.2
+  },
+  {
+   "date": "2026-08-04",
+   "load": 52.0,
+   "ctl": 47.1,
+   "atl": 63.5,
+   "tsb": -18.3
+  },
+  {
+   "date": "2026-08-05",
+   "load": 35.0,
+   "ctl": 46.8,
+   "atl": 59.7,
+   "tsb": -16.4
+  },
+  {
+   "date": "2026-08-06",
+   "load": 175.0,
+   "ctl": 49.8,
+   "atl": 75.0,
+   "tsb": -12.9
+  },
+  {
+   "date": "2026-08-07",
+   "load": 0.0,
+   "ctl": 48.6,
+   "atl": 65.1,
+   "tsb": -25.2
+  },
+  {
+   "date": "2026-08-08",
+   "load": 133.0,
+   "ctl": 50.6,
+   "atl": 74.1,
+   "tsb": -16.4
+  },
+  {
+   "date": "2026-08-09",
+   "load": 108.0,
+   "ctl": 52.0,
+   "atl": 78.6,
+   "tsb": -23.5
+  },
+  {
+   "date": "2026-08-10",
+   "load": 0.0,
+   "ctl": 50.8,
+   "atl": 68.1,
+   "tsb": -26.6
+  },
+  {
+   "date": "2026-08-11",
+   "load": 57.0,
+   "ctl": 50.9,
+   "atl": 66.7,
+   "tsb": -17.4
+  },
+  {
+   "date": "2026-08-12",
+   "load": 34.0,
+   "ctl": 50.5,
+   "atl": 62.3,
+   "tsb": -15.8
+  },
+  {
+   "date": "2026-08-13",
+   "load": 200.0,
+   "ctl": 54.0,
+   "atl": 80.6,
+   "tsb": -11.8
+  },
+  {
+   "date": "2026-08-14",
+   "load": 29.0,
+   "ctl": 53.4,
+   "atl": 73.8,
+   "tsb": -26.6
+  },
+  {
+   "date": "2026-08-15",
+   "load": 135.0,
+   "ctl": 55.4,
+   "atl": 81.9,
+   "tsb": -20.3
+  },
+  {
+   "date": "2026-08-16",
+   "load": 0.0,
+   "ctl": 54.0,
+   "atl": 71.0,
+   "tsb": -26.6
+  },
+  {
+   "date": "2026-08-17",
+   "load": 0.0,
+   "ctl": 52.8,
+   "atl": 61.6,
+   "tsb": -17.0
+  },
+  {
+   "date": "2026-08-18",
+   "load": 73.0,
+   "ctl": 53.3,
+   "atl": 63.1,
+   "tsb": -8.8
+  },
+  {
+   "date": "2026-08-19",
+   "load": 38.0,
+   "ctl": 52.9,
+   "atl": 59.7,
+   "tsb": -9.8
+  },
+  {
+   "date": "2026-08-20",
+   "load": 175.0,
+   "ctl": 55.8,
+   "atl": 75.1,
+   "tsb": -6.9
+  },
+  {
+   "date": "2026-08-21",
+   "load": 33.0,
+   "ctl": 55.2,
+   "atl": 69.5,
+   "tsb": -19.3
+  },
+  {
+   "date": "2026-08-22",
+   "load": 150.0,
+   "ctl": 57.5,
+   "atl": 80.2,
+   "tsb": -14.3
+  },
+  {
+   "date": "2026-08-23",
+   "load": 0.0,
+   "ctl": 56.1,
+   "atl": 69.5,
+   "tsb": -22.7
+  },
+  {
+   "date": "2026-08-24",
+   "load": 0.0,
+   "ctl": 54.8,
+   "atl": 60.3,
+   "tsb": -13.4
+  },
+  {
+   "date": "2026-08-25",
+   "load": 0.0,
+   "ctl": 53.5,
+   "atl": 52.2,
+   "tsb": -5.5
+  },
+  {
+   "date": "2026-08-26",
+   "load": 39.0,
+   "ctl": 53.2,
+   "atl": 50.5,
+   "tsb": 1.3
+  },
+  {
+   "date": "2026-08-27",
+   "load": 170.0,
+   "ctl": 55.9,
+   "atl": 66.4,
+   "tsb": 2.7
+  },
+  {
+   "date": "2026-08-28",
+   "load": 0.0,
+   "ctl": 54.6,
+   "atl": 57.6,
+   "tsb": -10.5
+  },
+  {
+   "date": "2026-08-29",
+   "load": 0.0,
+   "ctl": 53.3,
+   "atl": 49.9,
+   "tsb": -3.0
+  },
+  {
+   "date": "2026-08-30",
+   "load": 108.0,
+   "ctl": 54.6,
+   "atl": 57.6,
+   "tsb": 3.4
+  },
+  {
+   "date": "2026-08-31",
+   "load": 0.0,
+   "ctl": 53.3,
+   "atl": 50.0,
+   "tsb": -3.0
+  },
+  {
+   "date": "2026-09-01",
+   "load": 49.0,
+   "ctl": 53.2,
+   "atl": 49.8,
+   "tsb": 3.4
+  },
+  {
+   "date": "2026-09-02",
+   "load": 29.0,
+   "ctl": 52.6,
+   "atl": 47.1,
+   "tsb": 3.4
+  },
+  {
+   "date": "2026-09-03",
+   "load": 181.0,
+   "ctl": 55.7,
+   "atl": 64.9,
+   "tsb": 5.6
+  },
+  {
+   "date": "2026-09-04",
+   "load": 30.0,
+   "ctl": 55.1,
+   "atl": 60.2,
+   "tsb": -9.2
+  },
+  {
+   "date": "2026-09-05",
+   "load": 127.0,
+   "ctl": 56.7,
+   "atl": 69.1,
+   "tsb": -5.2
+  },
+  {
+   "date": "2026-09-06",
+   "load": 102.0,
+   "ctl": 57.8,
+   "atl": 73.5,
+   "tsb": -12.4
+  },
+  {
+   "date": "2026-09-07",
+   "load": 0.0,
+   "ctl": 56.5,
+   "atl": 63.7,
+   "tsb": -15.7
+  },
+  {
+   "date": "2026-09-08",
+   "load": 0.0,
+   "ctl": 55.1,
+   "atl": 55.2,
+   "tsb": -7.3
+  },
+  {
+   "date": "2026-09-09",
+   "load": 30.0,
+   "ctl": 54.5,
+   "atl": 51.9,
+   "tsb": -0.1
+  },
+  {
+   "date": "2026-09-10",
+   "load": 168.0,
+   "ctl": 57.2,
+   "atl": 67.3,
+   "tsb": 2.7
+  },
+  {
+   "date": "2026-09-11",
+   "load": 30.0,
+   "ctl": 56.6,
+   "atl": 62.4,
+   "tsb": -10.1
+  },
+  {
+   "date": "2026-09-12",
+   "load": 134.0,
+   "ctl": 58.4,
+   "atl": 71.9,
+   "tsb": -5.8
+  },
+  {
+   "date": "2026-09-13",
+   "load": 106.0,
+   "ctl": 59.5,
+   "atl": 76.4,
+   "tsb": -13.5
+  },
+  {
+   "date": "2026-09-14",
+   "load": 0.0,
+   "ctl": 58.1,
+   "atl": 66.3,
+   "tsb": -16.9
+  },
+  {
+   "date": "2026-09-15",
+   "load": 0.0,
+   "ctl": 56.7,
+   "atl": 57.4,
+   "tsb": -8.2
+  },
+  {
+   "date": "2026-09-16",
+   "load": 0.0,
+   "ctl": 55.4,
+   "atl": 49.8,
+   "tsb": -0.7
+  },
+  {
+   "date": "2026-09-17",
+   "load": 180.0,
+   "ctl": 58.3,
+   "atl": 67.1,
+   "tsb": 5.6
+  },
+  {
+   "date": "2026-09-18",
+   "load": 26.0,
+   "ctl": 57.6,
+   "atl": 61.7,
+   "tsb": -8.8
+  },
+  {
+   "date": "2026-09-19",
+   "load": 131.0,
+   "ctl": 59.3,
+   "atl": 70.9,
+   "tsb": -4.1
+  },
+  {
+   "date": "2026-09-20",
+   "load": 116.0,
+   "ctl": 60.6,
+   "atl": 76.9,
+   "tsb": -11.6
+  },
+  {
+   "date": "2026-09-21",
+   "load": 0.0,
+   "ctl": 59.2,
+   "atl": 66.7,
+   "tsb": -16.3
+  },
+  {
+   "date": "2026-09-22",
+   "load": 47.0,
+   "ctl": 58.9,
+   "atl": 64.0,
+   "tsb": -7.4
+  },
+  {
+   "date": "2026-09-23",
+   "load": 33.0,
+   "ctl": 58.3,
+   "atl": 59.9,
+   "tsb": -5.1
+  },
+  {
+   "date": "2026-09-24",
+   "load": 185.0,
+   "ctl": 61.3,
+   "atl": 76.6,
+   "tsb": -1.6
+  },
+  {
+   "date": "2026-09-25",
+   "load": 34.0,
+   "ctl": 60.7,
+   "atl": 70.9,
+   "tsb": -15.3
+  },
+  {
+   "date": "2026-09-26",
+   "load": 112.0,
+   "ctl": 61.9,
+   "atl": 76.4,
+   "tsb": -10.2
+  },
+  {
+   "date": "2026-09-27",
+   "load": 107.0,
+   "ctl": 62.9,
+   "atl": 80.4,
+   "tsb": -14.5
+  },
+  {
+   "date": "2026-09-28",
+   "load": 0.0,
+   "ctl": 61.4,
+   "atl": 69.7,
+   "tsb": -17.5
+  },
+  {
+   "date": "2026-09-29",
+   "load": 28.0,
+   "ctl": 60.7,
+   "atl": 64.2,
+   "tsb": -8.3
+  },
+  {
+   "date": "2026-09-30",
+   "load": 182.0,
+   "ctl": 63.5,
+   "atl": 79.9,
+   "tsb": -3.5
+  },
+  {
+   "date": "2026-10-01",
+   "load": 44.0,
+   "ctl": 63.0,
+   "atl": 75.1,
+   "tsb": -16.4
+  },
+  {
+   "date": "2026-10-02",
+   "load": 22.0,
+   "ctl": 62.1,
+   "atl": 68.0,
+   "tsb": -12.0
+  },
+  {
+   "date": "2026-10-03",
+   "load": 84.0,
+   "ctl": 62.6,
+   "atl": 70.1,
+   "tsb": -5.9
+  },
+  {
+   "date": "2026-10-04",
+   "load": 53.0,
+   "ctl": 62.4,
+   "atl": 67.9,
+   "tsb": -7.5
+  },
+  {
+   "date": "2026-10-05",
+   "load": 0.0,
+   "ctl": 60.9,
+   "atl": 58.8,
+   "tsb": -5.5
+  },
+  {
+   "date": "2026-10-06",
+   "load": 70.0,
+   "ctl": 61.1,
+   "atl": 60.3,
+   "tsb": 2.1
+  },
+  {
+   "date": "2026-10-07",
+   "load": 148.0,
+   "ctl": 63.2,
+   "atl": 72.0,
+   "tsb": 0.8
+  },
+  {
+   "date": "2026-10-08",
+   "load": 62.0,
+   "ctl": 63.1,
+   "atl": 70.7,
+   "tsb": -8.8
+  },
+  {
+   "date": "2026-10-09",
+   "load": 103.0,
+   "ctl": 64.1,
+   "atl": 75.0,
+   "tsb": -7.5
+  },
+  {
+   "date": "2026-10-10",
+   "load": 125.0,
+   "ctl": 65.5,
+   "atl": 81.6,
+   "tsb": -10.9
+  },
+  {
+   "date": "2026-10-11",
+   "load": 132.0,
+   "ctl": 67.1,
+   "atl": 88.3,
+   "tsb": -16.1
+  },
+  {
+   "date": "2026-10-12",
+   "load": 0.0,
+   "ctl": 65.5,
+   "atl": 76.6,
+   "tsb": -21.3
+  },
+  {
+   "date": "2026-10-13",
+   "load": 33.0,
+   "ctl": 64.7,
+   "atl": 70.8,
+   "tsb": -11.1
+  },
+  {
+   "date": "2026-10-14",
+   "load": 182.0,
+   "ctl": 67.5,
+   "atl": 85.6,
+   "tsb": -6.0
+  },
+  {
+   "date": "2026-10-15",
+   "load": 113.0,
+   "ctl": 68.6,
+   "atl": 89.2,
+   "tsb": -18.1
+  },
+  {
+   "date": "2026-10-16",
+   "load": 136.0,
+   "ctl": 70.1,
+   "atl": 95.5,
+   "tsb": -20.7
+  },
+  {
+   "date": "2026-10-17",
+   "load": 104.0,
+   "ctl": 70.9,
+   "atl": 96.6,
+   "tsb": -25.3
+  },
+  {
+   "date": "2026-10-18",
+   "load": 90.0,
+   "ctl": 71.4,
+   "atl": 95.7,
+   "tsb": -25.7
+  },
+  {
+   "date": "2026-10-19",
+   "load": 82.0,
+   "ctl": 71.6,
+   "atl": 93.9,
+   "tsb": -24.3
+  },
+  {
+   "date": "2026-10-20",
+   "load": 133.0,
+   "ctl": 73.1,
+   "atl": 99.1,
+   "tsb": -22.2
+  },
+  {
+   "date": "2026-10-21",
+   "load": 86.0,
+   "ctl": 73.4,
+   "atl": 97.4,
+   "tsb": -26.0
+  },
+  {
+   "date": "2026-10-22",
+   "load": 80.0,
+   "ctl": 73.5,
+   "atl": 95.0,
+   "tsb": -24.0
+  }
+ ],
+ "metrics": {
+  "lt_pace": 249,
+  "lt_hr": 176,
+  "vo2max": 52.4,
+  "ctl": 73.5,
+  "atl": 95.0,
+  "tsb": -24.0,
+  "acwr": 1.29,
+  "scale": 1.03
+ },
+ "paces": [
+  {
+   "key": "easy",
+   "label": "Locker (E)",
+   "now": "5:01–5:31",
+   "goal": "4:47–5:16"
+  },
+  {
+   "key": "marathon",
+   "label": "Marathon (M)",
+   "now": "4:27–4:36",
+   "goal": "4:15–4:23"
+  },
+  {
+   "key": "hm",
+   "label": "Halbmarathon (HM)",
+   "now": "4:12–4:18",
+   "goal": "3:59–4:05"
+  },
+  {
+   "key": "threshold",
+   "label": "Schwelle (T)",
+   "now": "4:08–4:15",
+   "goal": "3:56–4:03"
+  },
+  {
+   "key": "interval",
+   "label": "Intervall (I)",
+   "now": "3:47–3:55",
+   "goal": "3:36–3:44"
+  }
+ ],
+ "wellness": [
+  {
+   "date": "2026-09-23",
+   "hrv": 61,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 87,
+   "sleep_h": 8.4,
+   "readiness": 61,
+   "readiness_level": "MODERATE",
+   "rhr": 50,
+   "body_battery": 83
+  },
+  {
+   "date": "2026-09-24",
+   "hrv": 63,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 77,
+   "sleep_h": 8.1,
+   "readiness": 88,
+   "readiness_level": "HIGH",
+   "rhr": 45,
+   "body_battery": 86
+  },
+  {
+   "date": "2026-09-25",
+   "hrv": 53,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 88,
+   "sleep_h": 8.4,
+   "readiness": 52,
+   "readiness_level": "MODERATE",
+   "rhr": 49,
+   "body_battery": 98
+  },
+  {
+   "date": "2026-09-26",
+   "hrv": 53,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 85,
+   "sleep_h": 8.3,
+   "readiness": 54,
+   "readiness_level": "MODERATE",
+   "rhr": 45,
+   "body_battery": 82
+  },
+  {
+   "date": "2026-09-27",
+   "hrv": 65,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 87,
+   "sleep_h": 8.4,
+   "readiness": 84,
+   "readiness_level": "HIGH",
+   "rhr": 46,
+   "body_battery": 86
+  },
+  {
+   "date": "2026-09-28",
+   "hrv": 54,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 88,
+   "sleep_h": 8.4,
+   "readiness": 81,
+   "readiness_level": "HIGH",
+   "rhr": 48,
+   "body_battery": 75
+  },
+  {
+   "date": "2026-09-29",
+   "hrv": 55,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 76,
+   "sleep_h": 8.0,
+   "readiness": 66,
+   "readiness_level": "MODERATE",
+   "rhr": 46,
+   "body_battery": 90
+  },
+  {
+   "date": "2026-09-30",
+   "hrv": 60,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 77,
+   "sleep_h": 8.1,
+   "readiness": 85,
+   "readiness_level": "HIGH",
+   "rhr": 50,
+   "body_battery": 98
+  },
+  {
+   "date": "2026-10-01",
+   "hrv": 64,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 78,
+   "sleep_h": 8.1,
+   "readiness": 64,
+   "readiness_level": "MODERATE",
+   "rhr": 49,
+   "body_battery": 77
+  },
+  {
+   "date": "2026-10-02",
+   "hrv": 65,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 75,
+   "sleep_h": 8.0,
+   "readiness": 53,
+   "readiness_level": "MODERATE",
+   "rhr": 49,
+   "body_battery": 98
+  },
+  {
+   "date": "2026-10-03",
+   "hrv": 63,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 72,
+   "sleep_h": 7.9,
+   "readiness": 62,
+   "readiness_level": "MODERATE",
+   "rhr": 50,
+   "body_battery": 70
+  },
+  {
+   "date": "2026-10-04",
+   "hrv": 54,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 90,
+   "sleep_h": 8.5,
+   "readiness": 86,
+   "readiness_level": "HIGH",
+   "rhr": 48,
+   "body_battery": 73
+  },
+  {
+   "date": "2026-10-05",
+   "hrv": 42,
+   "hrv_week": 58,
+   "hrv_status": "UNBALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 52,
+   "sleep_h": 7.2,
+   "readiness": 38,
+   "readiness_level": "LOW",
+   "rhr": 52,
+   "body_battery": 44
+  },
+  {
+   "date": "2026-10-06",
+   "hrv": 58,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 77,
+   "sleep_h": 8.1,
+   "readiness": 58,
+   "readiness_level": "MODERATE",
+   "rhr": 47,
+   "body_battery": 80
+  },
+  {
+   "date": "2026-10-07",
+   "hrv": 58,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 90,
+   "sleep_h": 8.5,
+   "readiness": 55,
+   "readiness_level": "MODERATE",
+   "rhr": 45,
+   "body_battery": 88
+  },
+  {
+   "date": "2026-10-08",
+   "hrv": 67,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 86,
+   "sleep_h": 8.4,
+   "readiness": 63,
+   "readiness_level": "MODERATE",
+   "rhr": 47,
+   "body_battery": 96
+  },
+  {
+   "date": "2026-10-09",
+   "hrv": 55,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 88,
+   "sleep_h": 8.4,
+   "readiness": 83,
+   "readiness_level": "HIGH",
+   "rhr": 47,
+   "body_battery": 81
+  },
+  {
+   "date": "2026-10-10",
+   "hrv": 63,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 86,
+   "sleep_h": 8.4,
+   "readiness": 54,
+   "readiness_level": "MODERATE",
+   "rhr": 47,
+   "body_battery": 86
+  },
+  {
+   "date": "2026-10-11",
+   "hrv": 56,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 75,
+   "sleep_h": 8.0,
+   "readiness": 61,
+   "readiness_level": "MODERATE",
+   "rhr": 50,
+   "body_battery": 80
+  },
+  {
+   "date": "2026-10-12",
+   "hrv": 58,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 71,
+   "sleep_h": 7.9,
+   "readiness": 69,
+   "readiness_level": "MODERATE",
+   "rhr": 50,
+   "body_battery": 73
+  },
+  {
+   "date": "2026-10-13",
+   "hrv": 58,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 80,
+   "sleep_h": 8.2,
+   "readiness": 69,
+   "readiness_level": "MODERATE",
+   "rhr": 48,
+   "body_battery": 71
+  },
+  {
+   "date": "2026-10-14",
+   "hrv": 52,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 75,
+   "sleep_h": 8.0,
+   "readiness": 77,
+   "readiness_level": "HIGH",
+   "rhr": 48,
+   "body_battery": 92
+  },
+  {
+   "date": "2026-10-15",
+   "hrv": 57,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 88,
+   "sleep_h": 8.4,
+   "readiness": 66,
+   "readiness_level": "MODERATE",
+   "rhr": 45,
+   "body_battery": 84
+  },
+  {
+   "date": "2026-10-16",
+   "hrv": 62,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 68,
+   "sleep_h": 7.8,
+   "readiness": 63,
+   "readiness_level": "MODERATE",
+   "rhr": 48,
+   "body_battery": 96
+  },
+  {
+   "date": "2026-10-17",
+   "hrv": 68,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 78,
+   "sleep_h": 8.1,
+   "readiness": 75,
+   "readiness_level": "MODERATE",
+   "rhr": 48,
+   "body_battery": 93
+  },
+  {
+   "date": "2026-10-18",
+   "hrv": 60,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 76,
+   "sleep_h": 8.0,
+   "readiness": 55,
+   "readiness_level": "MODERATE",
+   "rhr": 48,
+   "body_battery": 82
+  },
+  {
+   "date": "2026-10-19",
+   "hrv": 64,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 84,
+   "sleep_h": 8.3,
+   "readiness": 71,
+   "readiness_level": "MODERATE",
+   "rhr": 46,
+   "body_battery": 95
+  },
+  {
+   "date": "2026-10-20",
+   "hrv": 67,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 88,
+   "sleep_h": 8.4,
+   "readiness": 64,
+   "readiness_level": "MODERATE",
+   "rhr": 49,
+   "body_battery": 93
+  },
+  {
+   "date": "2026-10-21",
+   "hrv": 65,
+   "hrv_week": 58,
+   "hrv_status": "BALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 89,
+   "sleep_h": 8.5,
+   "readiness": 68,
+   "readiness_level": "MODERATE",
+   "rhr": 46,
+   "body_battery": 85
+  },
+  {
+   "date": "2026-10-22",
+   "hrv": 39,
+   "hrv_week": 58,
+   "hrv_status": "UNBALANCED",
+   "hrv_low": 52,
+   "hrv_high": 66,
+   "sleep_score": 55,
+   "sleep_h": 7.3,
+   "readiness": 34,
+   "readiness_level": "LOW",
+   "rhr": 54,
+   "body_battery": 44
+  }
+ ],
+ "sailing": [
+  {
+   "title": "Optiregatta",
+   "start": "2026-10-10",
+   "end": "2026-10-11",
+   "tentative": false,
+   "regatta_from": "2026-10-10"
+  },
+  {
+   "title": "IDM Chiemsee? / Reise + Vilamoura",
+   "start": "2026-10-15",
+   "end": "2026-10-26",
+   "tentative": true,
+   "regatta_from": "2026-10-15"
+  },
+  {
+   "title": "Junior Europeans Vilamoura",
+   "start": "2026-11-10",
+   "end": "2026-11-19",
+   "tentative": false,
+   "regatta_from": "2026-11-15"
+  },
+  {
+   "title": "GP1 Vilamoura",
+   "start": "2026-11-26",
+   "end": "2026-12-05",
+   "tentative": false,
+   "regatta_from": "2026-12-02"
+  },
+  {
+   "title": "Youth Worlds Vilamoura? + Camp Sagres/Portimão",
+   "start": "2026-12-12",
+   "end": "2026-12-25",
+   "tentative": true,
+   "regatta_from": "2026-12-12"
+  },
+  {
+   "title": "GP2 Vilamoura",
+   "start": "2027-02-17",
+   "end": "2027-02-26",
+   "tentative": false,
+   "regatta_from": "2027-02-23"
+  },
+  {
+   "title": "Vilamoura (oder Abi-Fokus?)",
+   "start": "2027-03-01",
+   "end": "2027-03-10",
+   "tentative": true,
+   "regatta_from": null
+  },
+  {
+   "title": "MSC?",
+   "start": "2027-03-11",
+   "end": "2027-03-14",
+   "tentative": true,
+   "regatta_from": "2027-03-11"
+  },
+  {
+   "title": "Vilamoura geblieben? (Helms Vorschlag)",
+   "start": "2027-03-15",
+   "end": "2027-03-20",
+   "tentative": true,
+   "regatta_from": null
+  }
+ ],
+ "activities": [
+  {
+   "id": "20000594348",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-22 10:24:00",
+   "distance_km": 0.0,
+   "duration": "3:40:44",
+   "pace": null,
+   "avg_hr": 118,
+   "load": 80,
+   "te_aerobic": 2.2,
+   "te_anaerobic": 0.8,
+   "hr_zones_s": [
+    7284,
+    4635,
+    1324,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 3:40:44",
+   "lines": [
+    "**Ist:** 3:40:44 · Ø HF 118",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.2 · anaerob 0.8 · Load 80"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000585740",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-21 10:51:00",
+   "distance_km": 0.0,
+   "duration": "4:08:28",
+   "pace": null,
+   "avg_hr": 119,
+   "load": 86,
+   "te_aerobic": 1.8,
+   "te_anaerobic": 0.5,
+   "hr_zones_s": [
+    8199,
+    5218,
+    1491,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 4:08:28",
+   "lines": [
+    "**Ist:** 4:08:28 · Ø HF 119",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 1.8 · anaerob 0.5 · Load 86"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000581307",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-20 10:09:00",
+   "distance_km": 0.0,
+   "duration": "4:08:58",
+   "pace": null,
+   "avg_hr": 119,
+   "load": 91,
+   "te_aerobic": 2.1,
+   "te_anaerobic": 0.8,
+   "hr_zones_s": [
+    8216,
+    5228,
+    1494,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 4:08:58",
+   "lines": [
+    "**Ist:** 4:08:58 · Ø HF 119",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.1 · anaerob 0.8 · Load 91"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000584718",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-20 07:49:00",
+   "distance_km": 6.61,
+   "duration": "36:54",
+   "pace": "5:35",
+   "avg_hr": 124,
+   "load": 42,
+   "te_aerobic": 2.5,
+   "te_anaerobic": 0.5,
+   "hr_zones_s": [
+    775,
+    1107,
+    266,
+    66,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Dienstag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Morgenlauf – 35' locker morgens vor dem Segeln, am Ende 5×20\" Steigerungen · 6,5 km · Ziel 5:01–5:31 /km",
+    "**Ist:** 6,6 km · 36:54 · Ø 5:35 /km · Ø HF 124",
+    "**Zonen:** Z1–2 85% · Z3 12% · Z4–5 3%",
+    "**Training Effect:** aerob 2.5 · anaerob 0.5 · Load 42"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000578456",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-19 10:13:00",
+   "distance_km": 0.0,
+   "duration": "3:45:38",
+   "pace": null,
+   "avg_hr": 118,
+   "load": 82,
+   "te_aerobic": 2.3,
+   "te_anaerobic": 0.3,
+   "hr_zones_s": [
+    7446,
+    4738,
+    1354,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 3:45:38",
+   "lines": [
+    "**Ist:** 3:45:38 · Ø HF 118",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.3 · anaerob 0.3 · Load 82"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000569585",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-18 10:26:00",
+   "distance_km": 0.0,
+   "duration": "4:15:55",
+   "pace": null,
+   "avg_hr": 123,
+   "load": 90,
+   "te_aerobic": 2.1,
+   "te_anaerobic": 0.7,
+   "hr_zones_s": [
+    8445,
+    5374,
+    1536,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 4:15:55",
+   "lines": [
+    "**Ist:** 4:15:55 · Ø HF 123",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.1 · anaerob 0.7 · Load 90"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000568082",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-17 10:43:00",
+   "distance_km": 0.0,
+   "duration": "4:46:32",
+   "pace": null,
+   "avg_hr": 118,
+   "load": 104,
+   "te_aerobic": 2.0,
+   "te_anaerobic": 0.9,
+   "hr_zones_s": [
+    9455,
+    6017,
+    1719,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 4:46:32",
+   "lines": [
+    "**Ist:** 4:46:32 · Ø HF 118",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.0 · anaerob 0.9 · Load 104"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000559317",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-16 18:54:00",
+   "distance_km": 3.28,
+   "duration": "17:40",
+   "pace": "5:23",
+   "avg_hr": 119,
+   "load": 20,
+   "te_aerobic": 1.8,
+   "te_anaerobic": 0.1,
+   "hr_zones_s": [
+    636,
+    403,
+    21,
+    0,
+    0
+   ],
+   "score": 96,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Freitag: 96/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Optional: Aktivierung – 20' ganz locker + Mobility vor dem Auslaufen · 3,5 km · Ziel 5:32–5:51 /km",
+    "**Ist:** 3,3 km · 17:40 · Ø 5:23 /km · Ø HF 119",
+    "**Zonen:** Z1–2 98% · Z3 2% · Z4–5 0%",
+    "**Training Effect:** aerob 1.8 · anaerob 0.1 · Load 20"
+   ],
+   "tips": [
+    "Ø-Tempo 5:23 schneller als der Lockerbereich (5:32–5:51 /km)."
+   ]
+  },
+  {
+   "id": "20000554064",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-16 10:06:00",
+   "distance_km": 0.0,
+   "duration": "5:17:40",
+   "pace": null,
+   "avg_hr": 117,
+   "load": 116,
+   "te_aerobic": 2.0,
+   "te_anaerobic": 0.4,
+   "hr_zones_s": [
+    10483,
+    6671,
+    1906,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 5:17:40",
+   "lines": [
+    "**Ist:** 5:17:40 · Ø HF 117",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.0 · anaerob 0.4 · Load 116"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000549052",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-15 18:27:00",
+   "distance_km": 3.21,
+   "duration": "17:15",
+   "pace": "5:23",
+   "avg_hr": 118,
+   "load": 19,
+   "te_aerobic": 1.5,
+   "te_anaerobic": 0.2,
+   "hr_zones_s": [
+    621,
+    393,
+    21,
+    0,
+    0
+   ],
+   "score": 96,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Donnerstag: 96/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Optional: Aktivierung – 20' ganz locker + Mobility vor dem Auslaufen · 3,5 km · Ziel 5:32–5:51 /km",
+    "**Ist:** 3,2 km · 17:15 · Ø 5:23 /km · Ø HF 118",
+    "**Zonen:** Z1–2 98% · Z3 2% · Z4–5 0%",
+    "**Training Effect:** aerob 1.5 · anaerob 0.2 · Load 19"
+   ],
+   "tips": [
+    "Ø-Tempo 5:23 schneller als der Lockerbereich (5:32–5:51 /km)."
+   ]
+  },
+  {
+   "id": "20000546771",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-15 10:40:00",
+   "distance_km": 0.0,
+   "duration": "4:36:36",
+   "pace": null,
+   "avg_hr": 121,
+   "load": 94,
+   "te_aerobic": 2.2,
+   "te_anaerobic": 0.4,
+   "hr_zones_s": [
+    9128,
+    5809,
+    1660,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 4:36:36",
+   "lines": [
+    "**Ist:** 4:36:36 · Ø HF 121",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.2 · anaerob 0.4 · Load 94"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000542228",
+   "name": "Radfahrt",
+   "sport": "bike",
+   "sport_label": "Rad",
+   "start": "2026-10-14 18:54:00",
+   "distance_km": 76.5,
+   "duration": "2:29:50",
+   "pace": null,
+   "avg_hr": 119,
+   "load": 182,
+   "te_aerobic": 2.5,
+   "te_anaerobic": 0.3,
+   "hr_zones_s": [
+    2697,
+    5394,
+    899,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Rad am Mittwoch: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Rad Grundlage – GA1, Trittfrequenz 85–95, Puls Zone 2 · 150'",
+    "**Ist:** 76,5 km · 2:29:50 · Ø 30,6 km/h · Ø 162 W · Ø HF 119",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.5 · anaerob 0.3 · Load 182"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000535092",
+   "name": "Krafttraining",
+   "sport": "strength",
+   "sport_label": "Kraft",
+   "start": "2026-10-13 07:32:00",
+   "distance_km": 0.0,
+   "duration": "1:00:34",
+   "pace": null,
+   "avg_hr": 123,
+   "load": 33,
+   "te_aerobic": 1.5,
+   "te_anaerobic": 0.5,
+   "hr_zones_s": [
+    2181,
+    1090,
+    363,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Kraft am Dienstag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Krafttraining A – Maximalkraft Beine/Hüfte: Kniebeuge, Kreuzheben, Split Squats, Wadenheben · 60'",
+    "**Ist:** 1:00:34 · Ø HF 123",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 1.5 · anaerob 0.5 · Load 33"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000530516",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-11 18:06:00",
+   "distance_km": 3.7,
+   "duration": "20:21",
+   "pace": "5:30",
+   "avg_hr": 117,
+   "load": 22,
+   "te_aerobic": 1.6,
+   "te_anaerobic": 0,
+   "hr_zones_s": [
+    733,
+    464,
+    24,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Sonntag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Optional: Aktivierung – 20' ganz locker + Mobility vor dem Auslaufen · 3,5 km · Ziel 5:35–5:53 /km",
+    "**Ist:** 3,7 km · 20:21 · Ø 5:30 /km · Ø HF 117",
+    "**Zonen:** Z1–2 98% · Z3 2% · Z4–5 0%",
+    "**Training Effect:** aerob 1.6 · anaerob 0.0 · Load 22"
+   ],
+   "tips": [
+    "Ø-Tempo 5:30 schneller als der Lockerbereich (5:35–5:53 /km)."
+   ]
+  },
+  {
+   "id": "20000528168",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-11 10:10:00",
+   "distance_km": 0.0,
+   "duration": "4:51:02",
+   "pace": null,
+   "avg_hr": 119,
+   "load": 110,
+   "te_aerobic": 2.3,
+   "te_anaerobic": 0.5,
+   "hr_zones_s": [
+    9604,
+    6112,
+    1746,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 4:51:02",
+   "lines": [
+    "**Ist:** 4:51:02 · Ø HF 119",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.3 · anaerob 0.5 · Load 110"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000522230",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-10 18:21:00",
+   "distance_km": 3.12,
+   "duration": "17:10",
+   "pace": "5:30",
+   "avg_hr": 118,
+   "load": 18,
+   "te_aerobic": 2.0,
+   "te_anaerobic": 0,
+   "hr_zones_s": [
+    618,
+    391,
+    21,
+    0,
+    0
+   ],
+   "score": 99,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Samstag: 99/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Optional: Aktivierung – 20' ganz locker + Mobility vor dem Auslaufen · 3,5 km · Ziel 5:35–5:53 /km",
+    "**Ist:** 3,1 km · 17:10 · Ø 5:30 /km · Ø HF 118",
+    "**Zonen:** Z1–2 98% · Z3 2% · Z4–5 0%",
+    "**Training Effect:** aerob 2.0 · anaerob 0.0 · Load 18"
+   ],
+   "tips": [
+    "Umfang bei 89% des Plans – kein Nachholen, die Woche läuft normal weiter.",
+    "Ø-Tempo 5:30 schneller als der Lockerbereich (5:35–5:53 /km)."
+   ]
+  },
+  {
+   "id": "20000516486",
+   "name": "Segeln",
+   "sport": "sail",
+   "sport_label": "Segeln",
+   "start": "2026-10-10 10:28:00",
+   "distance_km": 0.0,
+   "duration": "5:14:54",
+   "pace": null,
+   "avg_hr": 121,
+   "load": 107,
+   "te_aerobic": 2.1,
+   "te_anaerobic": 0.4,
+   "hr_zones_s": [
+    10391,
+    6613,
+    1889,
+    0,
+    0
+   ],
+   "score": null,
+   "rating": "Segeln",
+   "headline": "Segeln erfasst: 5:14:54",
+   "lines": [
+    "**Ist:** 5:14:54 · Ø HF 121",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.1 · anaerob 0.4 · Load 107"
+   ],
+   "tips": [
+    "Segeln hat Priorität – die Belastung zählt in Fitness/Ermüdung. Morgen früh entscheidet die Readiness, wie viel Laufen drin ist."
+   ]
+  },
+  {
+   "id": "20000514214",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-09 18:24:00",
+   "distance_km": 8.93,
+   "duration": "49:14",
+   "pace": "5:31",
+   "avg_hr": 128,
+   "load": 59,
+   "te_aerobic": 3.5,
+   "te_anaerobic": 0.7,
+   "hr_zones_s": [
+    591,
+    1625,
+    532,
+    207,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Freitag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Langer Lauf – locker, gerne im Gelände · 9,2 km · Ziel 5:04–5:35 /km",
+    "**Ist:** 8,9 km · 49:14 · Ø 5:31 /km · Ø HF 128",
+    "**Zonen:** Z1–2 75% · Z3 18% · Z4–5 7%",
+    "**Training Effect:** aerob 3.5 · anaerob 0.7 · Load 59"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000508750",
+   "name": "Rudern",
+   "sport": "row",
+   "sport_label": "Rudern",
+   "start": "2026-10-09 18:05:00",
+   "distance_km": 0.0,
+   "duration": "1:19:07",
+   "pace": null,
+   "avg_hr": 120,
+   "load": 44,
+   "te_aerobic": 2.5,
+   "te_anaerobic": 0.0,
+   "hr_zones_s": [
+    1424,
+    2848,
+    475,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Rudern am Freitag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Rudern/Rad locker – Zone 1–2, locker bleiben · 75'",
+    "**Ist:** 1:19:07 · Ø HF 120",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.5 · anaerob 0.0 · Load 44"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000500445",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-08 18:13:00",
+   "distance_km": 7.05,
+   "duration": "38:25",
+   "pace": "5:27",
+   "avg_hr": 134,
+   "load": 62,
+   "te_aerobic": 3.0,
+   "te_anaerobic": 0.1,
+   "hr_zones_s": [
+    346,
+    922,
+    691,
+    346,
+    0
+   ],
+   "score": 82,
+   "rating": "Gut umgesetzt",
+   "headline": "Lauf am Donnerstag: 82/100 – Gut umgesetzt",
+   "lines": [
+    "**Plan:** Lockerer Lauf – ruhig, nach Gefühl · 6,5 km · Ziel 5:04–5:35 /km",
+    "**Ist:** 7,0 km · 38:25 · Ø 5:27 /km · Ø HF 134",
+    "**Zonen:** Z1–2 55% · Z3 30% · Z4–5 15%",
+    "**Training Effect:** aerob 3.0 · anaerob 0.1 · Load 62"
+   ],
+   "tips": [
+    "Nur 55% in Z1–2 (Ziel ≥ 75%) – locker heißt wirklich locker, sonst fehlt die Frische für die Schlüsseleinheiten."
+   ]
+  },
+  {
+   "id": "20000494710",
+   "name": "Radfahrt",
+   "sport": "bike",
+   "sport_label": "Rad",
+   "start": "2026-10-07 18:33:00",
+   "distance_km": 70.46,
+   "duration": "2:22:33",
+   "pace": null,
+   "avg_hr": 118,
+   "load": 148,
+   "te_aerobic": 2.6,
+   "te_anaerobic": 0.4,
+   "hr_zones_s": [
+    2566,
+    5132,
+    855,
+    0,
+    0
+   ],
+   "score": 94,
+   "rating": "Volltreffer",
+   "headline": "Rad am Mittwoch: 94/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Rad Grundlage – GA1, Trittfrequenz 85–95, Puls Zone 2 · 120'",
+    "**Ist:** 70,5 km · 2:22:33 · Ø 29,7 km/h · Ø 150 W · Ø HF 118",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.6 · anaerob 0.4 · Load 148"
+   ],
+   "tips": [
+    "Umfang bei 119% des Plans – mehr ist nicht automatisch besser, Erholung sichern."
+   ]
+  },
+  {
+   "id": "20000486251",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-06 18:03:00",
+   "distance_km": 6.05,
+   "duration": "33:30",
+   "pace": "5:32",
+   "avg_hr": 123,
+   "load": 44,
+   "te_aerobic": 2.5,
+   "te_anaerobic": 0.2,
+   "hr_zones_s": [
+    704,
+    1005,
+    241,
+    60,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Dienstag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Lockerer Lauf + Steigerungen – locker, am Ende 6×20\" Steigerungen · 6,5 km · Ziel 5:04–5:35 /km",
+    "**Ist:** 6,1 km · 33:30 · Ø 5:32 /km · Ø HF 123",
+    "**Zonen:** Z1–2 85% · Z3 12% · Z4–5 3%",
+    "**Training Effect:** aerob 2.5 · anaerob 0.2 · Load 44"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000492315",
+   "name": "Krafttraining",
+   "sport": "strength",
+   "sport_label": "Kraft",
+   "start": "2026-10-06 07:50:00",
+   "distance_km": 0.0,
+   "duration": "45:58",
+   "pace": null,
+   "avg_hr": 120,
+   "load": 26,
+   "te_aerobic": 1.6,
+   "te_anaerobic": 1.0,
+   "hr_zones_s": [
+    1655,
+    827,
+    276,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Kraft am Dienstag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Krafttraining A – Kraft-Erhalt: Kniebeuge, Kreuzheben rumänisch, Step-ups – 2–3 Sätze schwer · 45'",
+    "**Ist:** 45:58 · Ø HF 120",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 1.6 · anaerob 1.0 · Load 26"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000485080",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-04 18:02:00",
+   "distance_km": 8.18,
+   "duration": "44:40",
+   "pace": "5:28",
+   "avg_hr": 128,
+   "load": 53,
+   "te_aerobic": 3.6,
+   "te_anaerobic": 0.6,
+   "hr_zones_s": [
+    536,
+    1474,
+    482,
+    188,
+    0
+   ],
+   "score": 99,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Sonntag: 99/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Langer Lauf – locker, gerne im Gelände · 9,2 km · Ziel 5:08–5:39 /km",
+    "**Ist:** 8,2 km · 44:40 · Ø 5:28 /km · Ø HF 128",
+    "**Zonen:** Z1–2 75% · Z3 18% · Z4–5 7%",
+    "**Training Effect:** aerob 3.6 · anaerob 0.6 · Load 53"
+   ],
+   "tips": [
+    "Umfang bei 89% des Plans – kein Nachholen, die Woche läuft normal weiter."
+   ]
+  },
+  {
+   "id": "20000482416",
+   "name": "Radfahrt",
+   "sport": "bike",
+   "sport_label": "Rad",
+   "start": "2026-10-03 18:44:00",
+   "distance_km": 32.87,
+   "duration": "1:09:42",
+   "pace": null,
+   "avg_hr": 118,
+   "load": 84,
+   "te_aerobic": 2.1,
+   "te_anaerobic": 0.3,
+   "hr_zones_s": [
+    1255,
+    2509,
+    418,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Rad am Samstag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Rad locker (optional) – Zone 1–2 · 75'",
+    "**Ist:** 32,9 km · 1:09:42 · Ø 28,3 km/h · Ø 165 W · Ø HF 118",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.1 · anaerob 0.3 · Load 84"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000476145",
+   "name": "Krafttraining",
+   "sport": "strength",
+   "sport_label": "Kraft",
+   "start": "2026-10-02 07:37:00",
+   "distance_km": 0.0,
+   "duration": "42:18",
+   "pace": null,
+   "avg_hr": 118,
+   "load": 22,
+   "te_aerobic": 1.8,
+   "te_anaerobic": 0.6,
+   "hr_zones_s": [
+    1523,
+    761,
+    254,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Kraft am Freitag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Krafttraining B – Rumpf & Stabi + Sprungkraft (Pogo Jumps, Box Jumps, Skippings) · 45'",
+    "**Ist:** 42:18 · Ø HF 118",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 1.8 · anaerob 0.6 · Load 22"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000473409",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-10-01 18:42:00",
+   "distance_km": 6.28,
+   "duration": "35:49",
+   "pace": "5:42",
+   "avg_hr": 124,
+   "load": 44,
+   "te_aerobic": 2.6,
+   "te_anaerobic": 0.3,
+   "hr_zones_s": [
+    752,
+    1075,
+    258,
+    64,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Lauf am Donnerstag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Lockerer Lauf – ruhig, nach Gefühl · 6,5 km · Ziel 5:08–5:39 /km",
+    "**Ist:** 6,3 km · 35:49 · Ø 5:42 /km · Ø HF 124",
+    "**Zonen:** Z1–2 85% · Z3 12% · Z4–5 3%",
+    "**Training Effect:** aerob 2.6 · anaerob 0.3 · Load 44"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000465431",
+   "name": "Radfahrt",
+   "sport": "bike",
+   "sport_label": "Rad",
+   "start": "2026-09-30 18:10:00",
+   "distance_km": 74.56,
+   "duration": "2:25:00",
+   "pace": null,
+   "avg_hr": 119,
+   "load": 182,
+   "te_aerobic": 2.2,
+   "te_anaerobic": 0.2,
+   "hr_zones_s": [
+    2610,
+    5220,
+    870,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Rad am Mittwoch: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Rad Grundlage – GA1, Trittfrequenz 85–95, Puls Zone 2 · 150'",
+    "**Ist:** 74,6 km · 2:25:00 · Ø 30,9 km/h · Ø 145 W · Ø HF 119",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 2.2 · anaerob 0.2 · Load 182"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000457222",
+   "name": "Krafttraining",
+   "sport": "strength",
+   "sport_label": "Kraft",
+   "start": "2026-09-29 07:54:00",
+   "distance_km": 0.0,
+   "duration": "47:50",
+   "pace": null,
+   "avg_hr": 119,
+   "load": 28,
+   "te_aerobic": 1.3,
+   "te_anaerobic": 0.9,
+   "hr_zones_s": [
+    1722,
+    861,
+    287,
+    0,
+    0
+   ],
+   "score": 100,
+   "rating": "Volltreffer",
+   "headline": "Kraft am Dienstag: 100/100 – Volltreffer",
+   "lines": [
+    "**Plan:** Krafttraining A – Kraft-Erhalt: Kniebeuge, Kreuzheben rumänisch, Step-ups – 2–3 Sätze schwer · 45'",
+    "**Ist:** 47:50 · Ø HF 119",
+    "**Zonen:** Z1–2 90% · Z3 10% · Z4–5 0%",
+    "**Training Effect:** aerob 1.3 · anaerob 0.9 · Load 28"
+   ],
+   "tips": [
+    "Genau so geplant umgesetzt – weiter so."
+   ]
+  },
+  {
+   "id": "20000450081",
+   "name": "Lauf",
+   "sport": "run",
+   "sport_label": "Lauf",
+   "start": "2026-09-27 18:56:00",
+   "distance_km": 15.84,
+   "duration": "1:24:29",
+   "pace": "5:20",
+   "avg_hr": 127,
+   "load": 107,
+   "te_aerobic": 3.4,
+   "te_anaerobic": 0.4,
+   "hr_zones_s": [
+    1014,
+    2788,
+    912,
+    355,
+    0
+   ],
+   "score": null,
+   "rating": "Ungeplant",
+   "headline": "Lauf: ungeplante Einheit",
+   "lines": [
+    "**Ist:** 15,8 km · 1:24:29 · Ø 5:20 /km · Ø HF 127",
+    "**Zonen:** Z1–2 75% · Z3 18% · Z4–5 7%",
+    "**Training Effect:** aerob 3.4 · anaerob 0.4 · Load 107"
+   ],
+   "tips": [
+    "War nicht im Plan – die Belastung fließt in Fitness/Ermüdung ein und wird bei der Wochenanpassung berücksichtigt."
+   ]
+  }
+ ],
+ "log": [
+  {
+   "at": "2026-10-19T05:30",
+   "kind": "tempo",
+   "text": "VDOT 51.1 → 51.3 (Laktatschwelle 4:09/km)"
+  },
+  {
+   "at": "2026-10-12T05:30",
+   "kind": "umfang",
+   "text": "Umfang ab 12.10.: 100% → 103% (alles umgesetzt, gut erholt)"
+  },
+  {
+   "at": "2026-10-12T05:30",
+   "kind": "tempo",
+   "text": "VDOT 50.6 → 51.1 (Laktatschwelle 4:09/km)"
+  },
+  {
+   "at": "2026-10-07T05:30",
+   "kind": "tag",
+   "text": "Mittwoch: Gelbe Ampel – Nebeneinheiten etwas kürzer."
+  },
+  {
+   "at": "2026-10-05T05:30",
+   "kind": "tempo",
+   "text": "VDOT 49.8 → 50.6 (Laktatschwelle 4:09/km)"
+  },
+  {
+   "at": "2026-10-02T05:30",
+   "kind": "tag",
+   "text": "Freitag: Gelbe Ampel – Nebeneinheiten etwas kürzer."
+  },
+  {
+   "at": "2026-10-01T05:30",
+   "kind": "tempo",
+   "text": "VDOT 49.0 → 49.8 (Laktatschwelle 4:09/km)"
+  }
+ ],
+ "last_week": {
+  "week": "2026-10-12",
+  "compliance": null,
+  "run_ratio": null,
+  "done_km": 6.5,
+  "planned_km": 23.0,
+  "avg_readiness": 64.85714285714286,
+  "reason": "Plan bleibt wie er ist"
+ }
+}

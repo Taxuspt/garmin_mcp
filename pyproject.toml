@@ -16,11 +16,14 @@ dependencies = [
     # MCPServer). Cap until the server is ported to the new API.
     "mcp>=1.28.1,<2",
     "fitparse>=1.2.0",
+    # garmin-coach: passphrase encryption of state and dashboard data.
+    "cryptography>=41",
 ]
 
 [project.scripts]
 garmin-mcp = "garmin_mcp:main"
 garmin-mcp-auth = "garmin_mcp.auth_cli:main"
+garmin-coach = "garmin_mcp.coach.sync:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/garmin_mcp"]

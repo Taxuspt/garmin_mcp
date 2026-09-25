@@ -1,0 +1,98 @@
+name: Garmin Coach
+
+# Syncs Garmin every 30 minutes (06–23 Uhr), adapts the plan, rates new
+# sessions, pushes to ntfy and redeploys the dashboard to GitHub Pages.
+# Scheduled runs only fire from the default branch.
+
+on:
+  schedule:
+    - cron: "*/30 4-21 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "dashboard/**"
+      - "coach/**"
+      - "src/garmin_mcp/coach/**"
+      - ".github/workflows/coach.yml"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: garmin-coach
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
+      COACH_PASSPHRASE: ${{ secrets.COACH_PASSPHRASE }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+      COACH_DASHBOARD_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        run: |
+          if [ -z "$COACH_PASSPHRASE" ]; then
+            echo "::error::Secret COACH_PASSPHRASE fehlt – ohne Passphrase würden Gesundheitsdaten unverschlüsselt veröffentlicht."
+            exit 1
+          fi
+          if [ -z "$GARMIN_TOKENS" ]; then
+            echo "::warning::Secret GARMIN_TOKENS fehlt – es wird nur das Dashboard ohne neue Daten veröffentlicht."
+          fi
+
+      - name: Check out state branch
+        run: |
+          git config user.name "garmin-coach[bot]"
+          git config user.email "garmin-coach@users.noreply.github.com"
+          if git fetch --depth=1 origin coach-data:coach-data 2>/dev/null; then
+            git worktree add .coach-data coach-data
+          else
+            git worktree add --orphan -b coach-data .coach-data
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Sync Garmin, adapt plan, notify
+        if: env.GARMIN_TOKENS != ''
+        run: uv run garmin-coach sync --state-dir .coach-data --site-dir _site
+
+      - name: Keep last dashboard data when sync was skipped
+        run: |
+          mkdir -p _site
+          if [ ! -f _site/data.enc ] && [ -f .coach-data/data.enc ]; then cp .coach-data/data.enc _site/; fi
+
+      - name: Save state
+        run: |
+          [ -f _site/data.enc ] && cp _site/data.enc .coach-data/data.enc
+          cd .coach-data
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -q -m "coach: sync $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push -q origin coach-data
+          fi
+
+      - name: Build site
+        run: cp -r dashboard/. _site/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
