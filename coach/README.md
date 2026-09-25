@@ -18,25 +18,25 @@ Segeln hat Priorität – die Termine aus der *Team HL Planungstabelle 26/27* si
 
 Alles läuft alle 30 Minuten (06–23 Uhr) in GitHub Actions (`.github/workflows/coach.yml`).
 
-## Einrichtung (einmalig, ca. 15 Minuten)
+## Einrichtung (einmalig, geht komplett am iPad/Handy)
 
-1. **Garmin-Tokens erzeugen** (lokal, mit MFA):
-   ```bash
-   uv run garmin-mcp-auth            # meldet dich an, speichert ~/.garminconnect
-   uv run garmin-coach export-tokens  # gibt die Tokens als base64 aus
-   ```
-2. **ntfy-App** installieren (iOS/Android) → „Thema abonnieren“ → einen langen, zufälligen Namen wählen, z. B. `karl-coach-7f3k9q2m`. Wer den Namen kennt, kann mitlesen – also nicht teilen.
-3. **GitHub-Secrets** anlegen (*Settings → Secrets and variables → Actions*):
+1. **ntfy-App** installieren → „+“ → langes, zufälliges Thema abonnieren (z. B. `karl-coach-7f3k9q2m`).
+2. **GitHub-Secrets** anlegen (*Settings → Secrets and variables → Actions*):
    | Secret | Inhalt |
    |---|---|
-   | `GARMIN_TOKENS` | Ausgabe von `garmin-coach export-tokens` |
-   | `COACH_PASSPHRASE` | eine lange Passphrase – damit entsperrst du das Dashboard |
-   | `NTFY_TOPIC` | dein ntfy-Thema aus Schritt 2 |
-4. **GitHub Pages** aktivieren: *Settings → Pages → Source: GitHub Actions*. (Bei privaten Repos braucht Pages einen bezahlten GitHub-Plan; die Daten sind ohnehin verschlüsselt, das Repo kann also auch öffentlich sein.)
-5. Den Branch nach `main` mergen – geplante Workflows laufen nur vom Standard-Branch. Danach *Actions → Garmin Coach → Run workflow* einmal manuell starten.
-6. Auf dem Handy `https://karllander-cell.github.io/garmin_mcp/` öffnen → Passphrase eingeben → *Teilen → Zum Home-Bildschirm*.
+   | `GARMIN_EMAIL` | deine Garmin-Connect-E-Mail |
+   | `GARMIN_PASSWORD` | dein Garmin-Connect-Passwort |
+   | `COACH_PASSPHRASE` | lange Passphrase – damit entsperrst du das Dashboard |
+   | `NTFY_TOPIC` | dein ntfy-Thema |
+3. **Pages** aktivieren: *Settings → Pages → Source: GitHub Actions* (privates Repo braucht einen bezahlten Plan → sonst Repo öffentlich machen; die Daten sind verschlüsselt).
+4. Branch nach `main` mergen (geplante Workflows laufen nur vom Standard-Branch).
+5. *Actions → Garmin Login → Run workflow*. Fragt Garmin nach einem Code, kommt eine ntfy-Push „Garmin-Code benötigt“ → auf **Code senden** tippen → nur die 6 Ziffern abschicken.
+6. *Actions → Garmin Coach → Run workflow*.
+7. `https://karllander-cell.github.io/garmin_mcp/` in Safari öffnen → Passphrase → *Teilen → Zum Home-Bildschirm*.
 
-Die Tokens werden bei jedem Lauf erneuert und verschlüsselt im Branch `coach-data` gespeichert. Laufen sie trotzdem ab, kommt eine Push-Nachricht – dann Schritt 1 wiederholen und das Secret ersetzen.
+Die Anmeldung wird bei jedem Lauf erneuert und verschlüsselt im Branch `coach-data` gespeichert. Läuft sie ab, versucht der Coach es erst selbst mit E-Mail/Passwort; braucht Garmin einen Code, kommt eine Push → Schritt 5 wiederholen.
+
+*Alternative am Computer:* `uv run garmin-mcp-auth` und `uv run garmin-coach export-tokens` → Ausgabe als Secret `GARMIN_TOKENS` (dann sind E-Mail/Passwort als Secrets nicht nötig).
 
 ## Anpassen
 

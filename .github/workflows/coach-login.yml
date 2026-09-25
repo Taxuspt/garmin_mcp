@@ -1,0 +1,68 @@
+name: Garmin Login
+
+# One-off Garmin sign-in without a computer: uses the GARMIN_EMAIL /
+# GARMIN_PASSWORD secrets. If Garmin asks for a code, a push arrives via
+# ntfy – answer it with the 6-digit code (10 minutes time).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: garmin-coach
+  cancel-in-progress: false
+
+jobs:
+  login:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+      GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+      COACH_PASSPHRASE: ${{ secrets.COACH_PASSPHRASE }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check secrets
+        run: |
+          missing=""
+          for s in GARMIN_EMAIL GARMIN_PASSWORD COACH_PASSPHRASE NTFY_TOPIC; do
+            [ -z "${!s}" ] && missing="$missing $s"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Fehlende Secrets:$missing"
+            exit 1
+          fi
+
+      - name: Check out state branch
+        run: |
+          git config user.name "garmin-coach[bot]"
+          git config user.email "garmin-coach@users.noreply.github.com"
+          if git fetch --depth=1 origin coach-data:coach-data 2>/dev/null; then
+            git worktree add .coach-data coach-data
+          else
+            git worktree add --orphan -b coach-data .coach-data
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install
+        run: uv sync --frozen
+
+      - name: Log in to Garmin
+        run: uv run garmin-coach login --state-dir .coach-data
+
+      - name: Save tokens (encrypted)
+        run: |
+          cd .coach-data
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -q -m "coach: garmin login $(date -u +%Y-%m-%dT%H:%MZ)"
+            git push -q origin coach-data
+          fi

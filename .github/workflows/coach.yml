@@ -34,6 +34,8 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     env:
       GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
+      GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+      GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
       COACH_PASSPHRASE: ${{ secrets.COACH_PASSPHRASE }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
@@ -46,9 +48,6 @@ jobs:
           if [ -z "$COACH_PASSPHRASE" ]; then
             echo "::error::Secret COACH_PASSPHRASE fehlt – ohne Passphrase würden Gesundheitsdaten unverschlüsselt veröffentlicht."
             exit 1
-          fi
-          if [ -z "$GARMIN_TOKENS" ]; then
-            echo "::warning::Secret GARMIN_TOKENS fehlt – es wird nur das Dashboard ohne neue Daten veröffentlicht."
           fi
 
       - name: Check out state branch
@@ -69,8 +68,12 @@ jobs:
         run: uv sync --frozen
 
       - name: Sync Garmin, adapt plan, notify
-        if: env.GARMIN_TOKENS != ''
-        run: uv run garmin-coach sync --state-dir .coach-data --site-dir _site
+        run: |
+          if [ -z "$GARMIN_TOKENS" ] && [ -z "$GARMIN_EMAIL" ] && [ ! -f .coach-data/tokens.enc ]; then
+            echo "::warning::Noch keine Garmin-Anmeldung – bitte zuerst den Workflow 'Garmin Login' starten."
+            exit 0
+          fi
+          uv run garmin-coach sync --state-dir .coach-data --site-dir _site
 
       - name: Keep last dashboard data when sync was skipped
         run: |

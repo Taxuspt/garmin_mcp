@@ -467,8 +467,9 @@ def cmd_sync(args) -> int:
 
     tokens_blob = read_blob(state_dir / "tokens", passphrase)
     candidates = [t for t in ((tokens_blob or {}).get("tokens"), os.getenv("GARMIN_TOKENS")) if t]
-    if not candidates:
-        print("No Garmin tokens: set GARMIN_TOKENS (output of garmin-mcp-auth).", file=sys.stderr)
+    has_credentials = bool(os.getenv("GARMIN_EMAIL") and os.getenv("GARMIN_PASSWORD"))
+    if not candidates and not has_credentials:
+        print("No Garmin tokens: run the 'Garmin Login' workflow or set GARMIN_TOKENS.", file=sys.stderr)
         return 2
     client, last_err = None, None
     for tokens in candidates:
@@ -477,12 +478,20 @@ def cmd_sync(args) -> int:
             break
         except Exception as err:
             last_err = err
+    if client is None and has_credentials:
+        # Tokens gone or expired: a plain password login works unless Garmin asks for MFA.
+        from .login import login_with_credentials
+
+        try:
+            client = login_with_credentials(allow_mfa=False)
+        except Exception as err:
+            last_err = err
     if client is None:
         print(f"Garmin login failed: {last_err}", file=sys.stderr)
         marker = state_dir / "login_failed"
         if not marker.exists() or marker.read_text().strip() != now.date().isoformat():
             # Once a day is enough; the workflow retries every 30 minutes.
-            notify.send("Garmin-Coach: Login fehlgeschlagen", "Die Garmin-Tokens sind abgelaufen. Bitte `garmin-mcp-auth` lokal ausführen und das Secret GARMIN_TOKENS erneuern.", tags=["warning"], priority=4)
+            notify.send("Garmin-Coach: Login fehlgeschlagen", "Die Garmin-Anmeldung ist abgelaufen. Auf GitHub unter **Actions → Garmin Login → Run workflow** neu anmelden.", tags=["warning"], priority=4)
             state_dir.mkdir(parents=True, exist_ok=True)
             marker.write_text(now.date().isoformat())
         return 1
@@ -520,6 +529,28 @@ def cmd_demo(args) -> int:
     return 0
 
 
+def cmd_login(args) -> int:
+    """Log in with GARMIN_EMAIL/GARMIN_PASSWORD (MFA code via ntfy) and store the tokens."""
+    from .login import login_with_credentials
+
+    passphrase = os.getenv("COACH_PASSPHRASE")
+    if not passphrase:
+        print("COACH_PASSPHRASE is not set.", file=sys.stderr)
+        return 2
+    try:
+        client = login_with_credentials(allow_mfa=True)
+    except Exception as err:
+        print(f"Garmin login failed: {err}", file=sys.stderr)
+        notify.send("Garmin-Login fehlgeschlagen", f"{str(err)[:300]}\nBitte E-Mail/Passwort in den GitHub-Secrets prüfen und erneut starten.", tags=["warning"], priority=4)
+        return 1
+    state_dir = Path(args.state_dir)
+    write_blob(state_dir / "tokens", {"tokens": garmin_source.dump_tokens(client), "saved": datetime.now().isoformat()}, passphrase)
+    (state_dir / "login_failed").unlink(missing_ok=True)
+    notify.send("✅ Garmin verbunden", "Die Anmeldung hat geklappt. Der Coach gleicht ab jetzt alle 30 Minuten ab.", tags=["white_check_mark"])
+    print("[coach] Garmin login ok, tokens stored", file=sys.stderr)
+    return 0
+
+
 def cmd_encrypt_tokens(args) -> int:
     """Print base64 of the local Garmin token file, ready for the GARMIN_TOKENS secret."""
     import base64
@@ -541,6 +572,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-push", action="store_true")
     p.add_argument("--allow-plain", action="store_true", help="ohne COACH_PASSPHRASE unverschlüsselt schreiben (nur lokal)")
     p.set_defaults(fn=cmd_sync)
+    p = sub.add_parser("login", help="Mit GARMIN_EMAIL/GARMIN_PASSWORD anmelden (Code per ntfy) und Tokens speichern")
+    p.add_argument("--state-dir", default=".coach-data")
+    p.set_defaults(fn=cmd_login)
     p = sub.add_parser("demo", help="Demo-Daten für das Dashboard erzeugen (ohne Garmin)")
     p.add_argument("--now", default="2026-10-22T19:30:00")
     p.add_argument("--out", default="dashboard/demo-data.json")

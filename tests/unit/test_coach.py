@@ -144,3 +144,68 @@ def test_full_pipeline_with_fake_garmin(cfg, monkeypatch):
     assert len(view["plan"]) == len(build_plan(cfg, cfg.start_vdot))
     assert view["pmc"] and view["week"]["days"]
     json.dumps(view)  # dashboard payload must be serialisable
+
+
+# ---------------------------------------------------------------- terminal-free login
+
+class _Resp:
+    def __init__(self, text):
+        self.text = text
+
+
+def test_poll_for_code_ignores_non_codes(monkeypatch):
+    from garmin_mcp.coach import login
+
+    monkeypatch.setenv("NTFY_TOPIC", "t")
+    lines = "\n".join([
+        json.dumps({"event": "open"}),
+        json.dumps({"event": "message", "message": "🔐 Garmin-Code benötigt 123456 bitte"}),
+        json.dumps({"event": "message", "message": " 482913 "}),
+    ])
+    monkeypatch.setattr(login.requests, "get", lambda *a, **k: _Resp(lines))
+    assert login.poll_for_code(since=0, timeout_s=1, interval_s=0) == "482913"
+
+
+def test_login_command_stores_encrypted_tokens(tmp_path, monkeypatch):
+    from garmin_mcp.coach import login, sync
+
+    class FakeClient:
+        def dumps(self):
+            return '{"di_token": "abc"}'
+
+    class FakeGarminLogin:
+        def __init__(self, email, password, prompt_mfa):
+            self.client, self.prompt_mfa = FakeClient(), prompt_mfa
+
+        def login(self):
+            assert self.prompt_mfa() == "111222"
+
+    sent = []
+    monkeypatch.setattr(login, "Garmin", FakeGarminLogin)
+    monkeypatch.setattr(login, "ask_for_code", lambda: "111222")
+    monkeypatch.setattr("garmin_mcp.coach.notify.send", lambda title, msg, **kw: sent.append(title) or True)
+    for k, v in {"GARMIN_EMAIL": "a@b.de", "GARMIN_PASSWORD": "pw", "COACH_PASSPHRASE": "pass"}.items():
+        monkeypatch.setenv(k, v)
+    assert sync.main(["login", "--state-dir", str(tmp_path)]) == 0
+    blob = crypto.decrypt_json((tmp_path / "tokens.enc").read_text(), "pass")
+    assert blob["tokens"] == '{"di_token": "abc"}'
+    assert any("verbunden" in t for t in sent)
+
+
+def test_sync_falls_back_to_password_login(tmp_path, monkeypatch, cfg):
+    from garmin_mcp.coach import garmin_source, login, sync
+
+    fake = FakeGarmin(cfg, datetime.now())
+    fake.client = type("C", (), {"dumps": lambda self: "{}"})()
+
+    def broken(_tokens):
+        raise RuntimeError("expired")
+
+    monkeypatch.setattr(garmin_source, "login", broken)
+    monkeypatch.setattr(login, "login_with_credentials", lambda allow_mfa: fake)
+    monkeypatch.setattr("garmin_mcp.coach.notify.send", lambda *a, **k: True)
+    for k, v in {"GARMIN_TOKENS": "old", "GARMIN_EMAIL": "a@b.de", "GARMIN_PASSWORD": "pw", "COACH_PASSPHRASE": "pass"}.items():
+        monkeypatch.setenv(k, v)
+    rc = sync.main(["sync", "--state-dir", str(tmp_path / "st"), "--site-dir", str(tmp_path / "site"), "--no-push"])
+    assert rc == 0
+    assert (tmp_path / "site" / "data.enc").exists()

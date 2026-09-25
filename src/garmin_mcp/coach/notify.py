@@ -6,7 +6,8 @@ import sys
 import requests
 
 
-def send(title: str, message: str, tags: list[str] | None = None, priority: int = 3, click: str | None = None) -> bool:
+def send(title: str, message: str, tags: list[str] | None = None, priority: int = 3, click: str | None = None,
+         actions: list[dict] | None = None) -> bool:
     """Publish to the ntfy topic from ``NTFY_TOPIC``; no-op when unset.
 
     Uses JSON publishing so umlauts and emoji in the title survive (HTTP
@@ -21,6 +22,8 @@ def send(title: str, message: str, tags: list[str] | None = None, priority: int 
     click = click or os.getenv("COACH_DASHBOARD_URL")
     if click:
         payload["click"] = click
+    if actions:
+        payload["actions"] = actions
     headers = {}
     if os.getenv("NTFY_TOKEN"):
         headers["Authorization"] = f"Bearer {os.environ['NTFY_TOKEN']}"
