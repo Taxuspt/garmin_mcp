@@ -11,7 +11,6 @@ import sys
 import time
 import pytest
 from datetime import datetime, timezone
-from urllib.parse import quote
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
@@ -35,8 +34,13 @@ def garmin():
 
 def _search_foods(garmin, name):
     r = garmin.connectapi(
-        f"/nutrition-service/customFood"
-        f"?searchExpression={quote(name)}&start=0&limit=20&includeContent=true"
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": name,
+            "start": 0,
+            "limit": 20,
+            "includeContent": "true",
+        },
     )
     return r.get("customFoods", []) if isinstance(r, dict) else []
 
@@ -87,8 +91,13 @@ def _delete_log_entry(garmin, log_id, date):
 def _upsert_and_log(garmin, food_name, calories, meal_id):
     """Replicate the fixed upsert_and_log find-or-create-then-log logic."""
     r = garmin.connectapi(
-        f"/nutrition-service/customFood"
-        f"?searchExpression={quote(food_name)}&start=0&limit=10&includeContent=true"
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": food_name,
+            "start": 0,
+            "limit": 10,
+            "includeContent": "true",
+        },
     )
     foods = r.get("customFoods", []) if isinstance(r, dict) else []
     food_id = serving_id = None

@@ -10,7 +10,6 @@ import os
 import sys
 import time
 import pytest
-from urllib.parse import quote
 
 TOKEN_PATH = os.path.expanduser("~/.garminconnect")
 
@@ -30,8 +29,13 @@ def garmin():
 
 def _search(garmin, name):
     r = garmin.connectapi(
-        f"/nutrition-service/customFood"
-        f"?searchExpression={quote(name)}&start=0&limit=10&includeContent=true"
+        "/nutrition-service/customFood",
+        params={
+            "searchExpression": name,
+            "start": 0,
+            "limit": 10,
+            "includeContent": "true",
+        },
     )
     return r.get("customFoods", [])
 
