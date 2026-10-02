@@ -7,6 +7,21 @@ from datetime import datetime, timedelta
 from mcp.server.fastmcp import FastMCP
 
 
+def pytest_collection_modifyitems(config, items):
+    """Skip e2e tests unless they are selected with ``-m e2e``.
+
+    e2e tests call the real Garmin API and create, change and delete data in
+    the account whose tokens are in ~/.garminconnect. A plain ``pytest`` run
+    must never do that just because a token store happens to exist.
+    """
+    if "e2e" in (config.getoption("markexpr") or ""):
+        return
+    skip_e2e = pytest.mark.skip(reason="live Garmin test; run with -m e2e")
+    for item in items:
+        if "e2e" in item.keywords:
+            item.add_marker(skip_e2e)
+
+
 @pytest.fixture
 def mock_garmin_client():
     """Create a mock Garmin client with common methods stubbed"""
