@@ -664,11 +664,20 @@ def _get_garmin_coach_workouts(calendar_date: str) -> str:
         plan_details = plan.get("trainingPlanDetailsDTO")
         if not isinstance(plan_details, dict):
             plan_details = {}
+        athlete_race = plan_details.get("athleteRace")
+        if not isinstance(athlete_race, dict):
+            athlete_race = {}
         plan_summary = {
             "name": plan_name,
             "training_plan_id": plan.get("trainingPlanId"),
             "classification": plan.get("trainingPlanClassification"),
             "training_type": plan_details.get("trainingType"),
+            "race_name": athlete_race.get("raceName"),
+            "race_day": athlete_race.get("raceDay"),
+            "workouts_per_week": plan_details.get("workoutsPerWeek"),
+            "remaining_workouts_this_week": plan_details.get("remainingAtpWorkoutsForWeek"),
+            "registration_date": plan_details.get("registrationDate"),
+            "plan_completed": plan_details.get("planCompleted"),
         }
         plan_summary = {
             key: value for key, value in plan_summary.items()
