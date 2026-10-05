@@ -321,6 +321,16 @@ class _PendingGarminClient:
         threading.Thread(target=_worker, name="garmin-login", daemon=True).start()
         return self
 
+    def login_state(self):
+        """Non-blocking login status: ``"pending"``, ``"ready"`` or ``"failed"``.
+
+        A regular method, so it is found before ``__getattr__`` and never
+        waits on the background login.
+        """
+        if not self._ready.is_set():
+            return "pending"
+        return "failed" if self._login_error is not None else "ready"
+
     def __getattr__(self, name):
         if not self._ready.wait(self._timeout if self._timeout else None):
             raise RuntimeError(
@@ -331,6 +341,20 @@ class _PendingGarminClient:
         if self._login_error is not None:
             raise self._login_error
         return getattr(self._client, name)
+
+
+def _readiness(pending_client) -> tuple[int, dict]:
+    """(HTTP status, JSON body) for ``GET /readyz``.
+
+    ``/healthz`` answers as soon as the HTTP server is up, but since login
+    moved to a background thread (#255) that is before Garmin login has
+    resolved -- so an orchestrator using it as a readiness probe routes
+    traffic to a server whose every tool call will still fail. ``/readyz``
+    reports 200 only once login has succeeded, 503 while it is pending or
+    after it failed (``status`` says which).
+    """
+    state = pending_client.login_state()
+    return (200 if state == "ready" else 503), {"status": state}
 
 
 def _parse_transport_config() -> tuple[str, str, int]:
@@ -641,15 +665,22 @@ def main():
             file=sys.stderr,
         )
 
-    # When serving over HTTP, expose a plain health endpoint for k8s probes.
+    # When serving over HTTP, expose liveness/readiness endpoints for k8s probes.
     # The MCP endpoint itself requires a handshake and isn't probe-friendly.
     if transport != "stdio":
         from starlette.requests import Request
-        from starlette.responses import PlainTextResponse
+        from starlette.responses import JSONResponse, PlainTextResponse
 
+        # Liveness: the process is up and serving HTTP.
         @fastmcp.custom_route("/healthz", methods=["GET"])
         async def healthz(_request: "Request") -> "PlainTextResponse":
             return PlainTextResponse("ok")
+
+        # Readiness: Garmin login has succeeded, tool calls can work.
+        @fastmcp.custom_route("/readyz", methods=["GET"])
+        async def readyz(_request: "Request") -> "JSONResponse":
+            status_code, body = _readiness(pending_client)
+            return JSONResponse(body, status_code=status_code)
 
         print(
             f"Serving MCP over {transport} on {http_host}:{http_port}",

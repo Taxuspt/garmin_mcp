@@ -541,7 +541,8 @@ GARMIN_MCP_TRANSPORT=streamable-http garmin-mcp
 When an HTTP transport is selected:
 
 - MCP clients connect to the **`/mcp`** path (e.g. `http://localhost:8000/mcp`).
-- A plain **`GET /healthz`** endpoint is exposed for liveness/readiness probes.
+- **`GET /healthz`** returns `ok` as soon as the server is up — use it as a **liveness** probe.
+- **`GET /readyz`** reports whether Garmin login has finished — use it as a **readiness** probe. It returns `200 {"status": "ready"}` once login succeeded, and `503` with `{"status": "pending"}` while login is still running or `{"status": "failed"}` if it failed (re-run `garmin-mcp-auth` and restart).
 
 The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
 
