@@ -1,0 +1,261 @@
+name: Release & Docker image
+
+# On every push to main:
+#   1. release-please opens/updates the release PR, or tags a release when that
+#      PR is merged.
+#   2. The image is built natively on amd64 and arm64 runners, smoke-tested
+#      without Garmin credentials, then pushed to GHCR by digest.
+#   3. The per-arch digests are merged into one multi-arch tag set and a signed
+#      build provenance attestation is published.
+# Pull requests run steps 1-2 without pushing anything. A manual run
+# (workflow_dispatch) republishes the image of an existing release tag.
+#
+# Releases created by release-please use GITHUB_TOKEN, which doesn't trigger
+# other workflows (no `on: release`), so publishing happens in this workflow.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing release tag to (re)publish, e.g. 0.2.0
+        required: true
+        type: string
+      latest:
+        description: Also point `latest` at this release
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a publish half-way; superseded PR runs can go.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+
+    steps:
+    - name: Create release PR or release
+      id: release
+      uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+
+  meta:
+    needs: release-please
+    if: ${{ !cancelled() && needs.release-please.result != 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      image: ${{ steps.target.outputs.image }}
+      ref: ${{ steps.target.outputs.ref }}
+      json: ${{ steps.meta.outputs.json }}
+      labels: ${{ steps.meta.outputs.labels }}
+
+    steps:
+    - name: Resolve image and commit to build
+      id: target
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EVENT: ${{ github.event_name }}
+        RELEASE_CREATED: ${{ needs.release-please.outputs.release_created }}
+        RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_LATEST: ${{ inputs.latest }}
+      run: |
+        # GHCR names must be lowercase (Taxuspt/garmin_mcp -> ghcr.io/taxuspt/garmin_mcp).
+        echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+        release=false version='' latest=false sha=$GITHUB_SHA ref=''
+        if [ "$EVENT" = workflow_dispatch ]; then
+          if ! [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like 1.2.3, got '$INPUT_VERSION'"
+            exit 1
+          fi
+          release=true version=$INPUT_VERSION latest=$INPUT_LATEST
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$INPUT_VERSION" --jq .sha)
+          ref=$sha
+        elif [ "$RELEASE_CREATED" = true ]; then
+          # Build the tagged commit, even if main has moved on since.
+          release=true version=$RELEASE_VERSION latest=true sha=$RELEASE_SHA ref=$RELEASE_SHA
+        fi
+        {
+          echo "release=$release"
+          echo "version=$version"
+          echo "latest=$latest"
+          echo "sha=$sha"
+          echo "short=${sha::7}"
+          echo "ref=$ref"
+          # `main` only moves when this run builds the commit main points at.
+          echo "main=$([ "$EVENT" = push ] && [ "$sha" = "$GITHUB_SHA" ] && echo true || echo false)"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Compute tags and labels
+      id: meta
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+      env:
+        DOCKER_METADATA_ANNOTATIONS_LEVELS: index
+        RELEASE: ${{ steps.target.outputs.release }}
+        VERSION: ${{ steps.target.outputs.version }}
+      with:
+        images: ${{ steps.target.outputs.image }}
+        # `latest` always means the newest release, never main.
+        flavor: latest=false
+        tags: |
+          type=raw,value=main,enable=${{ steps.target.outputs.main }}
+          type=raw,value=sha-${{ steps.target.outputs.short }}
+          type=semver,pattern={{version}},value=${{ env.VERSION }},enable=${{ env.RELEASE }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }},enable=${{ env.RELEASE }}
+          type=raw,value=latest,enable=${{ steps.target.outputs.latest }}
+        labels: |
+          org.opencontainers.image.revision=${{ steps.target.outputs.sha }}
+
+  build:
+    needs: meta
+    if: ${{ !cancelled() && needs.meta.result == 'success' }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # Pull request runs never push; PRs from forks get a read-only token anyway.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ needs.meta.outputs.ref }}
+        persist-credentials: false
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    - name: Build image for testing
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        platforms: linux/${{ matrix.arch }}
+        labels: ${{ needs.meta.outputs.labels }}
+        load: true
+        provenance: false
+        sbom: false
+        tags: garmin-mcp:smoke
+        cache-from: type=gha,scope=${{ matrix.arch }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+    - name: Smoke test
+      run: python3 scripts/docker_smoke_test.py garmin-mcp:smoke
+
+    - name: Log in to GHCR
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Push image by digest
+      id: push
+      if: github.event_name != 'pull_request'
+      # Same inputs as the tested build, so every layer comes from cache.
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        platforms: linux/${{ matrix.arch }}
+        labels: ${{ needs.meta.outputs.labels }}
+        outputs: type=image,name=${{ needs.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+        provenance: mode=max
+        sbom: true
+        cache-from: type=gha,scope=${{ matrix.arch }}
+
+    - name: Export digest
+      if: github.event_name != 'pull_request'
+      env:
+        DIGEST: ${{ steps.push.outputs.digest }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/digests"
+        touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+    - name: Upload digest
+      if: github.event_name != 'pull_request'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: digests-${{ matrix.arch }}
+        path: ${{ runner.temp }}/digests/*
+        if-no-files-found: error
+        retention-days: 1
+
+  publish:
+    needs: [ meta, build ]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      id-token: write
+      packages: write
+    env:
+      IMAGE: ${{ needs.meta.outputs.image }}
+      METADATA: ${{ needs.meta.outputs.json }}
+
+    steps:
+    - name: Download digests
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        path: ${{ runner.temp }}/digests
+        pattern: digests-*
+        merge-multiple: true
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    - name: Log in to GHCR
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create multi-arch tags
+      id: index
+      working-directory: ${{ runner.temp }}/digests
+      run: |
+        args=()
+        while IFS= read -r tag; do args+=(--tag "$tag"); done < <(jq -r '.tags[]' <<< "$METADATA")
+        while IFS= read -r note; do args+=(--annotation "$note"); done < <(jq -r '.annotations[]' <<< "$METADATA")
+        sources=()
+        for digest in *; do sources+=("$IMAGE@sha256:$digest"); done
+        docker buildx imagetools create "${args[@]}" "${sources[@]}"
+
+        first_tag=$(jq -r '.tags[0]' <<< "$METADATA")
+        docker buildx imagetools inspect "$first_tag"
+        echo "digest=$(docker buildx imagetools inspect "$first_tag" --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
+
+    - name: Attest build provenance
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ env.IMAGE }}
+        subject-digest: ${{ steps.index.outputs.digest }}
+        push-to-registry: true
+        # Storage records only exist for organization-owned repositories.
+        create-storage-record: false
