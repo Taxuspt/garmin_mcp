@@ -52,6 +52,39 @@ This repository uses GitHub Actions for continuous integration and security chec
 1. `dependency-check` - Security and dependency validation
 2. `code-quality` - Code syntax and import checks
 
+### 4. Release & Docker image (`release.yml`)
+
+**Triggers:**
+- Pushes to `main`
+- Pull requests to `main` or `master` (build and smoke test only, nothing is pushed)
+- Manual trigger via workflow_dispatch, to republish the image of an existing release tag
+
+**What it does:**
+- [release-please](https://github.com/googleapis/release-please) keeps a release PR open with the next version and changelog, computed from [Conventional Commits](https://www.conventionalcommits.org/) (`fix:` bumps the patch version, `feat:` the minor version; while the version is `0.x`, breaking changes also bump the minor version). Merging that PR bumps `pyproject.toml` and `uv.lock`, tags the release (`X.Y.Z`, no `v` prefix) and creates the GitHub release.
+- Builds the Docker image natively on `amd64` and `arm64` runners and runs `scripts/docker_smoke_test.py` against each: MCP `initialize` + `tools/list` over streamable-http and stdio, plus the image `HEALTHCHECK`. No Garmin credentials are needed. The build itself fails if `uv.lock` is out of date (`uv sync --locked`).
+- Pushes both architectures to `ghcr.io/<owner>/garmin_mcp` and merges them into one multi-arch tag set: `main` and `sha-<commit>` on every push, plus `X.Y.Z`, `X.Y` and `latest` when a release is created (built from the tagged commit). `latest` never points at an unreleased build.
+- Publishes SBOM and provenance attestations with the image, plus a signed build provenance attestation (`gh attestation verify`).
+
+Publishing runs in this workflow rather than on `release: published` because releases created with `GITHUB_TOKEN` don't trigger other workflows.
+
+**Jobs:**
+1. `release-please` - Release PR, tag and GitHub release (pushes only)
+2. `meta` - Commit to build, image name and tags
+3. `build` - Per-architecture build, smoke test and push by digest
+4. `publish` - Multi-arch tags and attestation (not on pull requests)
+
+**One-time setup:**
+- Settings → Actions → General → Workflow permissions: enable *Allow GitHub Actions to create and approve pull requests* (release-please opens the release PR).
+- After the first push, the GHCR package is private: Package settings → Change visibility → Public, so `docker pull` works without logging in.
+
+**Cutting a release:** merge the open `chore(main): release X.Y.Z` PR. Because `GITHUB_TOKEN` opened it, pull request checks don't run on that PR on their own; it only changes version numbers and the changelog, and the image is still smoke-tested after the merge.
+
+**If a release has no image** (the run failed or was cancelled after the tag was created): Actions → Release & Docker image → Run workflow, with the release tag as `version`.
+
+### 5. Dependabot (`dependabot.yml`)
+
+Workflows pin actions to commit SHAs, and the Dockerfile pins `uv`. Dependabot opens a weekly grouped PR for each to keep those pins current.
+
 ## Running Tests Locally
 
 To run the same tests that CI runs:
@@ -65,6 +98,10 @@ uv run pytest tests/integration tests/unit -v --tb=short
 
 # Check lock file status
 uv lock --check
+
+# Build the image and run the Docker smoke test
+docker build -t garmin-mcp:local .
+python3 scripts/docker_smoke_test.py garmin-mcp:local
 ```
 
 ## Skipped Tests
