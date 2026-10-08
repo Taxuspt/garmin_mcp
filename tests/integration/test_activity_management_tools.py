@@ -612,6 +612,146 @@ async def test_get_activity_exercise_sets_tool(app_with_activity_management, moc
 
 
 @pytest.mark.asyncio
+async def test_set_activity_exercise_sets_tool(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test set_activity_exercise_sets PUTs the full set list in Garmin's wire format"""
+    mock_garmin_client.garmin_connect_activity = "/activity-service/activity"
+    mock_garmin_client.client.put.return_value = None
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [
+                {"category": "deadlift", "exercise_name": "barbell_deadlift",
+                 "reps": 5, "weight_kg": 152.5, "duration_seconds": 40,
+                 "rest_seconds": 180},
+                {"category": "BENCH_PRESS", "reps": 8, "weight_lb": 135},
+                {"category": "PULL_UP", "exercise_name": "PULL_UP", "reps": 10},
+            ],
+        },
+    )
+
+    mock_garmin_client.client.put.assert_called_once_with(
+        "connectapi",
+        "/activity-service/activity/12345678901/exerciseSets",
+        json={
+            "activityId": 12345678901,
+            "exerciseSets": [
+                {"setType": "ACTIVE",
+                 "exercises": [{"category": "DEADLIFT", "name": "BARBELL_DEADLIFT",
+                                "probability": 100}],
+                 "repetitionCount": 5, "weight": 152500, "duration": 40},
+                {"setType": "REST", "exercises": [], "repetitionCount": None,
+                 "weight": -1, "duration": 180},
+                {"setType": "ACTIVE",
+                 "exercises": [{"category": "BENCH_PRESS", "name": None,
+                                "probability": 100}],
+                 "repetitionCount": 8, "weight": 61235, "duration": None},
+                {"setType": "ACTIVE",
+                 "exercises": [{"category": "PULL_UP", "name": None,
+                                "probability": 100}],
+                 "repetitionCount": 10, "weight": -1, "duration": None},
+            ],
+        },
+        api=True,
+    )
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["sets_written"] == 3
+
+
+@pytest.mark.asyncio
+async def test_set_activity_exercise_sets_keep_timing(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test keep_timing relabels recorded sets in place, keeping timing and rests"""
+    mock_garmin_client.garmin_connect_activity = "/activity-service/activity"
+    unknown = [{"category": "UNKNOWN", "name": None, "probability": 99.6}]
+    mock_garmin_client.get_activity_exercise_sets.return_value = {
+        "activityId": 12345678901,
+        "exerciseSets": [
+            {"setType": "ACTIVE", "exercises": unknown, "repetitionCount": 4,
+             "weight": 0.0, "duration": 192.1, "startTime": "2026-10-08T08:21:23.0",
+             "messageIndex": 0},
+            {"setType": "REST", "exercises": [], "repetitionCount": None,
+             "weight": None, "duration": 90.5, "startTime": "2026-10-08T08:24:35.0",
+             "messageIndex": 1},
+            {"setType": "ACTIVE", "exercises": unknown, "repetitionCount": 6,
+             "weight": 0.0, "duration": 130.0, "startTime": "2026-10-08T08:26:06.0",
+             "messageIndex": 2},
+        ],
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "keep_timing": True,
+            "sets": [
+                {"category": "DEADLIFT", "exercise_name": "RACK_PULL", "reps": 4,
+                 "weight_kg": 120, "duration_seconds": 999},
+                {"category": "SQUAT", "reps": 6},
+            ],
+        },
+    )
+
+    sent = mock_garmin_client.client.put.call_args.kwargs["json"]["exerciseSets"]
+    assert [s["setType"] for s in sent] == ["ACTIVE", "REST", "ACTIVE"]
+    assert [s["duration"] for s in sent] == [192.1, 90.5, 130.0]
+    assert sent[0]["startTime"] == "2026-10-08T08:21:23.0"
+    assert sent[0]["exercises"] == [
+        {"category": "DEADLIFT", "name": "RACK_PULL", "probability": 100}
+    ]
+    assert (sent[0]["repetitionCount"], sent[0]["weight"]) == (4, 120000)
+    assert (sent[2]["exercises"][0]["category"], sent[2]["weight"]) == ("SQUAT", -1)
+    assert json.loads(result[0][0].text)["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_activity_exercise_sets_keep_timing_rejects_count_mismatch(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test keep_timing refuses to write when set counts differ"""
+    mock_garmin_client.get_activity_exercise_sets.return_value = {
+        "exerciseSets": [{"setType": "ACTIVE", "exercises": []}]
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets",
+        {"activity_id": 12345678901, "keep_timing": True,
+         "sets": [{"category": "SQUAT"}, {"category": "SQUAT"}]},
+    )
+
+    assert "has 1 active sets, got 2" in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sets, error",
+    [
+        ([], "sets cannot be empty"),
+        ([{"reps": 5}], "set 1: category is required"),
+        ([{"category": "SQUAT", "weight_kg": 100, "weight_lb": 220}],
+         "set 1: give weight_kg or weight_lb, not both"),
+        ([{"category": "SQUAT", "reps": 5.5}], "set 1: reps must be"),
+    ],
+)
+async def test_set_activity_exercise_sets_rejects_bad_input(
+    app_with_activity_management, mock_garmin_client, sets, error
+):
+    """Test set_activity_exercise_sets validates before writing anything"""
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets", {"activity_id": 12345678901, "sets": sets}
+    )
+
+    assert error in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_count_activities_tool(app_with_activity_management, mock_garmin_client):
     """Test count_activities tool returns total activity count"""
     # Setup mock

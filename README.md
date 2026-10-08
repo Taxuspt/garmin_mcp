@@ -10,7 +10,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 - List recent activities with pagination support
 - Get detailed activity information
-- Edit activities: name, type, description/notes, event type, perceived effort (RPE), and feel
+- Edit activities: name, type, description/notes, event type, perceived effort (RPE), feel, and strength exercise sets
 - Access health metrics (steps, heart rate, sleep, stress, respiration)
 - View body composition data
 - Track training status and readiness
@@ -27,7 +27,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
 
-- ✅ Activity Management (20 tools) - includes write tools for type, description, event type, perceived effort, and feel
+- ✅ Activity Management (21 tools) - includes write tools for type, description, event type, perceived effort, feel, and exercise sets
 - ✅ Health & Wellness (34 tools) - includes custom lightweight summary tools
 - ✅ Training & Performance (13 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
 - ✅ Workouts (8 tools)
@@ -65,6 +65,34 @@ Two tools let you download a raw activity file to disk:
 3. Persisted config set via `set_fit_download_dir`.
 
 **First-run behavior:** if no directory is configured, `download_activity_file` returns `status: "needs_setup"`. The assistant will ask where you want to save files (suggesting the current directory as default), call `set_fit_download_dir` to persist your choice, and then retry the download automatically.
+
+### Strength Exercise Sets
+
+`set_activity_exercise_sets(activity_id, sets)` writes structured sets onto a recorded
+strength activity, the same per-set grid the Garmin Connect "Edit sets" screen saves, so
+they appear in Garmin's exercise history and volume charts. It **replaces every existing
+set**, including watch-detected ones; read them first with `get_activity_exercise_sets`
+if you want to keep any.
+
+Each set takes a `category` and optional `exercise_name` using Garmin's keys from
+[`Exercises.json`](https://connect.garmin.com/web-data/exercises/Exercises.json), plus
+optional `reps`, `weight_kg` or `weight_lb` (omit for bodyweight), `duration_seconds` and
+`rest_seconds`. Garmin rejects unknown keys and leaves the activity unchanged.
+
+If the watch recorded the right sets but misidentified the exercises, pass
+`keep_timing: true`: the recorded start times, durations and rest periods are kept and only
+the exercise, reps and weight are replaced, in order. The number of sets must match the
+activity's recorded active sets.
+
+```json
+{
+  "activity_id": 12345678901,
+  "sets": [
+    {"category": "DEADLIFT", "exercise_name": "BARBELL_DEADLIFT", "reps": 5, "weight_kg": 150, "rest_seconds": 180},
+    {"category": "PULL_UP", "reps": 8}
+  ]
+}
+```
 
 ### Intentionally Skipped Endpoints
 
