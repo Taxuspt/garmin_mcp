@@ -828,7 +828,7 @@ echo "GARMIN_EMAIL=your_email@example.com" > .env
 echo "GARMIN_PASSWORD=your_password" >> .env
 ```
 
-2. Start the container:
+2. Start the container. Compose pulls the prebuilt image (`ghcr.io/taxuspt/garmin_mcp:latest`, see [Using the Prebuilt Image](#using-the-prebuilt-image)) and only builds from this checkout if the image can't be pulled:
 
 ```bash
 docker compose up -d
@@ -839,6 +839,8 @@ docker compose up -d
 ```bash
 docker compose logs -f garmin-mcp
 ```
+
+To update to the newest release, run `docker compose pull && docker compose up -d`. To run your own changes instead, build from source with `docker compose up -d --build`.
 
 #### Using Docker Directly
 
