@@ -780,6 +780,45 @@ Restart opencode after saving the file. The first `uvx` invocation downloads and
 
 Docker provides an isolated and consistent environment for running the MCP server.
 
+#### Using the Prebuilt Image
+
+Every release publishes a multi-arch (`linux/amd64`, `linux/arm64`) image to the GitHub Container Registry, so there is nothing to build:
+
+| Tag | Points to |
+|---|---|
+| `latest` | the newest release |
+| `X.Y.Z` / `X.Y` | that release / the newest patch of that minor version |
+| `main`, `sha-<commit>` | unreleased builds of the `main` branch |
+
+```bash
+# Log in once (interactive, handles MFA); tokens are saved to the volume
+docker run -it --rm --entrypoint garmin-mcp-auth \
+  -v garmin-tokens:/root/.garminconnect \
+  ghcr.io/taxuspt/garmin_mcp:latest
+
+# stdio, e.g. as the command of a local MCP client
+docker run -i --rm -v garmin-tokens:/root/.garminconnect ghcr.io/taxuspt/garmin_mcp:latest
+```
+
+To serve over HTTP, opt in to the transport and to binding beyond loopback. The endpoint has **no authentication**, so publish it only to localhost or behind an authenticating reverse proxy (see [Transport](#transport)):
+
+```bash
+docker run -d --name garmin-mcp \
+  -e GARMIN_MCP_TRANSPORT=streamable-http \
+  -e GARMIN_MCP_HOST=0.0.0.0 \
+  -p 127.0.0.1:8000:8000 \
+  -v garmin-tokens:/root/.garminconnect \
+  ghcr.io/taxuspt/garmin_mcp:latest
+```
+
+The image's `HEALTHCHECK` probes `/healthz` when an HTTP transport is selected and always passes under stdio. To run as a non-root user, mount a directory that user owns and point `HOME` at it, e.g. `--user 1000:1000 -e HOME=/data -v ./garmin-data:/data` (tokens then live in `/data/.garminconnect`).
+
+Each image carries a signed build provenance attestation:
+
+```bash
+gh attestation verify oci://ghcr.io/taxuspt/garmin_mcp:latest -R Taxuspt/garmin_mcp
+```
+
 #### Quick Start with Docker Compose (Recommended)
 
 1. Create a `.env` file with your credentials:
