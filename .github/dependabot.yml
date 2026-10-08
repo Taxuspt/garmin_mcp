@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Workflows pin actions to commit SHAs; this keeps those pins current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: [ "*" ]
+    commit-message:
+      prefix: ci
+
+  # Bumps the pinned uv image in the Dockerfile. The Python base image comes in
+  # through a build arg, which Dependabot leaves alone.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
