@@ -31,6 +31,20 @@ def _device_id(value: Any) -> Optional[str]:
     return str(value) if value is not None else None
 
 
+def _primary_device_id(devices: Any) -> Optional[str]:
+    """Return the verified primary tracker ID, or unknown when unavailable."""
+    if not isinstance(devices, list):
+        return None
+    return next(
+        (
+            _device_id(device.get("deviceId"))
+            for device in devices
+            if isinstance(device, dict) and device.get("primaryDevice") is True
+        ),
+        None,
+    )
+
+
 def _select_training_device(
     latest_data: Any, devices: Any
 ) -> Tuple[Dict[str, Any], Optional[str], Optional[str], Optional[bool]]:
@@ -51,7 +65,13 @@ def _select_training_device(
     if not entries:
         return {}, None, None, None
 
-    device_records = devices if isinstance(devices, list) else []
+    # A failed lookup is deliberately different from an empty, valid response:
+    # in both cases the primary tracker is unknown, so never infer ``False``.
+    device_records = (
+        [device for device in devices if isinstance(device, dict)]
+        if isinstance(devices, list)
+        else []
+    )
     primary = next(
         (device for device in device_records if device.get("primaryDevice") is True),
         None,
@@ -60,14 +80,23 @@ def _select_training_device(
 
     selected_key, selected = entries[0]
     if primary_id is not None:
+        matched_primary = False
         for key, value in entries:
             record_id = _device_id(value.get("deviceId")) or _device_id(key)
             if record_id == primary_id:
                 selected_key, selected = key, value
+                matched_primary = True
                 break
+        # The primary tracker may be absent from this day's status map.  Use
+        # Garmin's explicit primary-training marker before insertion order.
+        if not matched_primary:
+            for key, value in entries:
+                if value.get("primaryTrainingDevice") is True:
+                    selected_key, selected = key, value
+                    break
     else:
         for key, value in entries:
-            if value.get("primaryTrainingDevice"):
+            if value.get("primaryTrainingDevice") is True:
                 selected_key, selected = key, value
                 break
 
@@ -87,21 +116,44 @@ def _select_training_device(
     )
     is_primary = (
         reporting_id == primary_id
-        if device_records or devices is None
+        if primary_id is not None and reporting_id is not None
         else None
     )
     return selected, reporting_id, reporting_name, is_primary
 
 
-def _tracker_acute_load(readiness: Any, date: str) -> Optional[float]:
-    """Extract the tracker acute load from the readiness response."""
+def _tracker_acute_load(
+    readiness: Any, date: str, tracker_id: Optional[str]
+) -> Tuple[Optional[float], Optional[str]]:
+    """Extract acute load only from an identified tracker/date readiness row.
+
+    Training Readiness can return rows for several devices.  An undated row,
+    or a row without ``deviceId``, cannot establish that it belongs to the
+    verified primary tracker and is therefore rejected rather than guessed.
+    """
+    if tracker_id is None:
+        return None, "tracker_id_unavailable"
     candidates = readiness if isinstance(readiness, list) else [readiness]
+    matching = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
-        if candidate.get("calendarDate") in (None, date) and candidate.get("acuteLoad") is not None:
-            return candidate["acuteLoad"]
-    return None
+        candidate_id = _device_id(candidate.get("deviceId"))
+        if (
+            candidate_id == tracker_id
+            and candidate.get("calendarDate") == date
+            and candidate.get("acuteLoad") is not None
+        ):
+            matching.append(candidate)
+    if not matching:
+        return None, "readiness_device_or_date_mismatch"
+    if len(matching) > 1:
+        matching.sort(
+            key=lambda item: str(
+                item.get("timestampLocal") or item.get("timestamp") or ""
+            )
+        )
+    return matching[-1]["acuteLoad"], None
 
 
 # The fitnessstats "calories" metric is stored pre-multiplied by this factor
@@ -889,12 +941,19 @@ def register_tools(app):
             # Training load balance
             load_balance = _as_dict(status.get("mostRecentTrainingLoadBalance"))
             load_map = _as_dict(load_balance.get("metricsTrainingLoadBalanceDTOMap"))
-            load_data = {}
-            for data in load_map.values():
-                if not isinstance(data, dict) or not data:
-                    continue
-                load_data = data
-                break
+            load_data: Dict[str, Any] = {}
+            load_device_id: Optional[str] = None
+            # Load-balance is also device-keyed. Never attach the first
+            # available record to a different reporting device.
+            if reporting_id is not None:
+                for key, data in load_map.items():
+                    if not isinstance(data, dict) or not data:
+                        continue
+                    candidate_id = _device_id(data.get("deviceId")) or _device_id(key)
+                    if candidate_id == reporting_id:
+                        load_data = data
+                        load_device_id = candidate_id
+                        break
 
             # Curate to essential fields only - remove userIds
             curated = {
@@ -903,6 +962,9 @@ def register_tools(app):
                 if reporting_id and reporting_id.isdigit()
                 else reporting_id,
                 "reporting_device_name": reporting_name,
+                "load_device_id": int(load_device_id)
+                if load_device_id and load_device_id.isdigit()
+                else load_device_id,
                 # Training status
                 "training_status": device_data.get("trainingStatus"),
                 "training_status_feedback": device_data.get(
@@ -937,12 +999,25 @@ def register_tools(app):
                     }
                 )
             else:
-                acute_load = _tracker_acute_load(
-                    garmin_client.get_training_readiness(date), date
-                )
+                try:
+                    readiness = garmin_client.get_training_readiness(date)
+                    acute_load, readiness_reason = _tracker_acute_load(
+                        readiness, date, _primary_device_id(devices)
+                    )
+                except Exception:
+                    acute_load, readiness_reason = None, "readiness_unavailable"
                 if acute_load is not None:
                     curated["acute_load"] = acute_load
                     curated["acute_load_source"] = "training_readiness"
+                elif readiness_reason is not None:
+                    curated["acute_load_source"] = "unavailable"
+                    curated["acute_load_unavailable_reason"] = readiness_reason
+
+            if not load_data and any(
+                isinstance(data, dict) and data for data in load_map.values()
+            ):
+                curated["load_source"] = "unavailable"
+                curated["load_unavailable_reason"] = "load_device_mismatch"
 
             curated = {k: v for k, v in curated.items() if v is not None}
             return json.dumps(curated, indent=2)
@@ -1161,13 +1236,20 @@ def register_tools(app):
                     ctl = atl_dto.get("dailyTrainingLoadChronic")
                     acwr = atl_dto.get("dailyAcuteChronicWorkloadRatio")
                     if is_primary_tracker is False:
-                        atl = _tracker_acute_load(
-                            garmin_client.get_training_readiness(date_str), date_str
-                        )
+                        try:
+                            readiness = garmin_client.get_training_readiness(date_str)
+                            atl, readiness_reason = _tracker_acute_load(
+                                readiness, date_str, _primary_device_id(devices)
+                            )
+                        except Exception:
+                            atl, readiness_reason = None, "readiness_unavailable"
                         ctl = None
                         acwr = None
                         if atl is not None:
                             entry["atl_source"] = "training_readiness"
+                        else:
+                            entry["atl_source"] = "unavailable"
+                            entry["atl_unavailable_reason"] = readiness_reason
                     if atl is not None:
                         entry["atl"] = round(atl, 1)
                     if ctl is not None:
