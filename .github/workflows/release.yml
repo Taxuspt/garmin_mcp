@@ -24,10 +24,6 @@ on:
         description: Existing release tag to (re)publish, e.g. 0.2.0
         required: true
         type: string
-      latest:
-        description: Also point `latest` at this release
-        type: boolean
-        default: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -76,28 +72,40 @@ jobs:
         RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
         RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
         INPUT_VERSION: ${{ inputs.version }}
-        INPUT_LATEST: ${{ inputs.latest }}
       run: |
         # GHCR names must be lowercase (Taxuspt/garmin_mcp -> ghcr.io/taxuspt/garmin_mcp).
         echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-        release=false version='' latest=false sha=$GITHUB_SHA ref=''
+        release=false version='' sha=$GITHUB_SHA ref=''
         if [ "$EVENT" = workflow_dispatch ]; then
           if ! [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::version must look like 1.2.3, got '$INPUT_VERSION'"
             exit 1
           fi
-          release=true version=$INPUT_VERSION latest=$INPUT_LATEST
+          release=true version=$INPUT_VERSION
           sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$INPUT_VERSION" --jq .sha)
           ref=$sha
         elif [ "$RELEASE_CREATED" = true ]; then
           # Build the tagged commit, even if main has moved on since.
-          release=true version=$RELEASE_VERSION latest=true sha=$RELEASE_SHA ref=$RELEASE_SHA
+          release=true version=$RELEASE_VERSION sha=$RELEASE_SHA ref=$RELEASE_SHA
+        fi
+
+        # Rolling tags only move forward: `latest` to the newest release and
+        # `X.Y` to the newest patch of X.Y, so republishing an older release
+        # leaves them alone.
+        latest=false minor=false
+        if [ "$release" = true ]; then
+          tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/" --jq '.[].ref | ltrimstr("refs/tags/")')
+          # Include the version itself in case the new tag isn't listed yet.
+          releases=$(printf '%s\n' "$tags" "$version" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV)
+          if [ "$version" = "$(tail -n1 <<< "$releases")" ]; then latest=true; fi
+          if [ "$version" = "$(awk -F. -v series="${version%.*}" '$1 "." $2 == series' <<< "$releases" | tail -n1)" ]; then minor=true; fi
         fi
         {
           echo "release=$release"
           echo "version=$version"
           echo "latest=$latest"
+          echo "minor=$minor"
           echo "sha=$sha"
           echo "short=${sha::7}"
           echo "ref=$ref"
@@ -120,7 +128,7 @@ jobs:
           type=raw,value=main,enable=${{ steps.target.outputs.main }}
           type=raw,value=sha-${{ steps.target.outputs.short }}
           type=semver,pattern={{version}},value=${{ env.VERSION }},enable=${{ env.RELEASE }}
-          type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }},enable=${{ env.RELEASE }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }},enable=${{ steps.target.outputs.minor }}
           type=raw,value=latest,enable=${{ steps.target.outputs.latest }}
         labels: |
           org.opencontainers.image.revision=${{ steps.target.outputs.sha }}
