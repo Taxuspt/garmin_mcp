@@ -62,7 +62,7 @@ This repository uses GitHub Actions for continuous integration and security chec
 **What it does:**
 - [release-please](https://github.com/googleapis/release-please) keeps a release PR open with the next version and changelog, computed from [Conventional Commits](https://www.conventionalcommits.org/) (`fix:` bumps the patch version, `feat:` the minor version; while the version is `0.x`, breaking changes also bump the minor version). Merging that PR bumps `pyproject.toml` and `uv.lock`, tags the release (`X.Y.Z`, no `v` prefix) and creates the GitHub release.
 - Builds the Docker image natively on `amd64` and `arm64` runners and runs `scripts/docker_smoke_test.py` against each: MCP `initialize` + `tools/list` over streamable-http and stdio, plus the image `HEALTHCHECK`. No Garmin credentials are needed. The build itself fails if `uv.lock` is out of date (`uv sync --locked`).
-- Pushes both architectures to `ghcr.io/<owner>/garmin_mcp` and merges them into one multi-arch tag set: `main` and `sha-<commit>` on every push, plus `X.Y.Z`, `X.Y` and `latest` when a release is created (built from the tagged commit). `latest` never points at an unreleased build.
+- Pushes both architectures to `ghcr.io/<owner>/garmin_mcp` and merges them into one multi-arch tag set: `main` and `sha-<commit>` on every push, plus `X.Y.Z`, `X.Y` and `latest` when a release is created (built from the tagged commit). `latest` never points at an unreleased build, and the rolling tags only move forward: `latest` follows the newest release and `X.Y` the newest patch of `X.Y`.
 - Publishes SBOM and provenance attestations with the image, plus a signed build provenance attestation (`gh attestation verify`).
 
 Publishing runs in this workflow rather than on `release: published` because releases created with `GITHUB_TOKEN` don't trigger other workflows.
@@ -79,7 +79,7 @@ Publishing runs in this workflow rather than on `release: published` because rel
 
 **Cutting a release:** merge the open `chore(main): release X.Y.Z` PR. Because `GITHUB_TOKEN` opened it, pull request checks don't run on that PR on their own; it only changes version numbers and the changelog, and the image is still smoke-tested after the merge.
 
-**If a release has no image** (the run failed or was cancelled after the tag was created): Actions → Release & Docker image → Run workflow, with the release tag as `version`.
+**If a release has no image** (the run failed or was cancelled after the tag was created): Actions → Release & Docker image → Run workflow, with the release tag as `version`. Republishing an older release only updates its own `X.Y.Z` tag (and `X.Y` if it is still the newest patch of that minor version); `latest` stays on the newest release.
 
 ### 5. Dependabot (`dependabot.yml`)
 
