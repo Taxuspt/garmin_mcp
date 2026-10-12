@@ -845,6 +845,10 @@ def register_tools(app):
         IMPORTANT: For cycling power targets use the correct target type:
         - Power zone (zone 1-7 based on FTP %): use workoutTargetTypeId 2, key "power.zone",
           and "zoneNumber" (1-7).
+        - Custom % FTP range (e.g. 76-81% FTP): use workoutTargetTypeId 2, key "power.zone",
+          "targetValueOne"/"targetValueTwo" as percentages and
+          "targetValueUnit": {"unitKey": "percent"}. Garmin Connect shows it as
+          "Custom Power 76-81% FTP" with the matching watts.
         - Absolute watt range (e.g. 200-250 W): use workoutTargetTypeId 6, key "power.between",
           and "targetValueOne" (low watts) / "targetValueTwo" (high watts).
         Using workoutTargetTypeId 2 with key "power.between" is a silent Garmin bug: the
