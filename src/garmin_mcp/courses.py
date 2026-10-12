@@ -15,6 +15,8 @@ import sys
 from typing import Any, Dict, Optional
 from xml.sax.saxutils import escape
 
+from garmin_mcp.activity_analysis import _resolve_download_dir
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -133,19 +135,24 @@ def _build_course_payload(
 
 
 def _resolve_gpx_output_path(course_id: int, output_path: Optional[str] = None) -> str:
-    """Resolve the destination file path for downloading a course GPX."""
+    """Resolve the destination file path for downloading a course GPX.
+
+    A directory output_path gets {course_id}.gpx; a file output_path must end
+    in .gpx so the tool cannot overwrite arbitrary files. Without output_path,
+    use the same directory as download_activity_file (GARMIN_FIT_DOWNLOAD_DIR,
+    then the one saved by set_fit_download_dir), falling back to ./courses.
+    """
     if output_path:
         p = os.path.abspath(os.path.expanduser(output_path))
         if os.path.isdir(p) or output_path.endswith("/") or output_path.endswith("\\"):
             return os.path.join(p, f"{course_id}.gpx")
+        if not p.lower().endswith(".gpx"):
+            raise ValueError(
+                f"output_path must be a directory or a .gpx file, got: {output_path}"
+            )
         return p
 
-    env_dir = os.getenv("GARMIN_FIT_DOWNLOAD_DIR")
-    if env_dir:
-        base_dir = os.path.abspath(os.path.expanduser(env_dir))
-    else:
-        base_dir = os.path.abspath("./courses")
-
+    base_dir = _resolve_download_dir(None) or os.path.abspath("./courses")
     return os.path.join(base_dir, f"{course_id}.gpx")
 
 
@@ -279,15 +286,19 @@ def register_tools(app):
 
         Args:
             course_id: ID of the course to download.
-            output_path: Optional local destination file or directory path.
-                Defaults to GARMIN_FIT_DOWNLOAD_DIR or ./courses/{course_id}.gpx.
+            output_path: Optional destination directory (saved as {course_id}.gpx)
+                or file path ending in .gpx; any other file path is rejected.
+                Defaults to the download_activity_file directory
+                (GARMIN_FIT_DOWNLOAD_DIR, then set_fit_download_dir), else
+                ./courses/{course_id}.gpx.
         """
         try:
+            target_path = _resolve_gpx_output_path(course_id, output_path)
+
             data = garmin_client.client.connectapi(f"/course-service/course/{course_id}")
             if not isinstance(data, dict) or not data.get("geoPoints"):
                 return f"Error: course {course_id} not found or missing geoPoints."
 
-            target_path = _resolve_gpx_output_path(course_id, output_path)
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
             name = data.get("courseName") or f"Garmin Course {course_id}"

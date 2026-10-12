@@ -335,6 +335,73 @@ async def test_download_course_gpx_missing_course(app_with_courses, mock_garmin_
     assert "Error: course 404 not found" in _result_text(result)
 
 
+_TRACK_ONLY_COURSE = {
+    "courseId": 893,
+    "courseName": "Track Only",
+    "geoPoints": [{"latitude": 46.1, "longitude": 8.1, "elevation": 1200.0}],
+    "coursePoints": None,
+}
+
+
+@pytest.mark.asyncio
+async def test_download_course_gpx_rejects_non_gpx_output_file(
+    app_with_courses, mock_garmin_client, tmp_path
+):
+    """A non-.gpx file path is rejected and the existing file is left untouched."""
+    mock_garmin_client.client.connectapi.return_value = dict(_TRACK_ONLY_COURSE)
+    target = tmp_path / "x" / ".zshrc"
+    target.parent.mkdir()
+    target.write_text("export PATH=/usr/bin\n")
+
+    result = await app_with_courses.call_tool(
+        "download_course_gpx", {"course_id": 893, "output_path": str(target)}
+    )
+
+    assert "output_path must be a directory or a .gpx file" in _result_text(result)
+    assert target.read_text() == "export PATH=/usr/bin\n"
+    mock_garmin_client.client.connectapi.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_course_gpx_accepts_gpx_output_file(
+    app_with_courses, mock_garmin_client, tmp_path
+):
+    """A file path ending in .gpx (any case) is written as given."""
+    mock_garmin_client.client.connectapi.return_value = dict(_TRACK_ONLY_COURSE)
+    target = tmp_path / "Route.GPX"
+
+    result = await app_with_courses.call_tool(
+        "download_course_gpx", {"course_id": 893, "output_path": str(target)}
+    )
+
+    data = json.loads(_result_text(result))
+    assert data["gpx_path"] == str(target)
+    assert ET.parse(target).getroot().tag == "{http://www.topografix.com/GPX/1/1}gpx"
+
+
+@pytest.mark.asyncio
+async def test_download_course_gpx_defaults_to_configured_download_dir(
+    app_with_courses, mock_garmin_client, tmp_path, monkeypatch
+):
+    """Without output_path, the set_fit_download_dir directory is used."""
+    mock_garmin_client.client.connectapi.return_value = dict(_TRACK_ONLY_COURSE)
+    download_dir = tmp_path / "downloads"
+    config_path = tmp_path / "fit_config.json"
+    config_path.write_text(json.dumps({"download_dir": str(download_dir)}))
+    monkeypatch.setenv("GARMIN_FIT_CONFIG", str(config_path))
+    monkeypatch.delenv("GARMIN_FIT_DOWNLOAD_DIR", raising=False)
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+
+    result = await app_with_courses.call_tool("download_course_gpx", {"course_id": 893})
+
+    data = json.loads(_result_text(result))
+    assert data["gpx_path"] == str(download_dir / "893.gpx")
+    assert (download_dir / "893.gpx").is_file()
+    assert not (cwd / "courses").exists()
+
+
 # --- upload_course --------------------------------------------------------
 
 @pytest.mark.asyncio
