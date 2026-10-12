@@ -52,6 +52,24 @@ async def test_get_activities_by_date_tool(app_with_activity_management, mock_ga
 
 
 @pytest.mark.asyncio
+async def test_get_activities_by_date_handles_null_activity_type(
+    app_with_activity_management, mock_garmin_client
+):
+    """Older or partial activity records can contain activityType=null."""
+    mock_garmin_client.connectapi.return_value = [
+        {"activityId": 123, "activityName": "Untyped activity", "activityType": None}
+    ]
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities"] == [{"id": 123, "name": "Untyped activity"}]
+
+
+@pytest.mark.asyncio
 async def test_get_activities_by_date_with_type(app_with_activity_management, mock_garmin_client):
     """Test get_activities_by_date tool with activity type filter"""
     filtered_activities = [MOCK_ACTIVITIES[0]]  # Only running activities
@@ -108,6 +126,27 @@ async def test_get_activity_tool(app_with_activity_management, mock_garmin_clien
     # Verify
     assert result is not None
     mock_garmin_client.get_activity.assert_called_once_with(activity_id)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_handles_null_nested_sections(
+    app_with_activity_management, mock_garmin_client
+):
+    """Partial activity payloads should still produce a minimal summary."""
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 123,
+        "summaryDTO": None,
+        "activityTypeDTO": None,
+        "metadataDTO": None,
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": 123},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data == {"id": 123}
 
 
 @pytest.mark.asyncio
