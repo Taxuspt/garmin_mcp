@@ -176,6 +176,38 @@ def _response_text_from_connection_error(exc: GarminConnectConnectionError) -> s
     return ""
 
 
+_CUSTOM_FOOD_PAGE_SIZE = 20
+_CUSTOM_FOOD_MAX_SCAN = 500
+
+
+def _find_custom_food(food_id: str, food_name: str) -> Optional[dict]:
+    """Return the stored custom food with ``food_id``, or None if not found.
+
+    Garmin has no read-by-ID for custom foods, so search by ``food_name``
+    first (the usual case) and fall back to paging through the unfiltered
+    list: after a rename, the new name does not match the stored record.
+    """
+    for search in (food_name, ""):
+        for start in range(0, _CUSTOM_FOOD_MAX_SCAN, _CUSTOM_FOOD_PAGE_SIZE):
+            data = garmin_client.connectapi(
+                "/nutrition-service/customFood",
+                params={
+                    "searchExpression": search,
+                    "start": start,
+                    "limit": _CUSTOM_FOOD_PAGE_SIZE,
+                    "includeContent": "true",
+                },
+            )
+            foods = (data.get("customFoods") or []) if isinstance(data, dict) else []
+            for food in foods:
+                meta = (food.get("foodMetaData") or {}) if isinstance(food, dict) else {}
+                if str(meta.get("foodId", "")) == food_id:
+                    return food
+            if len(foods) < _CUSTOM_FOOD_PAGE_SIZE:
+                break
+    return None
+
+
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
@@ -656,10 +688,16 @@ def register_tools(app):
     ) -> str:
         """Update an existing custom food in the user's Garmin nutrition library
 
-        Fetches the food's current record before writing so that omitted optional
-        fields (brand, carbs, protein, fat, micros, etc.) preserve their existing
-        values rather than being cleared. Only the fields you explicitly pass are
-        changed; everything else is carried forward from the current record.
+        Fetches the food's current record (by food_id, so renaming is safe)
+        before writing so that omitted optional fields (brand, carbs, protein,
+        fat, micros, etc.) preserve their existing values rather than being
+        cleared. Only the fields you explicitly pass are changed; everything
+        else is carried forward from the current record.
+
+        Garmin replaces the whole record on update. If the current record
+        cannot be read, the update is refused unless serving_unit and
+        number_of_units are given; the call then replaces the record in full,
+        and any brand or nutrient you omit is cleared.
 
         All nutrient amounts are ABSOLUTE values per serving, not %DV.
         Nutrition labels often print %DV for calcium/iron/vitamin D —
@@ -693,26 +731,26 @@ def register_tools(app):
         """
         try:
             # Fetch current record so omitted fields are preserved (not wiped).
-            existing_nutrition: dict = {}
-            existing_brand: Optional[str] = None
             try:
-                search_data = garmin_client.connectapi(
-                    "/nutrition-service/customFood",
-                    params={
-                        "searchExpression": food_name,
-                        "start": 0,
-                        "limit": 20,
-                        "includeContent": "true",
-                    },
-                )
-                foods = (search_data.get("customFoods") or []) if isinstance(search_data, dict) else []
-                for f in foods:
-                    if str(f.get("foodMetaData", {}).get("foodId", "")) == food_id:
-                        existing_nutrition = (f.get("nutritionContents") or [{}])[0]
-                        existing_brand = f.get("foodMetaData", {}).get("brandName")
-                        break
+                existing = _find_custom_food(food_id, food_name)
             except Exception:
-                pass  # proceed without existing data; caller's values win
+                existing = None
+            if existing is None and (serving_unit is None or number_of_units is None):
+                # The PUT is a full replace: writing without the stored record
+                # would silently wipe the brand, nutrients and serving size.
+                return (
+                    f"Error updating custom food: could not read the current record "
+                    f"for food_id {food_id}, so omitted fields cannot be preserved. "
+                    "Check the food_id with get_custom_foods, or pass serving_unit "
+                    "and number_of_units (plus every nutrient and brand to keep) to "
+                    "replace the record in full."
+                )
+            existing_nutrition: dict = (
+                ((existing or {}).get("nutritionContents") or [{}])[0] or {}
+            )
+            existing_brand: Optional[str] = (
+                (existing or {}).get("foodMetaData") or {}
+            ).get("brandName")
 
             # API field name → optional param value (None means "not supplied by caller")
             optional_updates = {
@@ -731,7 +769,7 @@ def register_tools(app):
                 "vitaminD": vitamin_d,
             }
             # Effective serving basis: caller-supplied wins, else preserve existing,
-            # else fall back to the create-time defaults (no prior record to preserve).
+            # else fall back to the create-time defaults (stored record lacks them).
             effective_serving_unit = serving_unit
             if effective_serving_unit is None:
                 effective_serving_unit = existing_nutrition.get("servingUnit", "G")
