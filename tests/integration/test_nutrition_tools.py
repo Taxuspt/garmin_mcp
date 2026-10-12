@@ -981,6 +981,87 @@ async def test_upsert_and_log_recovers_ids_after_bodyless_create(app_with_nutrit
 
 
 @pytest.mark.asyncio
+async def test_upsert_and_log_with_brand_name_on_create(app_with_nutrition, mock_garmin_client):
+    """brand_name is passed through to the create payload when the food is new."""
+    created_food = {
+        "foodMetaData": {"foodId": "food999", "foodName": "Branded Beer"},
+        "nutritionContents": [{"servingId": "srv999"}],
+    }
+    mock_garmin_client.connectapi.side_effect = [
+        {"customFoods": []},  # search returns empty
+        MOCK_MEALS,           # meal resolution
+    ]
+    mock_garmin_client.client.put.side_effect = [created_food, {}]
+    result = await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "food_name": "Branded Beer",
+            "calories": 150,
+            "brand_name": "Athletic Brewing",
+        },
+    )
+    assert "Food logged successfully" in result[0][0].text
+    create_payload = mock_garmin_client.client.put.call_args_list[0][1]["json"]
+    assert create_payload["foodMetaData"]["brandName"] == "Athletic Brewing"
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_no_brand_name_omits_key_on_create(app_with_nutrition, mock_garmin_client):
+    """Omitting brand_name is byte-identical to current behavior: no brandName key."""
+    created_food = {
+        "foodMetaData": {"foodId": "food999", "foodName": "Plain Food"},
+        "nutritionContents": [{"servingId": "srv999"}],
+    }
+    mock_garmin_client.connectapi.side_effect = [
+        {"customFoods": []},
+        MOCK_MEALS,
+    ]
+    mock_garmin_client.client.put.side_effect = [created_food, {}]
+    await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "12:00:00",
+            "food_name": "Plain Food",
+            "calories": 150,
+        },
+    )
+    create_payload = mock_garmin_client.client.put.call_args_list[0][1]["json"]
+    assert "brandName" not in create_payload["foodMetaData"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_brand_name_ignored_on_existing_match(app_with_nutrition, mock_garmin_client):
+    """brand_name never affects find-or-create matching and is ignored (log-only) on a hit.
+
+    food_name alone remains the match key: a supplied brand must not cause a
+    miss against an existing unbranded record (which would create a duplicate).
+    """
+    mock_garmin_client.connectapi.side_effect = [
+        MOCK_CUSTOM_FOODS,  # search finds existing unbranded "Greek Yogurt"
+        MOCK_MEALS,         # meal resolution
+    ]
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool(
+        "upsert_and_log",
+        {
+            "meal_date": "2024-01-15",
+            "meal_time": "08:30:00",
+            "food_name": "Greek Yogurt",
+            "calories": 100,
+            "brand_name": "Chobani",
+        },
+    )
+    assert "Food logged successfully" in result[0][0].text
+    # Only the log call happens -- no create/update call was made for the brand.
+    mock_garmin_client.client.put.assert_called_once()
+    payload = mock_garmin_client.client.put.call_args[1]["json"]
+    assert payload["foodLogItems"][0]["foodId"] == "food001"
+
+
+@pytest.mark.asyncio
 async def test_upsert_and_log_error(app_with_nutrition, mock_garmin_client):
     """Test upsert_and_log handles errors"""
     mock_garmin_client.connectapi.side_effect = Exception("API error")
