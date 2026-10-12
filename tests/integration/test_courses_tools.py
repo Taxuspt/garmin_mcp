@@ -360,6 +360,48 @@ async def test_upload_course_success(app_with_courses, mock_garmin_client, tmp_p
     assert create_call.args[1] == "/course-service/course"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "activity_type,type_id",
+    [
+        ("running", 1),
+        ("cycling", 2),
+        ("hiking", 3),
+        ("walking", 9),
+        ("mountain_biking", 5),
+        ("trail_running", 6),
+        ("road_biking", 10),
+        ("gravel_cycling", 143),
+    ],
+)
+async def test_upload_course_posts_garmin_activity_type_id(
+    app_with_courses, mock_garmin_client, tmp_path, activity_type, type_id
+):
+    """Each supported activity_type maps to Garmin's real activity typeId."""
+    gpx_file = tmp_path / "route.gpx"
+    gpx_file.write_text("<gpx><trk><trkseg></trkseg></trk></gpx>")
+
+    mock_garmin_client.client.post.side_effect = [
+        {
+            "courseName": "Route",
+            "geoPoints": [
+                {"latitude": 40.0, "longitude": -105.0, "elevation": 1600.0},
+                {"latitude": 40.01, "longitude": -105.01, "elevation": 1610.0},
+            ],
+        },
+        {"courseId": 1000, "courseName": "Route", "activityTypePk": type_id},
+    ]
+
+    result = await app_with_courses.call_tool(
+        "upload_course",
+        {"gpx_path": str(gpx_file), "activity_type": activity_type},
+    )
+
+    assert json.loads(_result_text(result))["status"] == "success"
+    create_call = mock_garmin_client.client.post.call_args_list[1]
+    assert create_call.kwargs["json"]["activityTypePk"] == type_id
+
+
 # --- delete_course --------------------------------------------------------
 
 @pytest.mark.asyncio

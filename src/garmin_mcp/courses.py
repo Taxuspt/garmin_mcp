@@ -43,15 +43,16 @@ def _initial_bearing(p1: Dict[str, float], p2: Dict[str, float]) -> float:
     return (initial_bearing + 360) % 360
 
 
+# Garmin Connect activity typeIds (see get_activity_types).
 _ACTIVITY_TYPE_IDS = {
     "running": 1,
     "cycling": 2,
     "hiking": 3,
-    "walking": 4,
-    "trail_running": 5,
-    "mountain_biking": 6,
-    "road_biking": 7,
-    "gravel_cycling": 8,
+    "walking": 9,
+    "trail_running": 6,
+    "mountain_biking": 5,
+    "road_biking": 10,
+    "gravel_cycling": 143,
 }
 
 
