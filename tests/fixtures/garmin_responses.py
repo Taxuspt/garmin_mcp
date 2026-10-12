@@ -937,12 +937,14 @@ MOCK_ENDURANCE_SCORE = {
 }
 
 # Training - Lactate Threshold
+# Speeds from a real Garmin response (2026-10-04); Garmin Connect shows them as
+# 4:17 min/km (0.3888878) and 4:15 min/km (0.39166557).
 # Response format for latest=True
 MOCK_LACTATE_THRESHOLD = {
     "speed_and_heart_rate": {
         "userProfilePK": 12345678,
         "calendarDate": "2024-01-15T10:30:00.000",
-        "speed": 0.32222132,
+        "speed": 0.3888878,
         "heartRate": 169,
         "heartRateCycling": None,
     },
@@ -961,9 +963,9 @@ MOCK_LACTATE_THRESHOLD = {
 # Response format for latest=False (date range)
 MOCK_LACTATE_THRESHOLD_RANGE = {
     "speed": [
-        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.29444, "updatedDate": "2024-01-08"},
-        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.30555, "updatedDate": "2024-01-12"},
-        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.31666, "updatedDate": "2024-01-15"},
+        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-08"},
+        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-12"},
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.3888878, "updatedDate": "2024-01-15"},
     ],
     "heartRate": [
         {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 165, "updatedDate": "2024-01-08"},
