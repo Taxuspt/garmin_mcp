@@ -1195,12 +1195,14 @@ def register_tools(app):
 
     @app.tool()
     async def get_training_load_trend(start_date: str, end_date: str) -> str:
-        """Get the Performance Management Chart (CTL/ATL/TSB) over a date range.
+        """Get Garmin's daily acute and chronic training load over a date range.
 
-        Returns Chronic Training Load (CTL, 42-day fitness), Acute Training Load (ATL, 7-day fatigue),
-        Training Stress Balance (TSB = CTL - ATL, form/freshness), and Acute:Chronic Workload Ratio
-        (ACWR) per day. Use this to assess whether the athlete is building fitness, peaking, or
-        accumulating too much fatigue.
+        Returns, per day, Garmin's acute load (`atl`, the 7-day load), chronic load (`ctl`), their
+        difference (`tsb` = ctl - atl), and Garmin's Acute:Chronic Workload Ratio (`acwr`,
+        `acwr_status`). These are Garmin's dailyTrainingLoadAcute/Chronic values, not TrainingPeaks
+        CTL/ATL: they are on Garmin's weekly load scale, so `tsb` is not comparable to TrainingPeaks
+        TSB and TSB form thresholds do not apply. Use `acwr`/`acwr_status` (and the optimal chronic
+        load range) to judge whether load is building steadily or spiking.
 
         Recommended range: 4-8 weeks. Maximum: 90 days.
 

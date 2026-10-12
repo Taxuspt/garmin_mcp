@@ -353,6 +353,66 @@ async def test_get_training_load_trend_omits_mismatched_ctl_and_uses_tracker_acu
     mock_garmin_client.get_training_readiness.assert_called_once_with("2026-10-09")
 
 
+@pytest.mark.asyncio
+async def test_get_training_load_trend_reports_primary_tracker_loads(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "100": {
+                    "deviceId": 100,
+                    "trainingStatusFeedbackPhrase": "PRODUCTIVE_1",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 520,
+                        "dailyTrainingLoadChronic": 410,
+                        "dailyAcuteChronicWorkloadRatio": 1.27,
+                        "acwrStatus": "HIGH",
+                        "minTrainingLoadChronic": 330,
+                        "maxTrainingLoadChronic": 610,
+                    },
+                }
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_trend",
+        {"start_date": "2026-10-08", "end_date": "2026-10-09"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["days_with_data"] == 2
+    entry = data["trend"][-1]
+    assert entry["date"] == "2026-10-09"
+    assert entry["reporting_device_id"] == 100
+    assert entry["atl"] == 520
+    assert entry["ctl"] == 410
+    assert entry["tsb"] == -110
+    assert entry["acwr"] == 1.27
+    assert entry["acwr_status"] == "HIGH"
+    assert entry["optimal_chronic_load_min"] == 330
+    assert entry["optimal_chronic_load_max"] == 610
+    assert entry["training_status"] == "PRODUCTIVE_1"
+    mock_garmin_client.get_training_readiness.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_trend_description_uses_garmin_load_scale(
+    app_with_training,
+):
+    """The tool must not tell the model to read Garmin loads as TrainingPeaks PMC."""
+    tools = {tool.name: tool for tool in await app_with_training.list_tools()}
+    description = tools["get_training_load_trend"].description
+
+    assert "42-day" not in description
+    assert "not comparable to TrainingPeaks" in description
+    assert "acwr_status" in description
+
+
 def _load_balance_record(device_id, aerobic_low, feedback, **extra):
     return {
         "deviceId": device_id,

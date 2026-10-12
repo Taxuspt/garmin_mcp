@@ -525,7 +525,7 @@
     },
     {
       "name": "get_training_load_trend",
-      "description": "Get the Performance Management Chart (CTL/ATL/TSB) over a date range."
+      "description": "Get Garmin's daily acute and chronic training load over a date range."
     },
     {
       "name": "get_training_plan_workouts",
