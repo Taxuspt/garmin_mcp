@@ -315,7 +315,7 @@ def register_tools(app):
 
         Args:
             activity_id: ID of the activity to update
-            activity_name: New activity name
+            activity_name: New activity name. Max 200 characters; Garmin rejects longer.
         """
         try:
             activity_id = int(activity_id)
@@ -394,7 +394,9 @@ def register_tools(app):
 
         Args:
             activity_id: ID of the activity to update
-            description: New description text (empty string clears it)
+            description: New description text (empty string clears it).
+                Max 2000 characters; Garmin rejects longer.
+                Emoji and other non-BMP characters count as two.
         """
         try:
             activity_id = int(activity_id)
