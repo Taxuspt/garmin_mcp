@@ -93,6 +93,25 @@ async def test_get_workouts_tool(app_with_workouts, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_workouts_handles_null_sport_type(app_with_workouts, mock_garmin_client):
+    """An explicit null sportType on one workout must not fail the whole list."""
+    import json as json_module
+
+    mock_garmin_client.get_workouts.return_value = [
+        {"workoutId": 1, "workoutName": "Easy Run", "sportType": {"sportTypeKey": "running"}},
+        {"workoutId": 2, "workoutName": "Imported", "sportType": None},
+    ]
+
+    result = await app_with_workouts.call_tool("get_workouts", {})
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["count"] == 2
+    assert result_data["workouts"][0]["sport"] == "running"
+    assert result_data["workouts"][1]["name"] == "Imported"
+    assert "sport" not in result_data["workouts"][1]
+
+
+@pytest.mark.asyncio
 async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
     """Test get_workout_by_id tool returns specific workout with step details (numeric ID)"""
     import json as json_module
@@ -1912,6 +1931,29 @@ async def test_delete_workout_exception(app_with_workouts, mock_garmin_client):
     result_data = json_module.loads(result[0][0].text)
     assert result_data["status"] == "failed"
     assert "Network error" in result_data["message"]
+
+
+@pytest.mark.asyncio
+async def test_delete_workout_handles_null_sport_type(app_with_workouts, mock_garmin_client):
+    """A workout whose sportType is null can still be previewed and deleted."""
+    import json as json_module
+
+    mock_garmin_client.delete_workout.return_value = {}
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 123456,
+        "workoutName": "Imported",
+        "sportType": None,
+    }
+
+    result = await app_with_workouts.call_tool(
+        "delete_workout",
+        {"workout_id": 123456, "confirm": True}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["workout"]["name"] == "Imported"
+    mock_garmin_client.delete_workout.assert_called_once_with(123456)
 
 
 # Error handling tests

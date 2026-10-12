@@ -344,7 +344,7 @@ def _validate_target_type_steps(workout_data: dict) -> None:
 
 def _curate_workout_summary(workout: dict) -> dict:
     """Extract essential workout metadata for list views"""
-    sport_type = workout.get('sportType', {})
+    sport_type = workout.get('sportType') or {}
 
     summary = {
         "id": workout.get('workoutId'),
