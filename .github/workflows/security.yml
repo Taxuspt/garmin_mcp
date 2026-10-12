@@ -31,8 +31,7 @@ jobs:
 
     - name: Verify lock file is up to date
       run: |
-        uv lock --check
-        if [ $? -ne 0 ]; then
+        if ! uv lock --check; then
           echo "⚠️ Lock file is out of sync with pyproject.toml"
           echo "Run 'uv lock' locally and commit the updated uv.lock"
           exit 1
