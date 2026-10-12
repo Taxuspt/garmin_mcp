@@ -1425,7 +1425,14 @@ async def test_get_garmin_coach_workout_tools(
                         "trainingPlanDetailsDTO": {
                             "athletePlanId": 12345,
                             "workoutsPerWeek": 4,
+                            "remainingAtpWorkoutsForWeek": 2,
                             "trainingType": "RUNNING",
+                            "registrationDate": "2024-01-01",
+                            "planCompleted": False,
+                            "athleteRace": {
+                                "raceName": "City 5K",
+                                "raceDay": "2024-03-10",
+                            },
                         },
                         "workoutScheduleSummaries": [
                             {
@@ -1482,6 +1489,12 @@ async def test_get_garmin_coach_workout_tools(
             "training_plan_id": 12345,
             "classification": "FBT_ADAPTIVE",
             "training_type": "RUNNING",
+            "race_name": "City 5K",
+            "race_day": "2024-03-10",
+            "workouts_per_week": 4,
+            "remaining_workouts_this_week": 2,
+            "registration_date": "2024-01-01",
+            "plan_completed": False,
         }
     ]
     assert result_data["count"] == 2
