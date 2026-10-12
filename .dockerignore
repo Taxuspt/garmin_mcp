@@ -1,1 +1,36 @@
-.gitignore
+# Docker build context exclusions. Kept separate from .gitignore: git and
+# Docker have different concerns (e.g. the Dockerfile copies tests/ and
+# pytest.ini into the image for in-container testing, which a shared
+# .gitignore-based ignore file can't express safely).
+
+.git/
+.github/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments / caches
+.venv/
+.uv-cache/
+
+# Local credentials and secrets — never send these to the build context
+.env
+.garminconnect/
+.garminconnect_base64
+
+# Editor / OS cruft
+.DS_Store
+*.log
+
+# Project-local, not needed to build or run the image
+docs/
+playground/
+scratch/
