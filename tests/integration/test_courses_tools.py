@@ -120,6 +120,48 @@ async def test_get_course_details_success(app_with_courses, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_course_details_treats_null_course_points_as_empty(
+    app_with_courses, mock_garmin_client
+):
+    """A course with no waypoints still returns its valid geo-point count."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 778,
+        "courseName": "Track Only",
+        "coursePoints": None,
+        "geoPoints": [
+            {"latitude": 52.1, "longitude": 20.9},
+            {"latitude": 52.2, "longitude": 21.0},
+        ],
+    }
+
+    result = await app_with_courses.call_tool("get_course_details", {"course_id": 778})
+
+    data = json.loads(_result_text(result))
+    assert data["waypoints_count"] == 0
+    assert data["waypoints"] == []
+    assert data["geo_points_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_course_details_treats_null_geo_points_as_empty(
+    app_with_courses, mock_garmin_client
+):
+    """A course with no route points reports zero geo points cleanly."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 779,
+        "courseName": "Metadata Only",
+        "coursePoints": None,
+        "geoPoints": None,
+    }
+
+    result = await app_with_courses.call_tool("get_course_details", {"course_id": 779})
+
+    data = json.loads(_result_text(result))
+    assert data["waypoints_count"] == 0
+    assert data["geo_points_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_get_course_details_error_is_caught(app_with_courses, mock_garmin_client):
     """Client error in get_course_details is caught cleanly."""
     mock_garmin_client.client.connectapi.side_effect = Exception("Not found")
@@ -166,6 +208,56 @@ async def test_download_course_gpx_success(app_with_courses, mock_garmin_client,
     assert "<wpt lat='46.2' lon='8.2'>" in content
     assert "<name>Summit Rest</name>" in content
     assert "<trkpt lat='46.1' lon='8.1'><ele>1200.0</ele></trkpt>" in content
+
+
+@pytest.mark.asyncio
+async def test_download_course_gpx_preserves_track_when_course_points_are_null(
+    app_with_courses, mock_garmin_client, tmp_path
+):
+    """Null waypoints do not prevent exporting the valid track."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 889,
+        "courseName": "Track Only",
+        "geoPoints": [
+            {"latitude": 46.1, "longitude": 8.1, "elevation": 1200.0},
+            {"latitude": 46.2, "longitude": 8.2, "elevation": 1400.0},
+        ],
+        "coursePoints": None,
+    }
+    out_file = str(tmp_path / "track_only.gpx")
+
+    result = await app_with_courses.call_tool(
+        "download_course_gpx", {"course_id": 889, "output_path": out_file}
+    )
+
+    data = json.loads(_result_text(result))
+    assert data["status"] == "success"
+    assert data["waypoints_count"] == 0
+    assert data["track_points_count"] == 2
+    assert "<trkpt lat='46.1' lon='8.1'><ele>1200.0</ele></trkpt>" in (
+        open(out_file, encoding="utf-8").read()
+    )
+
+
+@pytest.mark.asyncio
+async def test_download_course_gpx_reports_null_geo_points_without_writing(
+    app_with_courses, mock_garmin_client, tmp_path
+):
+    """Null geo points are reported as missing route data, not iterated."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 890,
+        "courseName": "Metadata Only",
+        "geoPoints": None,
+        "coursePoints": None,
+    }
+    out_file = tmp_path / "metadata_only.gpx"
+
+    result = await app_with_courses.call_tool(
+        "download_course_gpx", {"course_id": 890, "output_path": str(out_file)}
+    )
+
+    assert "Error: course 890 not found or missing geoPoints" in _result_text(result)
+    assert not out_file.exists()
 
 
 @pytest.mark.asyncio

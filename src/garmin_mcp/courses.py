@@ -201,8 +201,9 @@ def register_tools(app):
                     "lon": cp.get("lon"),
                     "distance_m": cp.get("distance"),
                 }
-                for cp in data.get("coursePoints", [])
+                for cp in (data.get("coursePoints") or [])
             ]
+            geo_points = data.get("geoPoints") or []
 
             result = {
                 "course_id": data.get("courseId"),
@@ -213,7 +214,7 @@ def register_tools(app):
                 "activity": (data.get("activityType") or {}).get("typeKey"),
                 "waypoints_count": len(course_points),
                 "waypoints": course_points,
-                "geo_points_count": len(data.get("geoPoints", [])),
+                "geo_points_count": len(geo_points),
                 "url": f"https://connect.{garmin_client.client.domain}/modern/course/{course_id}",
             }
             return json.dumps(result, indent=2)
@@ -234,15 +235,15 @@ def register_tools(app):
         """
         try:
             data = garmin_client.client.connectapi(f"/course-service/course/{course_id}")
-            if not isinstance(data, dict) or "geoPoints" not in data:
+            if not isinstance(data, dict) or not data.get("geoPoints"):
                 return f"Error: course {course_id} not found or missing geoPoints."
 
             target_path = _resolve_gpx_output_path(course_id, output_path)
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
             name = data.get("courseName", f"Garmin Course {course_id}")
-            geo_points = data.get("geoPoints", [])
-            course_points = data.get("coursePoints", [])
+            geo_points = data.get("geoPoints") or []
+            course_points = data.get("coursePoints") or []
 
             lines = [
                 "<?xml version='1.0' encoding='UTF-8'?>",
