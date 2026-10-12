@@ -992,8 +992,8 @@ async def test_log_food_forbidden_is_an_error(
 ):
     """Test log_food preserves generic Garmin 403 failures"""
     mock_garmin_client.connectapi.return_value = MOCK_MEALS
-    mock_garmin_client.client.put.side_effect = _connection_error_with_status(
-        403, "localized or non-English message"
+    mock_garmin_client.client.put.side_effect = GarminConnectConnectionError(
+        "API Error 403 - localized or non-English message"
     )
     result = await app_with_nutrition.call_tool(
         "log_food",
@@ -1007,9 +1007,11 @@ async def test_log_food_forbidden_is_an_error(
             "fat": 2,
         },
     )
-    assert result[0][0].text == (
-        "Error logging food: localized or non-English message | Response: "
-    )
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "error"
+    assert data["upstream_status"] == 403
+    assert data["upstream_body"] == "localized or non-English message"
+    assert data["write_committed"] is False
 
 
 @pytest.mark.asyncio
@@ -1118,8 +1120,8 @@ async def test_log_custom_food_forbidden_is_an_error(
 ):
     """Test log_custom_food preserves generic Garmin 403 failures"""
     mock_garmin_client.connectapi.return_value = MOCK_MEALS
-    mock_garmin_client.client.put.side_effect = _connection_error_with_status(
-        403, "localized or non-English message"
+    mock_garmin_client.client.put.side_effect = GarminConnectConnectionError(
+        "API Error 403 - localized or non-English message"
     )
     result = await app_with_nutrition.call_tool(
         "log_custom_food",
@@ -1130,9 +1132,11 @@ async def test_log_custom_food_forbidden_is_an_error(
             "serving_id": "srv456",
         },
     )
-    assert result[0][0].text == (
-        "Error logging food: localized or non-English message | Response: "
-    )
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "error"
+    assert data["upstream_status"] == 403
+    assert data["upstream_body"] == "localized or non-English message"
+    assert data["write_committed"] is False
 
 
 # delete_custom_food tests
