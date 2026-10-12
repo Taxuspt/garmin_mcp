@@ -470,13 +470,41 @@ async def test_upload_course_posts_garmin_activity_type_id(
 # --- delete_course --------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_delete_course_success(app_with_courses, mock_garmin_client):
-    """delete_course hits the right endpoint and reports success."""
+async def test_delete_course_requires_confirmation(app_with_courses, mock_garmin_client):
+    """delete_course returns a preview and deletes nothing unless confirm=true."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 555,
+        "courseName": "River Loop",
+        "distanceMeter": 10250.5,
+        "activityType": {"typeKey": "running"},
+    }
+
     result = await app_with_courses.call_tool("delete_course", {"course_id": 555})
+
+    data = json.loads(_result_text(result))
+    assert data["status"] == "needs_confirmation"
+    assert data["course"]["name"] == "River Loop"
+    assert data["course"]["distance_m"] == 10250.5
+    mock_garmin_client.client.connectapi.assert_called_once_with("/course-service/course/555")
+    mock_garmin_client.client.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_course_success(app_with_courses, mock_garmin_client):
+    """delete_course with confirm=true hits the right endpoint and reports success."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 555,
+        "courseName": "River Loop",
+    }
+
+    result = await app_with_courses.call_tool(
+        "delete_course", {"course_id": 555, "confirm": True}
+    )
 
     data = json.loads(_result_text(result))
     assert data["status"] == "success"
     assert data["course_id"] == 555
+    assert data["course"]["name"] == "River Loop"
     mock_garmin_client.client.delete.assert_called_once_with(
         "connectapi", "/course-service/course/555"
     )
@@ -485,9 +513,12 @@ async def test_delete_course_success(app_with_courses, mock_garmin_client):
 @pytest.mark.asyncio
 async def test_delete_course_error_is_caught(app_with_courses, mock_garmin_client):
     """A client error is surfaced as a clean message, not a traceback."""
+    mock_garmin_client.client.connectapi.return_value = {"courseId": 555}
     mock_garmin_client.client.delete.side_effect = Exception("nope")
 
-    result = await app_with_courses.call_tool("delete_course", {"course_id": 555})
+    result = await app_with_courses.call_tool(
+        "delete_course", {"course_id": 555, "confirm": True}
+    )
 
     assert "Error deleting course" in _result_text(result)
 

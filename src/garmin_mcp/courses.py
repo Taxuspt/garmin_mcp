@@ -5,11 +5,13 @@ Adds support for uploading GPX files as Garmin Connect Courses, listing courses,
 getting detailed course waypoints/metadata, downloading course GPX files, and deleting courses.
 """
 
+import datetime
 import io
 import json
 import math
 import os
 import pathlib
+import sys
 from typing import Any, Dict, Optional
 from xml.sax.saxutils import escape
 
@@ -145,6 +147,48 @@ def _resolve_gpx_output_path(course_id: int, output_path: Optional[str] = None) 
         base_dir = os.path.abspath("./courses")
 
     return os.path.join(base_dir, f"{course_id}.gpx")
+
+
+def _course_preview(client: Any, course_id: int) -> Dict[str, Any]:
+    """Build a compact preview of a course before deleting it."""
+    preview: Dict[str, Any] = {"course_id": course_id}
+
+    course = None
+    try:
+        course = client.client.connectapi(f"/course-service/course/{course_id}")
+    except Exception:
+        course = None
+
+    if not (isinstance(course, dict) and course):
+        # Fall back to the course list if the details call fails.
+        try:
+            items = client.client.connectapi("/course-service/course")
+        except Exception:
+            items = None
+        if not isinstance(items, list):
+            return preview
+        course = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict) and str(item.get("courseId")) == str(course_id)
+            ),
+            None,
+        )
+        if course is None:
+            return preview
+
+    activity_type = course.get("activityType")
+    activity_type = activity_type if isinstance(activity_type, dict) else {}
+    preview.update(
+        {
+            "name": course.get("courseName"),
+            "activity": activity_type.get("typeKey"),
+            "distance_m": course.get("distanceInMeters") or course.get("distanceMeter"),
+            "created": course.get("createdDateFormatted"),
+        }
+    )
+    return {key: value for key, value in preview.items() if value is not None}
 
 
 def register_tools(app):
@@ -386,20 +430,45 @@ def register_tools(app):
             return f"Error uploading course: {str(e)}"
 
     @app.tool()
-    async def delete_course(course_id: int) -> str:
+    async def delete_course(course_id: int, confirm: bool = False) -> str:
         """Delete a course from Garmin Connect.
+
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the course, then call again with confirm=true to delete it.
 
         Args:
             course_id: ID of the course to delete (get IDs from get_courses).
+            confirm: Must be true to actually delete. Default false returns a preview.
         """
         try:
+            preview = _course_preview(garmin_client, course_id)
+            if not confirm:
+                return json.dumps(
+                    {
+                        "status": "needs_confirmation",
+                        "course": preview,
+                        "message": (
+                            "This permanently deletes the course from Garmin Connect "
+                            "and cannot be undone. Call again with confirm=true to proceed."
+                        ),
+                    },
+                    indent=2,
+                )
+
             garmin_client.client.delete(
                 "connectapi", f"/course-service/course/{course_id}"
+            )
+            print(
+                "delete_course: deleted course "
+                f"{course_id} name={preview.get('name')!r} "
+                f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                file=sys.stderr,
             )
             return json.dumps(
                 {
                     "status": "success",
                     "course_id": course_id,
+                    "course": preview,
                     "message": f"Course {course_id} deleted",
                 },
                 indent=2,
