@@ -58,6 +58,34 @@ class TestClassification:
         assert result["upstream_body"] == "Required Parameter meal id is null"
         assert result["write_committed"] is False
 
+    @pytest.mark.parametrize("status", [400, 404])
+    def test_garmin_4xx_after_send_is_rejected(self, status):
+        exc = GarminConnectConnectionError(f"API Error {status} - rejected")
+        result = _error(exc, sent=True)
+        assert result["upstream_status"] == status
+        assert result["write_committed"] is False
+        assert result["hint"].startswith("Nothing was written")
+
+    @pytest.mark.parametrize("status", [500, 502, 504])
+    def test_garmin_5xx_after_send_is_unknown(self, status):
+        # e.g. a Cloudflare 504 on the quickAdd PUT: the backend may already
+        # have logged the food before the gateway gave up.
+        exc = GarminConnectConnectionError(
+            f"API Error {status} - <html>Gateway Time-out</html>"
+        )
+        result = _error(exc, sent=True)
+        assert result["stage"] == "garmin_request"
+        assert result["upstream_status"] == status
+        assert result["write_committed"] == "unknown"
+        assert result["hint"].startswith("The request may have reached Garmin")
+
+    def test_garmin_5xx_before_send_is_not_committed(self):
+        # e.g. the meal lookup GET (via Garmin.connectapi) got a 504
+        exc = GarminConnectConnectionError("HTTP error: API Error 504 - Gateway Time-out")
+        result = _error(exc, sent=False)
+        assert result["upstream_status"] == 504
+        assert result["write_committed"] is False
+
     def test_upstream_body_is_trimmed(self):
         exc = GarminConnectConnectionError("API Error 500 - " + "x" * 2000)
         result = _error(exc, sent=True)

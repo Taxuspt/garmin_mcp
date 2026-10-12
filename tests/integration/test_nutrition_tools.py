@@ -1865,6 +1865,23 @@ async def test_log_food_garmin_rejection_is_structured(app_with_nutrition, mock_
 
 
 @pytest.mark.asyncio
+async def test_log_food_5xx_after_send_is_unknown(app_with_nutrition, mock_garmin_client):
+    """A gateway 5xx on the write may come after Garmin already logged the food"""
+    from garminconnect import GarminConnectConnectionError
+
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.side_effect = GarminConnectConnectionError(
+        "API Error 504 - <html>Gateway Time-out</html>"
+    )
+    result = await app_with_nutrition.call_tool("log_food", _LOG_FOOD_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["stage"] == "garmin_request"
+    assert data["upstream_status"] == 504
+    assert data["write_committed"] == "unknown"
+    mock_garmin_client.client.put.assert_called_once()  # never auto-retried
+
+
+@pytest.mark.asyncio
 async def test_log_food_timeout_after_send_is_unknown(app_with_nutrition, mock_garmin_client):
     """A read timeout on the write may have committed; say so rather than guess"""
     import requests
