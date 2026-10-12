@@ -43,15 +43,15 @@ def configure(client):
 def _decode_gear_change(data: int) -> dict:
     """Decode a packed gear_change_data uint32 from a Di2 shift event.
 
-    Shimano Di2 packs gear information as:
+    The FIT profile packs gear information as:
       bits 0-7:   rear gear number (1 = smallest/hardest cog)
-      bits 8-15:  front gear number (1 = inner/small ring)
-      bits 16-23: rear gear teeth count
+      bits 8-15:  rear gear teeth count
+      bits 16-23: front gear number (1 = inner/small ring)
       bits 24-31: front gear teeth count
     """
     rear_gear_num = data & 0xFF
-    front_gear_num = (data >> 8) & 0xFF
-    rear_teeth = (data >> 16) & 0xFF
+    rear_teeth = (data >> 8) & 0xFF
+    front_gear_num = (data >> 16) & 0xFF
     front_teeth = (data >> 24) & 0xFF
     return {
         "rear_gear_num": rear_gear_num,
@@ -61,19 +61,31 @@ def _decode_gear_change(data: int) -> dict:
     }
 
 
-def _decode_left_right_balance(value) -> Optional[float]:
-    """Decode Garmin's left_right_balance field to left power percentage."""
+def _decode_left_right_balance(value, *, per_record: bool = False) -> Optional[float]:
+    """Decode a FIT left_right_balance value to left power percentage.
+
+    Session and lap messages use the uint16 left_right_balance_100 type
+    (bit 15 = right, low 14 bits = percent x 100). Record messages use the
+    uint8 left_right_balance type (bit 7 = right, low 7 bits = whole percent).
+    When the right bit is set the percentage is the right leg's share.
+    """
     if value is None:
         return None
     try:
         int_val = int(value)
-        right_dominant = bool(int_val & 0x8000)
-        pct = (int_val & 0x7FFF) / 100.0
-        if right_dominant:
-            return round(100.0 - pct, 1)
-        return round(pct, 1)
     except (TypeError, ValueError):
         return None
+    if per_record:
+        right_dominant = bool(int_val & 0x80)
+        pct = float(int_val & 0x7F)
+    else:
+        right_dominant = bool(int_val & 0x8000)
+        pct = (int_val & 0x3FFF) / 100.0
+    if pct > 100:
+        return None
+    if right_dominant:
+        return round(100.0 - pct, 1)
+    return round(pct, 1)
 
 
 def _get_field(message, *names):
@@ -1141,7 +1153,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "avg_left_pedal_smoothness_pct": _get_field(message, "avg_left_pedal_smoothness"),
                 "avg_right_pedal_smoothness_pct": _get_field(message, "avg_right_pedal_smoothness"),
             }
-            balance_raw = _get_field(message, "avg_left_right_balance")
+            balance_raw = _get_field(message, "left_right_balance")
             session["avg_left_power_pct"] = _decode_left_right_balance(balance_raw)
             if session["avg_left_power_pct"] is not None:
                 session["avg_right_power_pct"] = round(100.0 - session["avg_left_power_pct"], 1)
@@ -1170,7 +1182,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "total_ascent_m": _get_field(message, "total_ascent"),
                 "total_descent_m": _get_field(message, "total_descent"),
             }
-            balance_raw = _get_field(message, "avg_left_right_balance")
+            balance_raw = _get_field(message, "left_right_balance")
             left_pct = _decode_left_right_balance(balance_raw)
             if left_pct is not None:
                 lap["avg_left_power_pct"] = left_pct
@@ -1271,7 +1283,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "right_pedal_smoothness_pct": _get_field(message, "right_pedal_smoothness"),
             }
             balance_raw = _get_field(message, "left_right_balance")
-            left_pct = _decode_left_right_balance(balance_raw)
+            left_pct = _decode_left_right_balance(balance_raw, per_record=True)
             if left_pct is not None:
                 record["left_power_pct"] = left_pct
                 record["right_power_pct"] = round(100.0 - left_pct, 1)
