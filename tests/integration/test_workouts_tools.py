@@ -2486,6 +2486,34 @@ async def test_schedule_workouts_idempotent(app_with_workouts, mock_garmin_clien
 
 
 @pytest.mark.asyncio
+async def test_schedule_workouts_string_workout_id_is_idempotent(
+    app_with_workouts, mock_garmin_client
+):
+    """A string workout_id still matches Garmin's int workoutId in the pre-check."""
+    import json as json_module
+
+    mock_garmin_client.query_garmin_graphql.return_value = {
+        "data": {
+            "workoutScheduleSummariesScalar": [
+                {"workoutId": 123456, "scheduleDate": "2024-01-15"}
+            ]
+        }
+    }
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {"schedules": [{"workout_id": "123456", "calendar_date": "2024-01-15"}]}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    entry = result_data["results"][0]
+    assert entry["status"] == "success"
+    assert entry["idempotent"] is True
+    assert entry["workout_id"] == 123456
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_schedule_workouts_non_string_date_keeps_earlier_results(
     app_with_workouts, mock_garmin_client
 ):

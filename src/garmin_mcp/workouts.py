@@ -1430,6 +1430,10 @@ def register_tools(app):
                     workout_id = upload_result['workoutId']
                     workout_name = upload_result.get('workoutName')
 
+                # Garmin reports workoutId as an int; a string id ("123")
+                # would never match in the pre-check and get double-booked.
+                workout_id = int(workout_id)
+
                 if _is_already_scheduled(workout_id, calendar_date):
                     entry = {
                         "status": "success",
