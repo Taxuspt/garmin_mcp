@@ -4,7 +4,7 @@ Integration tests for workouts module MCP tools
 Tests workout tools using FastMCP integration with mocked Garmin API responses.
 """
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import workouts
@@ -90,6 +90,43 @@ async def test_get_workouts_tool(app_with_workouts, mock_garmin_client):
     # Verify
     assert result is not None
     mock_garmin_client.get_workouts.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_workouts_pages_through_whole_library(app_with_workouts, mock_garmin_client):
+    """get_workouts returns every workout, not just the library's first page of 100."""
+    import json as json_module
+
+    first_page = [{"workoutId": i, "workoutName": f"W{i}"} for i in range(100)]
+    second_page = [{"workoutId": i, "workoutName": f"W{i}"} for i in range(100, 105)]
+    mock_garmin_client.get_workouts.side_effect = [first_page, second_page]
+
+    result = await app_with_workouts.call_tool("get_workouts", {})
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["count"] == 105
+    assert result_data["workouts"][-1]["id"] == 104
+    assert mock_garmin_client.get_workouts.call_args_list == [
+        call(1, 100),
+        call(101, 100),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_workouts_stops_when_garmin_repeats_a_page(
+    app_with_workouts, mock_garmin_client
+):
+    """If Garmin ignores the offset, paging stops instead of looping forever."""
+    import json as json_module
+
+    page = [{"workoutId": i, "workoutName": f"W{i}"} for i in range(100)]
+    mock_garmin_client.get_workouts.return_value = page
+
+    result = await app_with_workouts.call_tool("get_workouts", {})
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["count"] == 100
+    assert mock_garmin_client.get_workouts.call_count == 2
 
 
 @pytest.mark.asyncio
