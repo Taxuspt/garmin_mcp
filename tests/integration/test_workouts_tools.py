@@ -137,6 +137,92 @@ async def test_get_workout_by_id_tool(app_with_workouts, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_workout_by_id_tool_keeps_target_units(app_with_workouts, mock_garmin_client):
+    """Target units survive curation; without them a range in % FTP reads as watts"""
+    import json as json_module
+
+    # Shapes as Garmin Connect returns them for a workout uploaded with these targets
+    power = {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone", "displayOrder": 2}
+    cadence = {"workoutTargetTypeId": 3, "workoutTargetTypeKey": "cadence", "displayOrder": 3}
+    percent = {"unitId": 253, "unitKey": "percent", "factor": 1.0}
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 1,
+        "workoutName": "Units",
+        "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling"},
+        "poolLength": None,
+        "poolLengthUnit": None,
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling"},
+            "workoutSteps": [
+                {
+                    "type": "ExecutableStepDTO",
+                    "stepOrder": 1,
+                    "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                    "targetType": power,
+                    "targetValueOne": 76.0,
+                    "targetValueTwo": 81.0,
+                    "targetValueUnit": percent,
+                    "secondaryTargetType": cadence,
+                    "secondaryTargetValueOne": 85.0,
+                    "secondaryTargetValueTwo": 95.0,
+                    "secondaryTargetValueUnit": None,
+                },
+                {
+                    "type": "ExecutableStepDTO",
+                    "stepOrder": 2,
+                    "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                    "targetType": cadence,
+                    "targetValueOne": 85.0,
+                    "targetValueTwo": 95.0,
+                    "secondaryTargetType": power,
+                    "secondaryTargetValueOne": 76.0,
+                    "secondaryTargetValueTwo": 81.0,
+                    "secondaryTargetValueUnit": percent,
+                },
+            ],
+        }],
+    }
+
+    result = await app_with_workouts.call_tool("get_workout_by_id", {"workout_id": 1})
+
+    result_data = json_module.loads(result[0][0].text)
+    assert "pool_length" not in result_data
+    power_first, cadence_first = result_data["segments"][0]["steps"]
+    assert power_first["target_value_unit"] == "percent"
+    assert "secondary_target_value_unit" not in power_first
+    assert "target_value_unit" not in cadence_first
+    assert cadence_first["secondary_target_value_unit"] == "percent"
+
+
+@pytest.mark.asyncio
+async def test_get_workout_by_id_tool_keeps_pool_length(app_with_workouts, mock_garmin_client):
+    """Pool length is set on the workout, not the segment"""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 1,
+        "workoutName": "Pool",
+        "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+        "poolLength": 50.0,
+        "poolLengthUnit": {"unitId": 1, "unitKey": "meter", "factor": 100.0},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+            "poolLength": None,
+            "poolLengthUnit": None,
+            "workoutSteps": [],
+        }],
+    }
+
+    result = await app_with_workouts.call_tool("get_workout_by_id", {"workout_id": 1})
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["pool_length"] == 50.0
+    assert result_data["pool_length_unit"] == "meter"
+
+
+@pytest.mark.asyncio
 async def test_get_workout_by_id_tool_handles_swim_secondary_targets(
     app_with_workouts, mock_garmin_client
 ):

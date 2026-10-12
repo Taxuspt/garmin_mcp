@@ -367,6 +367,7 @@ def _curate_step_target(
     value_one_field: str,
     value_two_field: str,
     zone_field: str,
+    unit_field: str,
     prefix: str = "",
 ) -> None:
     """Curate a workout target block, handling Garmin null target payloads safely."""
@@ -386,6 +387,10 @@ def _curate_step_target(
         curated[f'{prefix}target_value_high'] = step.get(value_two_field)
     if step.get(zone_field) is not None:
         curated[f'{prefix}target_zone'] = step.get(zone_field)
+    # Without the unit, a power range in % FTP reads the same as one in watts
+    unit = step.get(unit_field)
+    if isinstance(unit, dict) and unit.get('unitKey'):
+        curated[f'{prefix}target_value_unit'] = unit.get('unitKey')
 
 
 def _curate_workout_step(step: dict) -> dict:
@@ -417,9 +422,10 @@ def _curate_workout_step(step: dict) -> dict:
         value_one_field='targetValueOne',
         value_two_field='targetValueTwo',
         zone_field='zoneNumber',
+        unit_field='targetValueUnit',
     )
 
-    # Swim workouts often store pace prescriptions as secondary targets.
+    # Any sport can have one, e.g. swim pace or cadence alongside bike power.
     _curate_step_target(
         curated,
         step,
@@ -427,6 +433,7 @@ def _curate_workout_step(step: dict) -> dict:
         value_one_field='secondaryTargetValueOne',
         value_two_field='secondaryTargetValueTwo',
         zone_field='secondaryZoneNumber',
+        unit_field='secondaryTargetValueUnit',
         prefix='secondary_',
     )
     # Swim stroke / equipment / drill info (Garmin returns these as nested dicts;
@@ -520,6 +527,12 @@ def _curate_workout_details(workout: dict) -> dict:
 
     if workout.get('avgTrainingSpeed'):
         details['avg_training_speed_mps'] = workout.get('avgTrainingSpeed')
+
+    if workout.get('poolLength'):
+        details['pool_length'] = workout.get('poolLength')
+        pool_unit = workout.get('poolLengthUnit')
+        if isinstance(pool_unit, dict) and pool_unit.get('unitKey'):
+            details['pool_length_unit'] = pool_unit.get('unitKey')
 
     # Training plan specific fields
     if workout.get('workoutPhrase'):
