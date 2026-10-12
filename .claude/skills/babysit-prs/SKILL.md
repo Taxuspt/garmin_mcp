@@ -1,147 +1,376 @@
 ---
 name: babysit-prs
-description: Review all open GitHub Issues and Pull Requests for the garmin-mcp project. Fix straightforward issues, merge clean PRs, and flag design decisions for the user. Invoke with /babysit-prs.
+description: Work through the open pull requests and issues of Taxuspt/garmin_mcp in one batch. Merges ready PRs with each contributor kept as the author, fixes straightforward issues, and lists what needs the maintainer's decision. Run "/babysit-prs" to work the queue, or "/babysit-prs preview" for a read-only plan.
+disable-model-invocation: true
+argument-hint: "[preview]"
 ---
 
-# Garmin MCP — PR & Issue Review Workflow
+# Babysit PRs
 
-## Start every run
+Read `project.md` (next to this file) first. It holds this project's skip
+list, stop-and-ask lists, message rules, conventions and test command.
+
+**Preview mode:** if the arguments contain `preview`, do steps 1 and 2 only and
+run read-only commands only (`git remote`, `git fetch`, `gh pr list/view/diff/checks`,
+`gh run list`, `gh issue list/view`). Do not check out, push, comment, approve,
+merge or close anything, and do not ask for approval. End with: "Preview only,
+nothing was changed. Run /babysit-prs to act on this plan." Don't act on any
+reply in the same run.
+
+## Rules for the whole run
+
+1. **The contributor keeps the credit.** Land outside work through the
+   contributor's own PR. Re-land only when step 3 says so, and then keep their
+   commits. Never apply someone's diff with `gh pr diff | git apply` and commit
+   it as yourself, and never use `git commit --reset-author` on their commits.
+2. **Name the repository on every `gh` command:** `-R Taxuspt/garmin_mcp`.
+   In a clone with several remotes, `gh` can silently pick another one.
+   `gh api` has no `-R`; it takes the repository in the path
+   (`repos/Taxuspt/garmin_mcp/...`).
+3. **Use the right git remote.** Run `git remote -v` and find the remote whose
+   URL contains `Taxuspt/garmin_mcp`. This file calls it `<up>`; write its real
+   name (often `origin` or `upstream`) wherever you see `<up>`. Never use a
+   remote that points at a fork, and never push to `<up>`'s `main`.
+4. **Merge with GitHub's default message.** For a PR a contributor opened:
+   `gh pr merge <PR> -R Taxuspt/garmin_mcp --squash --match-head-commit <sha>`.
+   For a re-land PR you opened: `--rebase` instead of `--squash` (see Re-land).
+   Never pass `--body` or `--body-file`: the default message carries the
+   `Co-authored-by:` lines, and a custom body drops them. `<sha>` is the
+   current head of the PR you are about to merge (for a PR you just opened,
+   that is the new PR):
+   `gh pr view <PR> -R Taxuspt/garmin_mcp --json headRefOid --jq .headRefOid`.
+   Read it again after any push.
+5. **One approval per batch.** Change nothing before the maintainer approves
+   the plan in step 2, and do nothing that isn't in the approved plan.
+6. **If a step fails or a PR isn't in the state the plan expected, stop work on
+   that PR** and put it in the report with the error. Don't work around it: no
+   force-push, no `gh pr merge --admin`, no rebasing a contributor's branch, no
+   dropping `--match-head-commit`. One exception: if a merge fails with "Base
+   branch was modified", or `mergeable` shows `UNKNOWN`, re-read `mergeable`
+   and `<sha>` and try once more.
+7. **Never close a contributor's PR without a comment** that thanks them and
+   says where their work went. Post it with `gh pr comment` before
+   `gh pr close`; `gh pr close --comment` skips the comment if the PR is
+   already closed.
+8. **Leave `.github/workflows/` changes to the maintainer.** The gh token
+   usually lacks the `workflow` scope. Never approve CI runs for, push to, or
+   merge a PR that changes workflow files, Dependabot ones included. Give the
+   click steps from step 3 instead.
+9. **No AI attribution.** Don't add a `Co-authored-by` or "Generated with" line
+   for Claude or any other AI to commits, PR bodies or comments; `project.md`
+   forbids it. If Claude Code keeps adding one, the maintainer can set
+   `"attribution": {"commit": "", "pr": ""}` in Claude Code's settings.
+
+## Step 1: Gather (read-only)
 
 ```bash
-git checkout main && git pull origin main
-gh pr list --state open --json number,title,headRefName --limit 50
-gh issue list --state open --json number,title --limit 30
+git remote -v
+git fetch <up>
+gh pr list -R Taxuspt/garmin_mcp --state open --limit 100 \
+  --json number,title,author,isDraft,isCrossRepository,maintainerCanModify,mergeable,headRefOid,headRefName,files,closingIssuesReferences
+gh issue list -R Taxuspt/garmin_mcp --state open --limit 50 --json number,title,author,labels
 ```
 
-Check CI status for each open PR:
+For each PR that isn't skipped:
+
+- **Read the diff** (`gh pr diff <N> -R Taxuspt/garmin_mcp`) and note in one
+  line what it does. Several stop-and-ask items in `project.md` can only be
+  spotted in the diff (version bumps, changed tool behavior, competing
+  implementations).
+- **Read the conversation:**
+
+  ```bash
+  gh pr view <N> -R Taxuspt/garmin_mcp --json comments,reviews,commits \
+    --jq '{comments: [.comments[] | {who: .author.login, at: .createdAt, body: .body[0:300]}], reviews: [.reviews[] | {who: .author.login, state, at: .submittedAt}], lastCommit: .commits[-1].committedDate}'
+  ```
+
+  If the maintainer asked for changes (a comment or a "changes requested"
+  review) and `lastCommit` is older than that request, the contributor hasn't
+  pushed since.
+- **Find the CI state:**
+
+  ```bash
+  gh pr checks <N> -R Taxuspt/garmin_mcp --json name,bucket
+  gh run list -R Taxuspt/garmin_mcp --commit <headRefOid> --status action_required --json databaseId,workflowName
+  ```
+
+  - `bucket` is `pass`, `fail`, `pending`, `skipping` or `cancel`. `skipping`
+    counts as passing.
+  - If `gh pr checks` prints `no checks reported` and exits with code 1, that
+    is not an error: the PR has no checks yet. Then, if `gh run list` lists
+    runs, CI is **waiting for approval**. GitHub holds CI for contributors who
+    have never had a commit or PR merged here; once one of their PRs is merged,
+    their later PRs run without approval. If there are no such runs, the PR
+    usually has merge conflicts (GitHub runs no CI on conflicted PRs).
+  - If `gh run list` itself fails (for example a rate limit), say so in the
+    plan and mark PRs with no checks as "probably waiting for approval".
+- If `mergeable` is `UNKNOWN`, ask again with
+  `gh pr view <N> -R Taxuspt/garmin_mcp --json mergeable`.
+
+For each issue, check whether an open PR already fixes it (its
+`closingIssuesReferences` lists the issue, or it clearly does the same thing).
+
+## Step 2: Plan, then one approval
+
+Check the groups from top to bottom and put each PR in the **first** one that
+matches:
+
+| # | Group | When | Action |
+|---|---|---|---|
+| 1 | Skip | On the skip list in `project.md`, or a draft | Nothing |
+| 2 | Ask | On the design-decision list, or matches a stop-and-ask item in `project.md` other than "Touches `.github/workflows/`" | Put the question to the maintainer |
+| 3 | Workflow files | Changes anything under `.github/workflows/` | Click steps for the maintainer |
+| 4 | Duplicate | Another open PR has the same approach and the same user-visible result (same tool names, parameters and dependencies). Different approaches are competing implementations: Ask | Merge one, credit and close the others |
+| 5 | Waiting | Checks still `pending`; or you asked the contributor for changes and they haven't pushed since | Nothing this run; list under "Waiting on contributors" |
+| 6 | Approve CI | CI waiting for approval | Approve the runs after reading the diff; merge when green |
+| 7 | Fix | A check failed or was cancelled, merge conflicts, or the diff has a problem | Fix it if you may push to the branch, otherwise ask the author |
+| 8 | Ready | Every check passes, `mergeable` is `MERGEABLE`, and the diff is fine | Merge the PR itself |
+
+Dependabot PRs and the maintainer's own PRs use the same groups.
+
+Show the plan as a table, one line per PR: number, title, author, group, what
+the diff does, the planned action, and how the contributor will be credited
+(for example "author of the merged commit"). Then:
+
+- the full text of every comment you would post;
+- the issues you would fix, and the ones already covered by a PR ("covered by #N");
+- the questions for the maintainer. For a fork PR in Fix that you can't push
+  to, offer "ask the contributor" or "re-land", and re-land only if the
+  maintainer picks it.
+
+In preview mode, stop here. Otherwise ask once: "Go ahead with this plan?"
+
+## Step 3: Act
+
+First run `git status --porcelain`. If it prints anything, stop and ask: there
+is uncommitted work in this clone. Handle all PRs before any issue.
+
+After finishing each PR or issue, return to a clean state. If you stopped in
+the middle of a merge or rebase, run `git merge --abort` or `git rebase --abort`
+first (nothing has been pushed yet). Then:
+
 ```bash
-gh pr view <N> --json statusCheckRollup --jq '.statusCheckRollup[0].state // "NO_CI"'
+git fetch <up>
+git switch --detach <up>/main
 ```
 
----
+Right before approving runs for a PR or merging it, check that `<sha>` (rule 4)
+is still the head whose diff you read. If it changed, read the diff again, and
+if it now does something different from the plan, stop work on that PR and
+report it.
 
-## Always skip (do not touch)
+### Waiting for CI
 
-- **#43, #121, #124** — Remote OAuth2 multi-user mode. Explicitly deferred by the user.
-- PRs touching `.github/workflows/` cannot be merged via the GitHub API (needs `workflow` OAuth scope). Flag them for manual merge by the user instead.
+Use this wherever a step says "wait for CI". Run
+`gh pr checks <PR> -R Taxuspt/garmin_mcp --watch --fail-fast` in the
+background, or in the foreground with the Bash tool's 10-minute maximum
+timeout. Don't use a foreground `sleep`.
 
----
+- `no checks reported` (exit code 1): the checks haven't started yet. Run it
+  again a little later. This is not a failure.
+- Exit code 0: every check passed.
+- Any other result after checks have appeared: a check failed. Handle the PR
+  as Fix (for your own new PR, stop and report it).
 
-## Issues
+### Ready
 
-**Straightforward issue** (clear bug, no API/design ambiguity):
-1. Fix in the correct module (`src/garmin_mcp/<module>.py`)
-2. Add tests (success case + exception case) in `tests/integration/test_<module>_tools.py`
-3. Run: `uv run pytest tests/unit/ tests/integration/ -x -q --timeout=30`
-4. Create a branch, push, open a PR, merge it, close the issue
-
-**Stop and ask the user** if the issue involves:
-- Changing the minimum Python version or garminconnect version
-- Choosing between competing implementation approaches
-- Breaking changes to existing tool signatures
-- Garmin China auth, Docker/GHCR publishing, or remote multi-user mode
-
----
-
-## Pull Requests
-
-### PRs from `Taxuspt` (first-party, have CI)
-
-If CI passes: review the diff, run tests locally, squash-merge.
-
-If CI fails: read the failure, fix it, push to the same branch.
-
-### Fork PRs without CI
-
-Most contributor PRs have no CI. Workflow:
+Wait for CI first if any check is still running. Then:
 
 ```bash
-# 1. Create a clean branch from current main
-git checkout main && git pull origin main
-git checkout -b apply/<N>-<slug> main
-
-# 2. Apply the diff (3-way merge handles context drift)
-gh pr diff <N> | git apply --3way
-
-# 3. If README.md has a conflict (almost always does — fork is on old base):
-git checkout HEAD -- README.md
-
-# 4. If other files conflict, resolve manually, then:
-git add <resolved-files> && git commit -m "chore: resolve merge conflict"
-
-# 5. Run the full test suite
-uv run pytest tests/unit/ tests/integration/ -x -q --timeout=30
-
-# 6. Commit, push, open PR, squash-merge
-git add <changed-files>
-git commit -m "<type>(<scope>): <subject>\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
-git push origin apply/<N>-<slug>
-gh pr create --title "..." --body "Closes #<fork-pr-number> via clean apply.\n\n..."
-gh pr merge <new-pr> --squash --subject "..."
-
-# 7. Close the fork PR with a thank-you comment
-gh pr close <N> --comment "Applied and merged via #<new-pr>. Thank you!"
+gh pr merge <N> -R Taxuspt/garmin_mcp --squash --match-head-commit <sha>
+gh pr comment <N> -R Taxuspt/garmin_mcp --body "Merged, thanks @<login>!"
 ```
 
-**Stop and ask the user** if the PR:
-- Bumps `garminconnect` or `mcp` versions (see pyproject.toml constraints)
-- Changes the Python minimum version (`requires-python`)
-- Reverses or significantly changes existing tool behavior
-- Introduces a new module that conflicts with another open PR
-- Has two or more competing implementations of the same feature (pick the better one or ask)
-- Touches `.github/workflows/`
+If this is their first merged PR here, say so and welcome them. Skip the
+comment for bots (`dependabot[bot]`, `app/...`) and for the maintainer's own
+PRs. For the maintainer's own PRs, test before merging:
+`gh pr checkout <N> -R Taxuspt/garmin_mcp`, run the test command, then return
+to a clean state.
 
-## PR and commit messages
-- Don't add emojis to the description
-- Don't add "coauthored by claude" or similar messages
+### Approve CI
 
----
+Approved runs execute the PR's code on GitHub's runners. Read the whole diff
+first, especially scripts and build files. If anything looks off (unexpected
+network calls, obfuscated code), don't approve it; report it. Otherwise:
 
-## Coding conventions
-
-- All tools return `str`. Wrap API calls in `try/except Exception as e: return f"Error: {str(e)}"`.
-- Use `x.get(key) or {}` (not `x.get(key, {})`) for nested Garmin sections — Garmin sends explicit `null` for empty sections, and a default only fires when the key is absent.
-- Use `_as_dict(value)` helper (in `training.py`) for deeply nested dicts.
-- Date params: `YYYY-MM-DD`. Activity IDs: large integers.
-- Module pattern: `garmin_client = None` global → `configure(client)` → `register_tools(app)`.
-- No comments unless the WHY is non-obvious.
-
-## Testing conventions
-
-Each tool needs at minimum:
-- **Success case**: mock returns valid data, assert key fields in parsed JSON
-- **Exception case**: mock raises `Exception("API Error")`, assert `"Error"` in result
-
-Run the full suite (not just the changed module) to catch regressions.
-
-## Key version constraints
-
-```
-garminconnect==0.3.2   ← pinned; upgrade is a design decision
-mcp>=1.28.1,<2         ← mcp 2.x renamed FastMCP; cap until ported
-requires-python>=3.10  ← 3.12 minimum is a pending design decision
+```bash
+gh run list -R Taxuspt/garmin_mcp --commit <sha> --status action_required --json databaseId --jq '.[].databaseId'
+gh api -X POST repos/Taxuspt/garmin_mcp/actions/runs/<run-id>/approve   # once per run id
 ```
 
-## Design decisions — always ask the user
+Then wait for CI. When every check passes, handle the PR as Ready.
 
-These are open questions that require user input before any code change:
+### Fix
 
-1. **garminconnect 0.3.7 / 0.3.8 upgrade** (PRs #214, #230)
-2. **Python 3.12 minimum** (PR #214)
-3. **Strength exercise catalog** (PRs #238, #251 — competing implementations)
-4. **AGENTS.md / CLAUDE.md** (PR #235 — conflicts with local CLAUDE.md)
-5. **Garmin China auth** (PRs #180, #249, #268 — three competing implementations)
-6. **Cycling power target ID reversal** (PR #194 — controversial, adds docs but changes behavior)
-7. **Docker token bootstrap / GHCR publishing** (PRs #229, #170, #195 — touch workflows)
-8. **HTTP FIT file serving** (PR #171)
-9. **Structured strength activity creation** (PR #208, depends on #214)
-10. **Remote OAuth2 multi-user mode** (PRs #43, #121, #124 — explicitly skipped)
+Who may push depends on the PR:
 
----
+- **Fork PR** (`isCrossRepository` true): only if `maintainerCanModify` is
+  true and the fix is small.
+- **The maintainer's own PR:** yes.
+- **Dependabot PR:** never; see Dependabot.
 
-## End of run
+When you may push, the work still lands through the original PR:
 
-Report:
-- What was merged (PR numbers and one-line description each)
-- What issues were closed
-- What still needs the user's decision (from the list above, plus any new ones found)
+```bash
+gh pr checkout <N> -R Taxuspt/garmin_mcp
+git merge <up>/main            # only if mergeable is CONFLICTING; resolve, then commit
+# make the fix and run the test command
+git commit -m "fix: <what you changed>"   # skip if the merge commit was the only change
+git -c push.default=upstream push         # updates the PR's branch, even one named main
+```
+
+Add your own commits on top; don't rewrite theirs. Never run
+`git push <url> HEAD`: that makes a new branch on their fork instead of
+updating the PR. If the push is refused with a message about the `workflow`
+scope, stop: put the PR under "Needs your click" and tell the maintainer to
+click **Resolve conflicts** or **Update branch** on GitHub, then run
+/babysit-prs again.
+
+After a successful push, read the new `<sha>`, approve any waiting runs as in
+Approve CI, and wait for CI. Merge as Ready only when every check passes.
+
+If you may not push, or the fix is more than small, post the change request
+from the plan and leave the PR open. Don't post it again on a later run unless
+the author has pushed since.
+
+### Re-land (only when the maintainer chose it in the plan)
+
+Start from the contributor's commits, not from their diff:
+
+```bash
+git fetch <up> +pull/<N>/head:pr-<N>
+git switch -c reland/<N>-<slug> pr-<N>
+git rebase <up>/main           # resolve conflicts; their commits keep their author
+gh pr view <N> -R Taxuspt/garmin_mcp --json commits --jq '.commits[].authors[].login'
+```
+
+If that last command doesn't list the PR opener's login (an empty login means
+the commit email isn't linked to any account), add them as co-author on the top
+contributor commit, before any fix-up commits. `--amend` without
+`--reset-author` keeps the commit's author. The trailer is described under
+"Crediting someone in a commit".
+
+```bash
+git commit --amend --no-edit --trailer "<the Co-authored-by line>"
+```
+
+Then add your own fix-up commits if needed, run the test command, and:
+
+```bash
+git push <up> reland/<N>-<slug>
+gh pr create -R Taxuspt/garmin_mcp --head reland/<N>-<slug> --title "<original title>" \
+  --body "Re-lands #<N> by @<login> on top of current main."   # add "Closes #<issue>" for each issue #N closes
+```
+
+Wait for CI on the new PR, then:
+
+```bash
+gh pr merge <new-pr> -R Taxuspt/garmin_mcp --rebase --match-head-commit <sha>
+gh pr comment <N> -R Taxuspt/garmin_mcp --body "<thank-you text>"
+gh pr close <N> -R Taxuspt/garmin_mcp
+```
+
+Thank-you text: "Thanks @<login>! This landed in #<new-pr> with your commits."
+If you had to add them as co-author: "Thanks @<login>! This landed in
+#<new-pr>, and you're credited as co-author."
+
+Use `--rebase`, not `--squash`, here. A squash of a PR you opened would make
+you the author. `Closes #<N>` would not help either: closing keywords close
+issues, not pull requests.
+
+### Duplicate
+
+Pick one PR: the more complete and cleaner one, or the earliest one when
+they're equal. Handle the chosen PR through Waiting, Approve CI, Fix or Ready
+as if it were the only one. If you reuse code or ideas from the others and you
+may push to the chosen PR (see Fix), add a credit commit there before merging.
+The squash keeps its lines.
+
+```bash
+git commit --allow-empty -m "chore: credit #<K>" -m "<the Co-authored-by line for #K's author>"
+git -c push.default=upstream push
+```
+
+Only after the chosen PR is merged, post one of these on each of the others and
+close it:
+
+- If you added a credit commit for them: "Thanks @<login>! Closing as a
+  duplicate of #<M>, which is now merged. Your <what> is in it, and you're
+  credited as co-author."
+- Otherwise: "Thanks @<login>! Closing as a duplicate of #<M>, which is now merged."
+
+```bash
+gh pr comment <K> -R Taxuspt/garmin_mcp --body "<one of the texts above>"
+gh pr close <K> -R Taxuspt/garmin_mcp
+```
+
+### Workflow files (maintainer clicks)
+
+Tell the maintainer, for each PR:
+
+1. Open `https://github.com/Taxuspt/garmin_mcp/pull/<N>` and read **Files changed**.
+2. If GitHub says the branch has conflicts, don't merge. Click **Resolve
+   conflicts** if it's offered, or ask the contributor to update the branch.
+3. If a box says workflows are awaiting approval, click **Approve and run** and
+   wait for the checks.
+4. In the merge box, pick **Squash and merge** from the button's menu.
+5. Leave the commit message GitHub fills in, including the `Co-authored-by:`
+   lines, and click **Confirm squash and merge**.
+
+### Dependabot
+
+Ready ones merge like any other PR. If one conflicts, comment
+`@dependabot rebase` once. Version bumps on the stop-and-ask list in
+`project.md` go to the maintainer.
+
+### Issues
+
+If an open PR already fixes the issue, don't write your own fix: handle that PR
+instead. An issue is **not** straightforward, so it goes under "Needs your
+decision", when:
+
+- it matches the issue stop-and-ask list in `project.md`;
+- the reporter says the fix is unverified or needs testing on a device;
+- the fix would change a file that an open PR also changes.
+
+If the reporter proposed the exact fix, offer "ask them to open a PR" as an
+option. For a straightforward issue:
+
+```bash
+git fetch <up>
+git switch -c fix/<issue>-<slug> <up>/main
+# make the fix, add tests as project.md describes, run the test command
+git commit -m "fix(<scope>): <subject>"
+git push <up> fix/<issue>-<slug>
+gh pr create -R Taxuspt/garmin_mcp --head fix/<issue>-<slug> --title "fix(<scope>): <subject>" --body "Closes #<issue>"
+```
+
+Wait for CI on the new PR, then
+`gh pr merge <new-pr> -R Taxuspt/garmin_mcp --squash --match-head-commit <sha>`.
+If you used code or a patch from the issue, add the Co-authored-by line for its
+author to the commit. Thank the reporter in a comment.
+
+### Crediting someone in a commit
+
+The line is `Co-authored-by: NAME <EMAIL>`, and the `<` `>` around the email
+must be really there. Example for the GitHub user octocat, whose account id is
+583231:
+
+```
+Co-authored-by: octocat <583231+octocat@users.noreply.github.com>
+```
+
+Replace both `octocat`s and the number with their login and the id from
+`gh api users/<login> --jq .id`. This address always links to their GitHub
+account.
+
+## Step 4: Report
+
+Write a short plain-language report:
+
+- **Merged:** PR number, one line on what it does, and who is credited.
+- **Waiting on contributors:** what was asked, and when.
+- **Needs your decision:** each question, with the options.
+- **Needs your click:** workflow PRs and refused pushes, with links and steps.
+- **Stopped:** PRs where a step failed, with the error.
+- **Issues closed.**
