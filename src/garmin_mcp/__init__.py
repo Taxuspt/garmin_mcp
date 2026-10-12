@@ -5,6 +5,7 @@ Modular MCP Server for Garmin Connect Data
 import os
 import sys
 import base64
+import contextlib
 import threading
 
 import requests
@@ -271,6 +272,50 @@ class _ThreadFilteredStream:
         return getattr(self._real_stream, name)
 
 
+class _ThreadSuppressibleStream:
+    """Wraps a stream so individual threads can opt out of writing to it.
+
+    Used for ``sys.stderr`` while the background login thread validates
+    tokens. Swapping ``sys.stderr`` itself for a ``StringIO`` there would be
+    process-wide, so everything the main thread wrote during login -- the
+    "Serving MCP over ..." line, uvicorn's startup logs, and any logging
+    handler that captured ``sys.stderr`` in that window, for the life of the
+    process -- would vanish too. Only threads inside ``suppressed()`` are
+    silenced; every other thread's writes pass through.
+    """
+
+    def __init__(self, real_stream):
+        self._real_stream = real_stream
+        self._suppressed = set()
+
+    def write(self, data):
+        if threading.get_ident() in self._suppressed:
+            return len(data)
+        return self._real_stream.write(data)
+
+    def flush(self):
+        self._real_stream.flush()
+
+    @contextlib.contextmanager
+    def suppressed(self):
+        ident = threading.get_ident()
+        self._suppressed.add(ident)
+        try:
+            yield
+        finally:
+            self._suppressed.discard(ident)
+
+    def __getattr__(self, name):
+        return getattr(self._real_stream, name)
+
+
+def _suppress_stderr_in_this_thread():
+    """Silence ``sys.stderr`` for the calling thread only (see above)."""
+    if not isinstance(sys.stderr, _ThreadSuppressibleStream):
+        sys.stderr = _ThreadSuppressibleStream(sys.stderr)
+    return sys.stderr.suppressed()
+
+
 class _PendingGarminClient:
     """Stands in for the real Garmin client until a background login finishes.
 
@@ -453,7 +498,6 @@ class _ToolFilter:
 
 def init_api(email, password):
     """Initialize Garmin API with your credentials."""
-    import io
 
     # Claude Desktop may leave blank optional user_config values as literal
     # placeholders. Do not mistake those strings for credentials and trigger a
@@ -483,14 +527,10 @@ def init_api(email, password):
         # already discards any stray write from this thread on its own. A
         # second swap here would instead risk swallowing real MCP protocol
         # output written concurrently by the server's own thread (#255).
-        old_stderr = sys.stderr
-        sys.stderr = io.StringIO()
-
-        try:
+        # stderr is silenced for this thread only, for the same reason.
+        with _suppress_stderr_in_this_thread():
             garmin = Garmin(is_cn=is_cn)
             garmin.login(tokenstore)
-        finally:
-            sys.stderr = old_stderr
 
     except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
         # Session is expired. You'll need to log in again
