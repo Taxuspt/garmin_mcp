@@ -43,6 +43,57 @@ def _update_activity_summary(activity_id: int, fields: Dict[str, Any]) -> Any:
     return _put_activity_update(activity_id, {"summaryDTO": fields})
 
 
+def _build_exercise_sets(sets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert friendly set dicts into Garmin's exerciseSets wire format.
+
+    Mirrors what the Garmin Connect web editor sends: weight in grams with -1
+    meaning unweighted, the exercise name nulled when it equals the category,
+    and rest as a separate REST set following the active set it belongs to.
+    """
+    out: List[Dict[str, Any]] = []
+    for i, s in enumerate(sets, start=1):
+        category = str(s.get("category") or "").strip().upper()
+        if not category:
+            raise ValueError(f"set {i}: category is required")
+        name = str(s.get("exercise_name") or "").strip().upper() or None
+
+        if s.get("weight_kg") is not None and s.get("weight_lb") is not None:
+            raise ValueError(f"set {i}: give weight_kg or weight_lb, not both")
+        if s.get("weight_kg") is not None:
+            kg = float(s["weight_kg"])
+        elif s.get("weight_lb") is not None:
+            kg = float(s["weight_lb"]) * 0.45359237
+        else:
+            kg = None
+        if kg is not None and kg < 0:
+            raise ValueError(f"set {i}: weight cannot be negative")
+
+        reps = s.get("reps")
+        if reps is not None and (int(reps) != reps or reps < 0):
+            raise ValueError(f"set {i}: reps must be a non-negative whole number")
+
+        out.append({
+            "setType": "ACTIVE",
+            "exercises": [{
+                "category": category,
+                "name": None if name == category else name,
+                "probability": 100,
+            }],
+            "repetitionCount": None if reps is None else int(reps),
+            "weight": -1 if kg is None else round(kg * 1000),
+            "duration": s.get("duration_seconds"),
+        })
+        if s.get("rest_seconds"):
+            out.append({
+                "setType": "REST",
+                "exercises": [],
+                "repetitionCount": None,
+                "weight": -1,
+                "duration": s["rest_seconds"],
+            })
+    return out
+
+
 def register_tools(app):
     """Register all activity management tools with the MCP server app"""
 
@@ -809,6 +860,95 @@ def register_tools(app):
             return json.dumps(exercise_sets, indent=2)
         except Exception as e:
             return f"Error retrieving activity exercise sets: {str(e)}"
+
+    @app.tool()
+    async def set_activity_exercise_sets(
+        activity_id: Union[int, str],
+        sets: List[Dict[str, Any]],
+        keep_timing: bool = False,
+    ) -> str:
+        """Replace the exercise sets on a strength (or other rep-counting) activity.
+
+        Writes Garmin's structured per-set data, the same grid the Garmin Connect
+        "Edit sets" screen saves, so the sets feed Garmin's exercise history,
+        volume and muscle-map charts. This OVERWRITES every existing set,
+        including watch-detected sets and their recorded timing; to keep some,
+        read them with get_activity_exercise_sets and include them in the list.
+
+        When the watch already recorded the right sets but misidentified the
+        exercises, pass keep_timing=True: the existing sets keep their start
+        times, durations and rest periods, and only the exercise, reps and
+        weight are replaced, in order. The number of sets must match the
+        activity's recorded active sets, and duration_seconds/rest_seconds are
+        ignored.
+
+        Exercises must use Garmin's own keys. category is an exercise category
+        (e.g. DEADLIFT, BENCH_PRESS, PULL_UP, SQUAT) and exercise_name an
+        exercise within it (e.g. BARBELL_DEADLIFT, ROMANIAN_DEADLIFT). Garmin
+        rejects anything else with "Invalid Category" or "Invalid Sub-Category",
+        and rejects the whole request, so a typo leaves the activity unchanged.
+        Valid keys, grouped by category, are in
+        https://connect.garmin.com/web-data/exercises/Exercises.json
+
+        Args:
+            activity_id: ID of the activity to update
+            sets: Active sets in the order performed. Each is a dict with:
+                category (required): Garmin exercise category key
+                exercise_name: Garmin exercise key within the category; omit to
+                    record just the category
+                reps: Repetition count; omit for timed exercises
+                weight_kg or weight_lb: Load lifted; omit for bodyweight
+                duration_seconds: Time under work for the set
+                rest_seconds: Rest after this set, recorded as a REST set
+            keep_timing: Keep the recorded set timing and rest periods,
+                replacing only exercise, reps and weight (default False)
+        """
+        try:
+            activity_id = int(activity_id)
+            if not sets:
+                return "sets cannot be empty"
+            exercise_sets = _build_exercise_sets(sets)
+
+            if keep_timing:
+                existing = (
+                    garmin_client.get_activity_exercise_sets(activity_id) or {}
+                ).get("exerciseSets") or []
+                recorded = sum(s.get("setType") == "ACTIVE" for s in existing)
+                if recorded != len(sets):
+                    return (
+                        f"keep_timing needs one set per recorded set: activity "
+                        f"{activity_id} has {recorded} active sets, got {len(sets)}"
+                    )
+                new_active = iter(s for s in exercise_sets if s["setType"] == "ACTIVE")
+                for s in existing:
+                    if s.get("setType") == "ACTIVE":
+                        new = next(new_active)
+                        s.update(
+                            exercises=new["exercises"],
+                            repetitionCount=new["repetitionCount"],
+                            weight=new["weight"],
+                        )
+                exercise_sets = existing
+
+            url = f"{garmin_client.garmin_connect_activity}/{activity_id}/exerciseSets"
+            garmin_client.client.put(
+                "connectapi",
+                url,
+                json={"activityId": activity_id, "exerciseSets": exercise_sets},
+                api=True,
+            )
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "sets_written": len(sets),
+                    "message": "Activity exercise sets successfully replaced",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity exercise sets: {str(e)}"
 
     @app.tool()
     async def count_activities() -> str:
