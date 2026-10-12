@@ -2,6 +2,7 @@
 Modular MCP Server for Garmin Connect Data
 """
 
+import copy
 import os
 import sys
 import base64
@@ -339,7 +340,16 @@ class _PendingGarminClient:
                 "restart the server."
             )
         if self._login_error is not None:
-            raise self._login_error
+            # Raise a copy, not the stored instance: re-raising it would append
+            # this call's frames to its __traceback__ on every tool call, so it
+            # (and the frame locals it pins) would grow without bound. The copy
+            # keeps the type, message and attributes callers inspect.
+            err = self._login_error
+            try:
+                fresh = copy.copy(err)
+            except Exception:
+                fresh = RuntimeError(f"Garmin login failed: {err}")
+            raise fresh from err
         return getattr(self._client, name)
 
 
