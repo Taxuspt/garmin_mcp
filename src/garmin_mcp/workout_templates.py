@@ -260,7 +260,7 @@ WORKOUT_STRUCTURE_REFERENCE = {
     },
     "targetType_values": {
         "1": {"workoutTargetTypeKey": "no.target", "description": "No specific target"},
-        "2": {"workoutTargetTypeKey": "power.zone", "description": "Cycling power zone 1-7 (use zoneNumber; based on FTP %). Do NOT use for absolute watt targets."},
+        "2": {"workoutTargetTypeKey": "power.zone", "description": "Cycling power zone 1-7 (use zoneNumber; based on FTP %), or a custom % FTP range (targetValueOne/targetValueTwo as percentages with targetValueUnit {\"unitKey\": \"percent\"}). Do NOT use for absolute watt targets."},
         "4": {"workoutTargetTypeKey": "heart.rate.zone", "description": "Heart rate zone (use zoneNumber 1-5 for named zones, or targetValueOne/targetValueTwo for custom bpm range)"},
         "6 (running/swim)": {
             "workoutTargetTypeKey": "pace.zone",

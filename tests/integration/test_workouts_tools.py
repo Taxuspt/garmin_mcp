@@ -418,6 +418,38 @@ async def test_upload_workout_tool(app_with_workouts, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_upload_workout_passes_percent_ftp_range_through(app_with_workouts, mock_garmin_client):
+    """A custom % FTP range reaches Garmin unchanged; without the unit it means watts"""
+    import copy
+
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 1, "workoutName": "Sweet spot"}
+    workout_data = {
+        "workoutName": "Sweet spot",
+        "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling"},
+        "workoutSegments": [{
+            "segmentOrder": 1,
+            "sportType": {"sportTypeId": 2, "sportTypeKey": "cycling"},
+            "workoutSteps": [{
+                "type": "ExecutableStepDTO",
+                "stepOrder": 1,
+                "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+                "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+                "endConditionValue": 600.0,
+                "targetType": {"workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone"},
+                "targetValueOne": 76.0,
+                "targetValueTwo": 81.0,
+                "targetValueUnit": {"unitKey": "percent"},
+            }],
+        }],
+    }
+    expected = copy.deepcopy(workout_data)
+
+    await app_with_workouts.call_tool("upload_workout", {"workout_data": workout_data})
+
+    mock_garmin_client.upload_workout.assert_called_once_with(expected)
+
+
+@pytest.mark.asyncio
 async def test_upload_workout_promotes_bounds_nested_inside_target_type(
     app_with_workouts, mock_garmin_client
 ):
