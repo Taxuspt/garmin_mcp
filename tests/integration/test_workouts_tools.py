@@ -476,6 +476,14 @@ async def test_upload_workout_sport_type_ids_match_reference(app_with_workouts):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["upload_workout", "upload_workouts", "schedule_workouts"])
+async def test_workout_upload_tools_document_pace_units(app_with_workouts, tool_name):
+    """Tools that accept raw target values say pace is in m/s, not min/km."""
+    tools = {tool.name: tool for tool in await app_with_workouts.list_tools()}
+    assert "3.333 m/s" in tools[tool_name].description
+
+
+@pytest.mark.asyncio
 async def test_upload_workout_passes_percent_ftp_range_through(app_with_workouts, mock_garmin_client):
     """A custom % FTP range reaches Garmin unchanged; without the unit it means watts"""
     import copy

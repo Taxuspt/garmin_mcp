@@ -889,6 +889,8 @@ def register_tools(app):
           "targetValueOne" (low bpm) / "targetValueTwo" (high bpm). Do NOT set "zoneNumber".
           This matches Garmin Connect's "Custom" heart rate target.
         For non-HR targets (pace, power, cadence), use targetValueOne/targetValueTwo directly.
+        Pace targets are speeds in meters per second, not min/km:
+        5:00/km = 1000 m / 300 s = 3.333 m/s.
         Target values are fields on the workout step, alongside targetType; do not put
         targetValueOne, targetValueTwo, or zoneNumber inside the targetType object.
         Use either zoneNumber or targetValueOne/targetValueTwo, not both. Garmin silently
@@ -1033,6 +1035,8 @@ def register_tools(app):
         For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
         For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
         with targetValueOne (low watts) and targetValueTwo (high watts).
+        Pace targets use targetValueOne/targetValueTwo in meters per second, not
+        min/km: 5:00/km = 1000 m / 300 s = 3.333 m/s.
         Target type IDs and keys must match Garmin's canonical mapping.
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
@@ -1357,7 +1361,8 @@ def register_tools(app):
                 - workout_id (int): ID of an existing workout to schedule (required unless workout_data is provided)
                 - workout_data (dict): Inline workout JSON to upload first, then schedule (optional).
                   When provided, workout_id is not required. Uses the same structure and
-                  target-value rules as upload_workout.
+                  target-value rules as upload_workout; pace targets are in m/s, not
+                  min/km (5:00/km = 3.333 m/s).
 
         Examples:
             Schedule existing workouts by ID:
