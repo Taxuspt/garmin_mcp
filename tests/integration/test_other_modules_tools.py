@@ -578,6 +578,57 @@ async def test_get_gear_tool(app_with_gear, mock_garmin_client):
     mock_garmin_client.get_gear_defaults.assert_called_once_with(80653452)
 
 
+@pytest.mark.asyncio
+async def test_get_gear_tool_default_activity_types(app_with_gear, mock_garmin_client):
+    """Default activity types are labelled with Garmin's typeKey for the
+    real typeId (3 is hiking, not swimming; 10 is road biking, ...)."""
+    mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
+    mock_garmin_client.get_gear.return_value = [MOCK_GEAR[0]]
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_gear_defaults.return_value = [
+        {"uuid": MOCK_GEAR[0]["uuid"], "activityTypePk": pk, "defaultGear": True}
+        for pk in (1, 3, 6, 9, 10, 13, 26, 143, 999)
+    ]
+
+    result = await app_with_gear.call_tool("get_gear", {"include_stats": False})
+
+    payload = json.loads(result[0][0].text)
+    assert payload["gear"][0]["is_default_for"] == [
+        "running",
+        "hiking",
+        "trail_running",
+        "walking",
+        "road_biking",
+        "strength_training",
+        "swimming",
+        "gravel_cycling",
+        "activity_999",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_gear_tool_defaults_summary(app_with_gear, mock_garmin_client):
+    """Every default gear item of an activity type is listed, and gear
+    without a nickname (displayName null) is named by its make/model."""
+    unnamed_shoe = {**MOCK_GEAR[1], "gearStatusName": "active", "displayName": None}
+    mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
+    mock_garmin_client.get_gear.return_value = [MOCK_GEAR[0], unnamed_shoe]
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_gear_defaults.return_value = [
+        {"uuid": MOCK_GEAR[0]["uuid"], "activityTypePk": 1, "defaultGear": True},
+        {"uuid": MOCK_GEAR[0]["uuid"], "activityTypePk": 6, "defaultGear": True},
+        {"uuid": unnamed_shoe["uuid"], "activityTypePk": 1, "defaultGear": True},
+    ]
+
+    result = await app_with_gear.call_tool("get_gear", {"include_stats": False})
+
+    payload = json.loads(result[0][0].text)
+    assert payload["defaults"] == {
+        "running": ["Nimbus 25", "ASICS Gel-Nimbus 24"],
+        "trail_running": ["Nimbus 25"],
+    }
+
+
 @pytest.mark.parametrize("notes_value", ["", None], ids=["empty", "null"])
 @pytest.mark.asyncio
 async def test_get_gear_tool_preserves_empty_and_null_notes(
