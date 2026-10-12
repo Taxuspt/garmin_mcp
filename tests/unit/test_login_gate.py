@@ -92,3 +92,42 @@ class TestPendingGarminClient:
         proxy = _GarminProxy(pending)
 
         assert proxy.get_steps_data() == [1, 2, 3]
+
+
+from garmin_mcp import _readiness
+
+
+class TestLoginState:
+    """Tests for _PendingGarminClient.login_state() and the /readyz payload."""
+
+    def test_pending_while_login_runs_and_never_blocks(self):
+        release = threading.Event()
+        pending = _PendingGarminClient(timeout=5).start(lambda: release.wait(5) and Mock())
+
+        assert pending.login_state() == "pending"
+        assert _readiness(pending) == (503, {"status": "pending"})
+
+        release.set()
+
+    def test_ready_after_successful_login(self):
+        pending = _PendingGarminClient(timeout=5).start(lambda: Mock())
+        pending._ready.wait(5)
+
+        assert pending.login_state() == "ready"
+        assert _readiness(pending) == (200, {"status": "ready"})
+
+    def test_failed_when_login_returns_none(self):
+        pending = _PendingGarminClient(timeout=5).start(lambda: None)
+        pending._ready.wait(5)
+
+        assert pending.login_state() == "failed"
+        assert _readiness(pending) == (503, {"status": "failed"})
+
+    def test_failed_when_login_raises(self):
+        def failing_login():
+            raise ValueError("boom")
+
+        pending = _PendingGarminClient(timeout=5).start(failing_login)
+        pending._ready.wait(5)
+
+        assert pending.login_state() == "failed"
