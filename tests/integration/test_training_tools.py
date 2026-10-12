@@ -272,6 +272,172 @@ async def test_get_training_status_tool(app_with_training, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_training_status_uses_tracker_readiness_when_reporting_device_is_not_primary(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+        {"deviceId": 200, "displayName": "Edge", "primaryDevice": False},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "200": {
+                    "trainingStatus": "DETRAINING",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 0,
+                        "dailyTrainingLoadChronic": 80,
+                        "dailyAcuteChronicWorkloadRatio": 0,
+                    },
+                }
+            }
+        }
+    }
+    mock_garmin_client.get_training_readiness.return_value = [
+        {"deviceId": 100, "calendarDate": "2026-10-09", "acuteLoad": 123}
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_training_status", {"date": "2026-10-09"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["reporting_device_id"] == 200
+    assert data["reporting_device_name"] == "Edge"
+    assert data["acute_load"] == 123
+    assert data["acute_load_source"] == "training_readiness"
+    assert "chronic_load" not in data
+    assert "load_ratio" not in data
+    mock_garmin_client.get_devices.assert_called_once_with()
+    mock_garmin_client.get_training_readiness.assert_called_once_with("2026-10-09")
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_trend_omits_mismatched_ctl_and_uses_tracker_acute_load(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+        {"deviceId": 200, "displayName": "Edge", "primaryDevice": False},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "200": {
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 0,
+                        "dailyTrainingLoadChronic": 80,
+                    }
+                }
+            }
+        }
+    }
+    mock_garmin_client.get_training_readiness.return_value = [
+        {"deviceId": 100, "calendarDate": "2026-10-09", "acuteLoad": 123}
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_training_load_trend",
+        {"start_date": "2026-10-09", "end_date": "2026-10-09"},
+    )
+
+    data = json.loads(result[0][0].text)
+    entry = data["trend"][0]
+    assert entry["reporting_device_id"] == 200
+    assert entry["reporting_device_name"] == "Edge"
+    assert entry["atl"] == 123
+    assert entry["atl_source"] == "training_readiness"
+    assert "ctl" not in entry
+    assert "tsb" not in entry
+    mock_garmin_client.get_devices.assert_called_once_with()
+    mock_garmin_client.get_training_readiness.assert_called_once_with("2026-10-09")
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_preserves_status_when_readiness_fails(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+        {"deviceId": 200, "displayName": "Edge", "primaryDevice": False},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "200": {"trainingStatus": "DETRAINING"}
+            }
+        }
+    }
+    mock_garmin_client.get_training_readiness.side_effect = RuntimeError("timeout")
+
+    result = await app_with_training.call_tool(
+        "get_training_status", {"date": "2026-10-09"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["training_status"] == "DETRAINING"
+    assert "acute_load" not in data
+    assert data["acute_load_source"] == "unavailable"
+    assert data["acute_load_unavailable_reason"] == "readiness_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_rejects_wrong_readiness_device_and_date(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+        {"deviceId": 200, "displayName": "Edge", "primaryDevice": False},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {"200": {"trainingStatus": "DETRAINING"}}
+        }
+    }
+    mock_garmin_client.get_training_readiness.return_value = [
+        {"deviceId": 200, "calendarDate": "2026-10-09", "acuteLoad": 999},
+        {"deviceId": 100, "calendarDate": "2026-10-08", "acuteLoad": 888},
+    ]
+
+    result = await app_with_training.call_tool(
+        "get_training_status", {"date": "2026-10-09"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["training_status"] == "DETRAINING"
+    assert "acute_load" not in data
+    assert data["acute_load_source"] == "unavailable"
+    assert data["acute_load_unavailable_reason"] == "readiness_device_or_date_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_get_training_status_does_not_call_readiness_when_device_lookup_fails(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.side_effect = RuntimeError("device endpoint unavailable")
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "200": {
+                    "trainingStatus": "PRODUCTIVE",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 0,
+                        "dailyTrainingLoadChronic": 80,
+                    },
+                }
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_status", {"date": "2026-10-09"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["training_status"] == "PRODUCTIVE"
+    assert data["acute_load"] == 0
+    assert data["chronic_load"] == 80
+    mock_garmin_client.get_training_readiness.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_training_status_skips_null_device_entries(
     app_with_training, mock_garmin_client
 ):
