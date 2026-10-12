@@ -3,7 +3,7 @@
   "name": "garmin-mcp",
   "display_name": "Garmin Connect",
   "version": "0.1.0",
-  "description": "Connect Claude to your Garmin Connect fitness and health data. Access activities, training metrics, sleep, body composition, workouts, and 110+ other data points.",
+  "description": "Connect Claude to your Garmin Connect fitness and health data. Access activities, training metrics, sleep, body composition, workouts, and 150+ other data points.",
   "long_description": "This MCP server bridges Claude to your personal Garmin Connect data via the garminconnect Python library.\n\n**Capabilities:**\n- Activities: list, detail, splits, laps, heart-rate zones, weather\n- Health: steps, sleep, stress, body battery, HRV, SpO2, respiration\n- Training: readiness, load trends (CTL/ATL/TSB), VO2 max trend, power zones\n- Workouts: upload, schedule, download, bulk operations\n- Body: weight, body composition, weigh-ins\n- Gear, badges, challenges, nutrition logging\n- Advanced cycling: FIT file analysis, DI2 shift data, Power Duration Curve\n\n**First-time setup:** After installing this extension you must authenticate once by running `garmin-mcp-auth` in a terminal (see README). Tokens are saved and valid for ~6 months.",
   "author": {
     "name": "Alexandre Domingues",
@@ -68,41 +68,629 @@
   },
   "tools": [
     {
+      "name": "add_body_composition",
+      "description": "Add body composition data"
+    },
+    {
+      "name": "add_gear_to_activity",
+      "description": "Associate gear with an activity"
+    },
+    {
+      "name": "add_hydration_data",
+      "description": "Add hydration data"
+    },
+    {
+      "name": "add_weigh_in",
+      "description": "Add a new weight measurement"
+    },
+    {
+      "name": "add_weigh_in_with_timestamps",
+      "description": "Add a new weight measurement with specific timestamps"
+    },
+    {
+      "name": "count_activities",
+      "description": "Get total count of activities in the user's Garmin account"
+    },
+    {
+      "name": "create_custom_food",
+      "description": "Create a custom food in the user's Garmin nutrition library"
+    },
+    {
+      "name": "create_manual_activity",
+      "description": "Log a manual activity in Garmin Connect \u2014 useful for activities done without a watch."
+    },
+    {
+      "name": "create_run_interval_workout",
+      "description": "Create a repeat-based interval run workout and upload it to Garmin Connect."
+    },
+    {
+      "name": "create_run_workout",
+      "description": "Create a continuous run workout and upload it to Garmin Connect."
+    },
+    {
+      "name": "create_strength_workout",
+      "description": "Create a strength workout and upload it to Garmin Connect."
+    },
+    {
+      "name": "create_walk_run_workout",
+      "description": "Create a walk/run interval workout and upload it to Garmin Connect."
+    },
+    {
+      "name": "create_z2_walk_workout",
+      "description": "Create a steady Z2 walking workout and upload it to Garmin Connect."
+    },
+    {
+      "name": "delete_course",
+      "description": "Delete a course from Garmin Connect."
+    },
+    {
+      "name": "delete_custom_food",
+      "description": "Delete a custom food from the user's Garmin nutrition library"
+    },
+    {
+      "name": "delete_food_log",
+      "description": "Delete a food log entry"
+    },
+    {
+      "name": "delete_weigh_ins",
+      "description": "Delete weight measurements for a specific date"
+    },
+    {
+      "name": "delete_workout",
+      "description": "Delete a workout from Garmin Connect"
+    },
+    {
+      "name": "delete_workouts",
+      "description": "Delete multiple workouts from Garmin Connect in a single call"
+    },
+    {
+      "name": "download_activity_file",
+      "description": "Download an activity and save it to disk as a file."
+    },
+    {
+      "name": "download_course_gpx",
+      "description": "Download the exact official GPX file for a Garmin Connect course."
+    },
+    {
+      "name": "download_workout",
+      "description": "Download a workout as a FIT file"
+    },
+    {
+      "name": "get_acclimation",
+      "description": "Get heat and altitude acclimation status for a given date."
+    },
+    {
       "name": "get_activities",
-      "description": "List recent activities with pagination"
+      "description": "Get activities with pagination support."
+    },
+    {
+      "name": "get_activities_by_date",
+      "description": "Get activities between specified dates with pagination support."
+    },
+    {
+      "name": "get_activities_fordate",
+      "description": "Get activities for a specific date"
     },
     {
       "name": "get_activity",
-      "description": "Get detailed information about a single activity"
+      "description": "Get detailed information for a single activity."
     },
     {
-      "name": "get_stats",
-      "description": "Get daily health statistics (steps, HR, stress, body battery, sleep)"
+      "name": "get_activity_exercise_sets",
+      "description": "Get exercise sets for strength training activities"
     },
     {
-      "name": "get_sleep_data",
-      "description": "Get detailed sleep data including stages and score"
+      "name": "get_activity_fit_data",
+      "description": "Download and parse FIT file for an activity to expose advanced cycling data."
     },
     {
-      "name": "get_training_readiness",
-      "description": "Get training readiness score and contributing factors"
+      "name": "get_activity_fit_messages",
+      "description": "Retrieve and generically parse an activity's original FIT file."
     },
     {
-      "name": "get_hrv_data",
-      "description": "Get heart rate variability data"
+      "name": "get_activity_gear",
+      "description": "Get gear data used for an activity"
     },
     {
-      "name": "upload_workout",
-      "description": "Upload a structured workout to Garmin Connect"
+      "name": "get_activity_hr_in_timezones",
+      "description": "Get heart rate data in different time zones for an activity"
+    },
+    {
+      "name": "get_activity_power_in_timezones",
+      "description": "Get power distribution across training zones for an activity."
+    },
+    {
+      "name": "get_activity_split_summaries",
+      "description": "Get split summaries for an activity"
+    },
+    {
+      "name": "get_activity_splits",
+      "description": "Get splits for an activity"
+    },
+    {
+      "name": "get_activity_typed_splits",
+      "description": "Get typed splits for an activity"
+    },
+    {
+      "name": "get_activity_types",
+      "description": "Get all available activity types"
+    },
+    {
+      "name": "get_activity_weather",
+      "description": "Get weather data for an activity."
+    },
+    {
+      "name": "get_adhoc_challenges",
+      "description": "Get user-created social/group challenges (e.g., step competitions with friends)"
+    },
+    {
+      "name": "get_all_day_events",
+      "description": "Get daily wellness events data"
+    },
+    {
+      "name": "get_all_day_stress",
+      "description": "Get all-day stress data"
+    },
+    {
+      "name": "get_available_badge_challenges",
+      "description": "Get official Garmin badge challenges available to join"
+    },
+    {
+      "name": "get_badge_challenges",
+      "description": "Get all badge challenges the user has joined (completed and in-progress)"
+    },
+    {
+      "name": "get_blood_pressure",
+      "description": "Get blood pressure data"
+    },
+    {
+      "name": "get_body_battery",
+      "description": "Get body battery data with events"
+    },
+    {
+      "name": "get_body_battery_events",
+      "description": "Get body battery events data"
     },
     {
       "name": "get_body_composition",
-      "description": "Get body composition measurements"
+      "description": "Get body composition data for a single date or date range"
+    },
+    {
+      "name": "get_calendar_events",
+      "description": "Get races and events on the Garmin Connect calendar between two dates"
+    },
+    {
+      "name": "get_course_details",
+      "description": "Get full details of a Garmin Connect course by ID."
+    },
+    {
+      "name": "get_courses",
+      "description": "List all courses saved on Garmin Connect."
+    },
+    {
+      "name": "get_custom_food_serving_units",
+      "description": "Get available serving units for custom foods"
+    },
+    {
+      "name": "get_custom_foods",
+      "description": "Search or list user's custom foods"
+    },
+    {
+      "name": "get_cycling_ftp",
+      "description": "Get the latest cycling Functional Threshold Power (FTP) data."
+    },
+    {
+      "name": "get_daily_steps",
+      "description": "Get steps data for a date range"
+    },
+    {
+      "name": "get_daily_weigh_ins",
+      "description": "Get weight measurements for a specific date"
+    },
+    {
+      "name": "get_device_alarms",
+      "description": "Get alarms from all Garmin devices"
+    },
+    {
+      "name": "get_device_last_used",
+      "description": "Get information about the last used Garmin device"
+    },
+    {
+      "name": "get_device_settings",
+      "description": "Get settings for a specific Garmin device"
+    },
+    {
+      "name": "get_device_solar_data",
+      "description": "Get solar data for a specific device"
+    },
+    {
+      "name": "get_devices",
+      "description": "Get all Garmin devices associated with the user account"
+    },
+    {
+      "name": "get_earned_badges",
+      "description": "Get earned badges for user"
+    },
+    {
+      "name": "get_endurance_score",
+      "description": "Get endurance score data between dates"
+    },
+    {
+      "name": "get_energy_balance",
+      "description": "Estimate a composition-derived TDEE from logged intake, Garmin's"
+    },
+    {
+      "name": "get_fitnessage_data",
+      "description": "Get fitness age data"
+    },
+    {
+      "name": "get_floors",
+      "description": "Get floors climbed data"
+    },
+    {
+      "name": "get_full_name",
+      "description": "Get user's full name from profile"
+    },
+    {
+      "name": "get_garmin_coach_workouts",
+      "description": "Get Garmin Coach workouts around the given date"
+    },
+    {
+      "name": "get_gear",
+      "description": "Get all gear registered with the user account"
+    },
+    {
+      "name": "get_goals",
+      "description": "Get Garmin Connect goals (active, future, or past)."
+    },
+    {
+      "name": "get_heart_rate_zones",
+      "description": "Get the user's saved heart-rate training-zone configuration."
+    },
+    {
+      "name": "get_heart_rates",
+      "description": "Get full heart rate time-series data"
+    },
+    {
+      "name": "get_heart_rates_summary",
+      "description": "Get heart rate summary with essential metrics (lightweight version)"
+    },
+    {
+      "name": "get_hill_score",
+      "description": "Get hill score data between dates"
+    },
+    {
+      "name": "get_hrv_data",
+      "description": "Get Heart Rate Variability (HRV) data"
+    },
+    {
+      "name": "get_hrv_trend",
+      "description": "Get HRV (Heart Rate Variability) trend over a date range."
+    },
+    {
+      "name": "get_hydration_data",
+      "description": "Get hydration data"
+    },
+    {
+      "name": "get_inprogress_virtual_challenges",
+      "description": "Get in-progress virtual challenges/expeditions"
+    },
+    {
+      "name": "get_lactate_threshold",
+      "description": "Get lactate threshold data"
+    },
+    {
+      "name": "get_lifestyle_logging_data",
+      "description": "Get lifestyle logging data for a specific date"
+    },
+    {
+      "name": "get_menstrual_calendar_data",
+      "description": "Get menstrual calendar data between specified dates"
+    },
+    {
+      "name": "get_menstrual_data_for_date",
+      "description": "Get menstrual data for a specific date"
+    },
+    {
+      "name": "get_morning_training_readiness",
+      "description": "Get morning training readiness score"
+    },
+    {
+      "name": "get_non_completed_badge_challenges",
+      "description": "Get badge challenges currently in progress (not yet completed)"
+    },
+    {
+      "name": "get_nutrition_daily_food_log",
+      "description": "Get daily food consumption records for a date"
+    },
+    {
+      "name": "get_nutrition_daily_meals",
+      "description": "Get daily meal summaries for a date"
+    },
+    {
+      "name": "get_nutrition_daily_settings",
+      "description": "Get nutrition plan/settings for a date"
+    },
+    {
+      "name": "get_nutrition_summary_between_dates",
+      "description": "Get per-day nutrition totals for every day in a date range."
+    },
+    {
+      "name": "get_personal_record",
+      "description": "Get personal records for user"
+    },
+    {
+      "name": "get_power_duration_curve",
+      "description": "Get season-best Power Duration Curve across recent activities."
+    },
+    {
+      "name": "get_pregnancy_summary",
+      "description": "Get pregnancy summary data"
+    },
+    {
+      "name": "get_primary_training_device",
+      "description": "Get information about the primary training device"
+    },
+    {
+      "name": "get_progress_summary_between_dates",
+      "description": "Get progress summary for a metric between dates"
+    },
+    {
+      "name": "get_race_predictions",
+      "description": "Get predicted race times based on current fitness level"
+    },
+    {
+      "name": "get_recovery_time_remaining",
+      "description": "Get remaining recovery time in hours for a day."
+    },
+    {
+      "name": "get_respiration_data",
+      "description": "Get full respiration time-series data"
+    },
+    {
+      "name": "get_respiration_summary",
+      "description": "Get respiration summary with essential metrics (lightweight version)"
+    },
+    {
+      "name": "get_respiration_trend",
+      "description": "Get overnight respiration rate trend over a date range."
+    },
+    {
+      "name": "get_rhr_day",
+      "description": "Get resting heart rate data"
+    },
+    {
+      "name": "get_running_tolerance",
+      "description": "Get Running Tolerance for a single day."
+    },
+    {
+      "name": "get_running_tolerance_trend",
+      "description": "Get Running Tolerance trend over a date range."
+    },
+    {
+      "name": "get_scheduled_workouts",
+      "description": "Get scheduled workouts between two dates with curated summary list"
+    },
+    {
+      "name": "get_sleep_data",
+      "description": "Get full sleep data with all details"
+    },
+    {
+      "name": "get_sleep_summary",
+      "description": "Get sleep summary with only essential metrics (lightweight version)"
+    },
+    {
+      "name": "get_sleep_summary_range",
+      "description": "Get lightweight sleep summaries for every night in a date range."
+    },
+    {
+      "name": "get_spo2_data",
+      "description": "Get SpO2 (blood oxygen) data"
+    },
+    {
+      "name": "get_stats",
+      "description": "Get daily activity stats with curated essential metrics"
+    },
+    {
+      "name": "get_stats_and_body",
+      "description": "Get stats and body composition data"
+    },
+    {
+      "name": "get_stats_range",
+      "description": "Get lightweight per-day calorie and step totals for a date range."
+    },
+    {
+      "name": "get_steps_data",
+      "description": "Get detailed steps data with 15-minute intervals"
+    },
+    {
+      "name": "get_stress_data",
+      "description": "Get full stress time-series data"
+    },
+    {
+      "name": "get_stress_summary",
+      "description": "Get stress summary with essential metrics (lightweight version)"
+    },
+    {
+      "name": "get_training_effect",
+      "description": "Get training effect data for a specific activity."
+    },
+    {
+      "name": "get_training_load_balance",
+      "description": "Get Garmin's Load Focus \u2014 the distribution of the trailing-month"
+    },
+    {
+      "name": "get_training_load_trend",
+      "description": "Get the Performance Management Chart (CTL/ATL/TSB) over a date range."
+    },
+    {
+      "name": "get_training_plan_workouts",
+      "description": "Compatibility alias for get_garmin_coach_workouts"
+    },
+    {
+      "name": "get_training_readiness",
+      "description": "Get training readiness data with curated metrics"
+    },
+    {
+      "name": "get_training_status",
+      "description": "Get training status with curated metrics"
+    },
+    {
+      "name": "get_unit_system",
+      "description": "Get user's preferred unit system from profile"
+    },
+    {
+      "name": "get_user_profile",
+      "description": "Get user profile information"
+    },
+    {
+      "name": "get_user_summary",
+      "description": "Get user summary data (compatible with garminconnect-ha)"
+    },
+    {
+      "name": "get_userprofile_settings",
+      "description": "Get user profile settings"
+    },
+    {
+      "name": "get_vo2max_trend",
+      "description": "Get VO2 max trend over a date range."
+    },
+    {
+      "name": "get_weekly_intensity_minutes",
+      "description": "Get weekly intensity minutes data aggregates"
+    },
+    {
+      "name": "get_weekly_steps",
+      "description": "Get weekly step data aggregates"
+    },
+    {
+      "name": "get_weekly_stress",
+      "description": "Get weekly stress data aggregates"
+    },
+    {
+      "name": "get_weigh_ins",
+      "description": "Get weight measurements between specified dates"
+    },
+    {
+      "name": "get_workout_by_id",
+      "description": "Get detailed information for a specific workout"
+    },
+    {
+      "name": "get_workouts",
+      "description": "Get all workouts with curated summary list"
+    },
+    {
+      "name": "log_custom_food",
+      "description": "Log a food item to a meal on a date"
+    },
+    {
+      "name": "log_food",
+      "description": "Quick-add a food entry with macro values to the nutrition log"
+    },
+    {
+      "name": "remove_gear_from_activity",
+      "description": "Remove gear association from an activity"
+    },
+    {
+      "name": "request_reload",
+      "description": "Request reload of epoch data"
+    },
+    {
+      "name": "schedule_week",
+      "description": "Schedule a list of workouts for the week in a single call."
+    },
+    {
+      "name": "schedule_workout",
+      "description": "Schedule a workout to a specific calendar date"
+    },
+    {
+      "name": "schedule_workouts",
+      "description": "Schedule multiple workouts to specific calendar dates"
+    },
+    {
+      "name": "search_foods",
+      "description": "Search Garmin's general food catalog (FatSecret + Garmin custom foods)"
+    },
+    {
+      "name": "set_activity_description",
+      "description": "Set or update the free-text description (notes) of an activity."
+    },
+    {
+      "name": "set_activity_event_type",
+      "description": "Set the event type of an activity."
+    },
+    {
+      "name": "set_activity_exercise_sets",
+      "description": "Replace the exercise sets on a strength (or other rep-counting) activity."
+    },
+    {
+      "name": "set_activity_feel",
+      "description": "Set how an activity felt ('How did you feel?')."
+    },
+    {
+      "name": "set_activity_name",
+      "description": "Set or update the name of an activity."
+    },
+    {
+      "name": "set_activity_type",
+      "description": "Change the activity type (sport) of an activity."
+    },
+    {
+      "name": "set_blood_pressure",
+      "description": "Set blood pressure values"
+    },
+    {
+      "name": "set_fit_download_dir",
+      "description": "Set and persist the default directory for downloaded activity files."
+    },
+    {
+      "name": "set_heart_rate_zones",
+      "description": "Set an account-level heart-rate training-zone configuration for one sport."
+    },
+    {
+      "name": "set_nutrition_daily_settings",
+      "description": "Update daily nutrition goals (calorie target and macronutrient targets)."
+    },
+    {
+      "name": "set_perceived_effort",
+      "description": "Set the perceived effort (RPE) for an activity."
+    },
+    {
+      "name": "unschedule_workout",
+      "description": "Remove a scheduled workout from the Garmin Connect calendar"
+    },
+    {
+      "name": "unschedule_workouts",
+      "description": "Remove multiple scheduled workouts from the Garmin Connect calendar"
+    },
+    {
+      "name": "update_custom_food",
+      "description": "Update an existing custom food in the user's Garmin nutrition library"
+    },
+    {
+      "name": "upload_course",
+      "description": "Upload a GPX file as a Garmin Connect Course."
+    },
+    {
+      "name": "upload_workout",
+      "description": "Upload a workout from JSON data"
+    },
+    {
+      "name": "upload_workouts",
+      "description": "Upload multiple workouts from JSON data in a single call"
+    },
+    {
+      "name": "upsert_and_log",
+      "description": "Find-or-create a custom food then log it in one step"
     }
   ],
   "compatibility": {
     "claude_desktop": ">=0.10.0",
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "python": ">=3.10"
     }
