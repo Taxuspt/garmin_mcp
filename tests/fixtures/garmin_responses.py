@@ -207,15 +207,55 @@ MOCK_DAILY_STEPS = [
     }
 ]
 
-MOCK_TRAINING_READINESS = {
-    "trainingReadinessLevel": 75,
-    "trainingReadinessLevelKey": "GOOD",
-    "sleepScore": 85,
-    "hrvStatus": "BALANCED",
-    "bodyBatteryLevel": 75,
-    "restingHeartRate": 55,
-    "recentExerciseLoad": 250
-}
+# get_training_readiness returns a list of snapshots for the day (one per
+# reset: after waking, after an exercise, ...), not a single dict.
+MOCK_TRAINING_READINESS = [
+    {
+        "calendarDate": "2024-01-15",
+        "timestamp": "2024-01-15T14:05:00.0",
+        "timestampLocal": "2024-01-15T06:05:00.0",
+        "inputContext": "AFTER_WAKEUP_RESET",
+        "level": "MODERATE",
+        "score": 62,
+        "feedbackShort": "WELL_RECOVERED",
+        "sleepScore": 81,
+        "sleepScoreFactorPercent": 78,
+        "sleepScoreFactorFeedback": "GOOD",
+        "recoveryTime": 330,
+        "recoveryTimeChangePhrase": "NO_CHANGE_SLEEP",
+        "recoveryTimeFactorPercent": 90,
+        "recoveryTimeFactorFeedback": "GOOD",
+        "acwrFactorPercent": 95,
+        "acwrFactorFeedback": "VERY_GOOD",
+        "acuteLoad": 310,
+        "hrvFactorPercent": 70,
+        "hrvFactorFeedback": "GOOD",
+        "hrvWeeklyAverage": 58,
+        "stressHistoryFactorPercent": 80,
+        "stressHistoryFactorFeedback": "GOOD",
+        "sleepHistoryFactorPercent": 65,
+        "sleepHistoryFactorFeedback": "MODERATE",
+    },
+    {
+        "calendarDate": "2024-01-15",
+        "timestamp": "2024-01-15T19:40:00.0",
+        "timestampLocal": "2024-01-15T11:40:00.0",
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "level": "LOW",
+        "score": 38,
+        "feedbackShort": "TAKE_IT_EASY",
+        "recoveryTime": 1080,
+        "recoveryTimeChangePhrase": "INCREASED_EXERCISE",
+        "recoveryTimeFactorPercent": 40,
+        "recoveryTimeFactorFeedback": "POOR",
+        "acwrFactorPercent": 85,
+        "acwrFactorFeedback": "GOOD",
+        "acuteLoad": 395,
+        "hrvFactorPercent": 70,
+        "hrvFactorFeedback": "GOOD",
+        "hrvWeeklyAverage": 58,
+    },
+]
 
 MOCK_BODY_BATTERY = [
     {
@@ -845,19 +885,9 @@ MOCK_WEEKLY_INTENSITY_MINUTES = [
     },
 ]
 
-MOCK_MORNING_TRAINING_READINESS = {
-    "readinessScore": 75,
-    "readinessLevel": "GOOD",
-    "recoveryTime": 12,
-    "hrvStatus": "BALANCED",
-    "sleepQuality": "GOOD",
-    "sleepScore": 82,
-    "restingHeartRate": 55,
-    "hrvBaseline": 65,
-    "hrvLastNight": 68,
-    "bodyBattery": 85,
-    "stressLevel": 25,
-}
+# get_morning_training_readiness returns the AFTER_WAKEUP_RESET entry of the
+# get_training_readiness list as-is, not a differently-shaped summary.
+MOCK_MORNING_TRAINING_READINESS = MOCK_TRAINING_READINESS[0]
 
 # Activity Management
 MOCK_ACTIVITY_COUNT = 523
