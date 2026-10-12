@@ -2097,6 +2097,84 @@ async def test_upsert_and_log_forbidden_is_an_error(
             "calories": 100,
         },
     )
-    assert result[0][0].text == (
-        "Error in upsert_and_log: API Error 403 - HTTP 403 Forbidden | Response: "
-    )
+    data = json.loads(result[0][0].text)
+    assert data["message"] == "Error in upsert_and_log: API Error 403 - HTTP 403 Forbidden"
+    assert data["upstream_status"] == 403
+    assert data["write_committed"] is False
+    mock_garmin_client.client.put.assert_not_called()
+
+
+_UPSERT_ARGS = {
+    "meal_date": "2024-01-15",
+    "meal_time": "12:00:00",
+    "food_name": "Greek Yogurt",
+    "calories": 100,
+}
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_log_timeout_is_unknown(app_with_nutrition, mock_garmin_client):
+    """A read timeout on the log PUT may have committed; a blind retry double-logs"""
+    import requests
+
+    mock_garmin_client.connectapi.side_effect = [MOCK_CUSTOM_FOODS, MOCK_MEALS]
+    mock_garmin_client.client.put.side_effect = requests.exceptions.ReadTimeout("timed out")
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["tool"] == "upsert_and_log"
+    assert data["stage"] == "garmin_request"
+    assert data["write_committed"] == "unknown"
+    assert "hint" in data
+    mock_garmin_client.client.put.assert_called_once()  # never auto-retried
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_create_timeout_is_unknown(app_with_nutrition, mock_garmin_client):
+    """A read timeout on the create PUT may have created the food"""
+    import requests
+
+    mock_garmin_client.connectapi.side_effect = [{"customFoods": []}]
+    mock_garmin_client.client.put.side_effect = requests.exceptions.ReadTimeout("timed out")
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] == "unknown"
+    mock_garmin_client.client.put.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_log_rejected_after_create(app_with_nutrition, mock_garmin_client):
+    """A rejected log after a successful create says the food now exists"""
+    created_food = {
+        "foodMetaData": {"foodId": "food999", "foodName": "Greek Yogurt"},
+        "nutritionContents": [{"servingId": "srv999"}],
+    }
+    mock_garmin_client.connectapi.side_effect = [{"customFoods": []}, MOCK_MEALS]
+    mock_garmin_client.client.put.side_effect = [
+        created_food,
+        GarminConnectConnectionError("API Error 400 - bad meal"),
+    ]
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert data["upstream_status"] == 400
+    assert "custom food food999 was created" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_and_log_skips_null_search_metadata(app_with_nutrition, mock_garmin_client):
+    """A search hit with foodMetaData/foodName null must not abort the tool"""
+    search = {
+        "customFoods": [
+            {"foodMetaData": None, "nutritionContents": None},
+            {"foodMetaData": {"foodId": "x", "foodName": None}, "nutritionContents": []},
+            *MOCK_CUSTOM_FOODS["customFoods"],
+        ]
+    }
+    mock_garmin_client.connectapi.side_effect = [search, MOCK_MEALS]
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    assert result[0][0].text == "Food logged successfully."
+    mock_garmin_client.client.put.assert_called_once()
+    item = mock_garmin_client.client.put.call_args[1]["json"]["foodLogItems"][0]
+    assert item["foodId"] == "food001"
+    assert item["servingId"] == "srv001"

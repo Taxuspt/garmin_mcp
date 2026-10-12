@@ -1086,27 +1086,32 @@ def register_tools(app):
         data and then logs it. This avoids duplicate food entries and removes
         the need for separate search → create → log round-trips.
 
-        Matching is by food_name alone — brand_name never affects find-or-create
-        lookup, so it can't cause a duplicate by missing an existing unbranded
-        record. If an existing match is found, brand_name is ignored (log-only);
-        it only takes effect when creating a new food. To brand an existing
-        unbranded food, use update_custom_food.
+        Matching is by food_name alone (case-insensitive) — brand_name never
+        affects find-or-create lookup, so it can't cause a duplicate by missing
+        an existing unbranded record. If an existing match is found, it is
+        logged as stored, using its first serving: calories, carbs, protein,
+        fat, brand_name, serving_unit and number_of_units are all ignored and
+        the stored food is not changed; only serving_qty applies. Those values
+        only take effect when creating a new food. To change an existing
+        food's nutrition, serving size or brand, use update_custom_food.
 
         Args:
             meal_date: Date in YYYY-MM-DD format
             meal_time: Time in HH:MM:SS format (account timezone); used to
                 determine the meal automatically
             food_name: Name of the food to find or create
-            calories: Calories per serving
-            carbs: Carbohydrates in grams per serving
-            protein: Protein in grams per serving
-            fat: Total fat in grams per serving
-            brand_name: Brand or vendor name, applied only when creating a new
-                food; ignored when food_name already exists
+            calories: Calories per serving (new food only)
+            carbs: Carbohydrates in grams per serving (new food only)
+            protein: Protein in grams per serving (new food only)
+            fat: Total fat in grams per serving (new food only)
+            brand_name: Brand or vendor name (new food only)
             serving_unit: Unit for serving size (e.g. "G", "ML", "OZ"). Default "G"
+                (new food only)
             number_of_units: Serving size in the specified unit. Default 100
+                (new food only)
             serving_qty: Number of servings to log (default 1)
         """
+        tracker = WriteTracker("upsert_and_log", "Error in upsert_and_log")
         try:
             from datetime import datetime, timezone
 
@@ -1124,9 +1129,11 @@ def register_tools(app):
 
             food_id = None
             serving_id = None
+            created = False
             for f in foods:
-                meta = f.get("foodMetaData", f)
-                name_match = meta.get("foodName", "").lower() == food_name.lower()
+                # `or`: Garmin can return explicit nulls, which .get defaults miss.
+                meta = f.get("foodMetaData") or f
+                name_match = (meta.get("foodName") or "").lower() == food_name.lower()
                 if name_match:
                     food_id = str(meta.get("foodId") or f.get("foodId", ""))
                     contents = f.get("nutritionContents", [])
@@ -1158,12 +1165,15 @@ def register_tools(app):
                     "foodMetaData": food_meta,
                     "nutritionContents": [nutrition],
                 }
+                tracker.sending()
                 create_resp = garmin_client.client.put(
                     "connectapi", "/nutrition-service/customFood", json=create_payload, api=True
                 )
+                tracker.committed()
+                created = True
                 # api=True means create_resp is already a parsed dict; errors raise GarminConnectConnectionError.
                 if create_resp:  # non-empty: response body contains foodId/servingId
-                    meta = create_resp.get("foodMetaData", create_resp)
+                    meta = create_resp.get("foodMetaData") or create_resp
                     food_id = str(meta.get("foodId", ""))
                     contents = create_resp.get("nutritionContents", [])
                     if contents:
@@ -1181,8 +1191,8 @@ def register_tools(app):
                     )
                     lookup_foods = (lookup_data.get("customFoods") or []) if isinstance(lookup_data, dict) else []
                     for f in lookup_foods:
-                        meta = f.get("foodMetaData", f)
-                        if meta.get("foodName", "").lower() == food_name.lower():
+                        meta = f.get("foodMetaData") or f
+                        if (meta.get("foodName") or "").lower() == food_name.lower():
                             food_id = str(meta.get("foodId") or f.get("foodId", ""))
                             contents = f.get("nutritionContents", [])
                             if contents:
@@ -1190,6 +1200,16 @@ def register_tools(app):
                             break
                 if not food_id or not serving_id:
                     return f"Error: could not retrieve foodId/servingId for '{food_name}' after creation."
+
+            # The log is a second write: track it on its own so a failure from
+            # here on reports whether the log landed, not the create. A retry
+            # finds a food created above by name, so it is not duplicated.
+            tracker = WriteTracker(
+                "upsert_and_log",
+                f"Error in upsert_and_log (custom food {food_id} was created)"
+                if created
+                else "Error in upsert_and_log",
+            )
 
             # 3. Resolve meal_id from meal_time
             meals_data = garmin_client.connectapi(f"/nutrition-service/meals/{meal_date}")
@@ -1228,16 +1248,15 @@ def register_tools(app):
                     }
                 ],
             }
+            tracker.sending()
             log_resp = garmin_client.client.put(
                 "connectapi", "/nutrition-service/food/logs", json=log_payload, api=True
             )
+            tracker.committed()
             if not log_resp:
                 return "Food logged successfully."
             return json.dumps(log_resp, indent=2)
-        except GarminConnectConnectionError as e:
-            body = _response_text_from_connection_error(e)
-            return f"Error in upsert_and_log: {e} | Response: {body}"
         except Exception as e:
-            return f"Error in upsert_and_log: {str(e)}"
+            return tracker.error(e)
 
     return app
