@@ -1434,3 +1434,51 @@ async def test_download_activity_file_fit_extraction_failure(
     assert "error" in data
     assert "first_16_bytes_hex" in data["debug"]
     assert not (tmp_path / f"{ACTIVITY_ID}.fit").exists()
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_records_read_enhanced_altitude_and_speed(app_with_activity_analysis, mock_garmin_client):
+    """Edge units write only enhanced_altitude/enhanced_speed; records must still carry altitude, speed and distance."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    modern = _make_mock_fit_message("record", {
+        "timestamp": "2026-10-07 20:15:00",
+        "power": 228,
+        "enhanced_altitude": 312.4,
+        "enhanced_speed": 2.1,
+        "distance": 7412.5,
+    })
+    legacy = _make_mock_fit_message("record", {
+        "timestamp": "2026-10-07 20:15:01",
+        "altitude": 312.9,
+        "speed": 2.0,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([modern, legacy])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID, "include_records": True}
+        )
+
+    records = json.loads(result[0][0].text)["records"]
+    assert records[0]["altitude_m"] == 312.4
+    assert records[0]["speed_mps"] == 2.1
+    assert records[0]["distance_m"] == 7412.5
+    assert records[1]["altitude_m"] == 312.9
+    assert records[1]["speed_mps"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_session_reads_enhanced_speed(app_with_activity_analysis, mock_garmin_client):
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    session_msg = _make_mock_fit_message("session", {"enhanced_avg_speed": 5.27, "enhanced_max_speed": 15.1})
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([session_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    session = json.loads(result[0][0].text)["session"]
+    assert session["avg_speed_mps"] == 5.27
+    assert session["max_speed_mps"] == 15.1
