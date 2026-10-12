@@ -572,6 +572,38 @@ async def test_get_activity_fit_data_shift_summary(app_with_activity_analysis, m
     assert summary["gear_usage"]["53/17t"] == 3
 
 
+def _shift_at(timestamp):
+    return {"event": "rear_gear_change", "quality": "proactive", "timestamp": timestamp}
+
+
+def test_shift_summary_spaced_shifts_are_not_panic_bursts():
+    """Shifts minutes apart never count as a panic burst, however many there are."""
+    shifts = [_shift_at(f"2024-06-01 10:{minute:02d}:00") for minute in range(0, 60, 5)]
+    assert _compute_shift_summary(shifts)["panic_burst_episodes"] == 0
+
+
+def test_shift_summary_counts_clustered_shifts_as_one_episode_each():
+    """3+ shifts within 10 s form one episode; separate clusters count separately."""
+    shifts = [
+        _shift_at("2024-06-01 10:00:00"),
+        _shift_at("2024-06-01 10:00:02"),
+        _shift_at("2024-06-01 10:00:04"),
+        _shift_at("2024-06-01 10:00:06"),
+        _shift_at("2024-06-01 10:05:00"),
+        _shift_at("2024-06-01 10:05:03"),
+        _shift_at("2024-06-01 10:05:05"),
+    ]
+    assert _compute_shift_summary(shifts)["panic_burst_episodes"] == 2
+
+
+def test_shift_summary_ignores_shifts_without_timestamps():
+    """Missing or unparseable timestamps are not counted as bursts."""
+    shifts = [_shift_at(""), _shift_at("not a time"), {"event": "rear_gear_change"}]
+    summary = _compute_shift_summary(shifts)
+    assert summary["total_shifts"] == 3
+    assert summary["panic_burst_episodes"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Records (time series)
 # ---------------------------------------------------------------------------
