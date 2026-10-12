@@ -843,9 +843,12 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
 
     drift_pct = ((r2 - r1) / r1) * 100
 
+    # Only negative drift (HR rising relative to power) is decoupling.
     if abs(drift_pct) < 5:
         interpretation = "well_coupled"
-    elif abs(drift_pct) < 10:
+    elif drift_pct > 0:
+        interpretation = "power_increased_vs_hr"
+    elif drift_pct > -10:
         interpretation = "moderate_drift"
     else:
         interpretation = "significant_decoupling"
@@ -855,7 +858,11 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
         "first_half_power_hr_ratio": round(r1, 3),
         "second_half_power_hr_ratio": round(r2, 3),
         "interpretation": interpretation,
-        "note": "Negative drift = HR increased vs power (decoupling). >10% suggests aerobic base is limiting factor.",
+        "note": (
+            "Negative drift = HR increased vs power (decoupling); below -10% suggests "
+            "aerobic base is limiting factor. Positive drift = power increased vs HR "
+            "(not decoupling)."
+        ),
     }
 
 

@@ -971,6 +971,28 @@ def test_hr_drift_significant():
     assert drift["interpretation"] == "significant_decoupling"
 
 
+@pytest.mark.parametrize(
+    "second_half_hr,expected_sign,expected_interpretation",
+    [
+        (155, -1, "moderate_drift"),  # ratio 1.429 -> 1.290: -9.7%
+        (132, 1, "power_increased_vs_hr"),  # ratio 1.429 -> 1.515: +6.1%
+        (125, 1, "power_increased_vs_hr"),  # ratio 1.429 -> 1.600: +12.0%
+    ],
+)
+def test_hr_drift_interpretation_uses_drift_sign(
+    second_half_hr, expected_sign, expected_interpretation
+):
+    """Only negative drift is decoupling; positive drift gets its own label."""
+    records = (
+        [{"power_w": 200, "heart_rate_bpm": 140}] * 1900
+        + [{"power_w": 200, "heart_rate_bpm": second_half_hr}] * 1900
+    )
+    drift = _compute_hr_drift(records)
+    assert drift is not None
+    assert drift["hr_drift_pct"] * expected_sign > 5
+    assert drift["interpretation"] == expected_interpretation
+
+
 def test_hr_drift_well_coupled():
     """Well-coupled ride shows minimal HR drift"""
     records = [{"power_w": 200, "heart_rate_bpm": 145}] * 4000
