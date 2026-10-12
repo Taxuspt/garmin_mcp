@@ -229,6 +229,37 @@ async def test_delete_weigh_ins_tool(app_with_weight, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_delete_weigh_ins_nothing_found(app_with_weight, mock_garmin_client):
+    """garminconnect returns None, deleting nothing, when the day has no
+    weigh-ins -- that must not be reported as a successful delete."""
+    mock_garmin_client.delete_weigh_ins.return_value = None
+    result = await app_with_weight.call_tool(
+        "delete_weigh_ins",
+        {"date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "nothing_deleted"
+    assert data["deleted_count"] == 0
+    assert "No weight measurements found" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_delete_weigh_ins_several_without_delete_all(app_with_weight, mock_garmin_client):
+    """garminconnect also returns None, deleting nothing, when the day has
+    several weigh-ins and delete_all is false."""
+    mock_garmin_client.delete_weigh_ins.return_value = None
+    result = await app_with_weight.call_tool(
+        "delete_weigh_ins",
+        {"date": "2024-01-15", "delete_all": False}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "nothing_deleted"
+    assert data["deleted_count"] == 0
+    assert "delete_all=true" in data["message"]
+    mock_garmin_client.delete_weigh_ins.assert_called_once_with("2024-01-15", delete_all=False)
+
+
+@pytest.mark.asyncio
 async def test_add_weigh_in_tool(app_with_weight, mock_garmin_client):
     """Test add_weigh_in tool"""
     add_response = {"status": "success", "weightPk": 12346}
@@ -252,6 +283,64 @@ async def test_add_weigh_in_with_timestamps_tool(app_with_weight, mock_garmin_cl
     )
     assert result is not None
     # Note: function has optional date_timestamp and gmt_timestamp parameters
+
+
+@pytest.mark.asyncio
+async def test_add_weigh_in_with_timestamps_keeps_given_local_timestamp(
+    app_with_weight, mock_garmin_client
+):
+    """A caller-supplied date_timestamp is passed through, not replaced with
+    "now" just because gmt_timestamp was omitted -- garminconnect derives the
+    GMT timestamp itself."""
+    mock_garmin_client.add_weigh_in_with_timestamps.return_value = {}
+    result = await app_with_weight.call_tool(
+        "add_weigh_in_with_timestamps",
+        {"weight": 70.5, "unit_key": "kg", "date_timestamp": "2024-01-15T07:30:00"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "success"
+    assert data["timestamp_local"] == "2024-01-15T07:30:00"
+    mock_garmin_client.add_weigh_in_with_timestamps.assert_called_once_with(
+        weight=70.5,
+        unitKey="kg",
+        dateTimestamp="2024-01-15T07:30:00",
+        gmtTimestamp="",
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_weigh_in_with_timestamps_passes_both_timestamps(
+    app_with_weight, mock_garmin_client
+):
+    mock_garmin_client.add_weigh_in_with_timestamps.return_value = {}
+    await app_with_weight.call_tool(
+        "add_weigh_in_with_timestamps",
+        {
+            "weight": 70.5,
+            "date_timestamp": "2024-01-15T07:30:00",
+            "gmt_timestamp": "2024-01-15T15:30:00",
+        }
+    )
+    mock_garmin_client.add_weigh_in_with_timestamps.assert_called_once_with(
+        weight=70.5,
+        unitKey="kg",
+        dateTimestamp="2024-01-15T07:30:00",
+        gmtTimestamp="2024-01-15T15:30:00",
+    )
+
+
+@pytest.mark.asyncio
+async def test_add_weigh_in_with_timestamps_requires_local_with_gmt(
+    app_with_weight, mock_garmin_client
+):
+    """With only gmt_timestamp, garminconnect would record the weigh-in at
+    the current local time, so the tool refuses instead of guessing the day."""
+    result = await app_with_weight.call_tool(
+        "add_weigh_in_with_timestamps",
+        {"weight": 70.5, "gmt_timestamp": "2024-01-15T15:30:00"}
+    )
+    assert "date_timestamp is required" in result[0][0].text
+    mock_garmin_client.add_weigh_in_with_timestamps.assert_not_called()
 
 
 # User Profile module tests

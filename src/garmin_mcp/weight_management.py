@@ -143,6 +143,23 @@ def register_tools(app):
         try:
             # API returns count of deleted entries
             deleted_count = garmin_client.delete_weigh_ins(date, delete_all=delete_all)
+            # ...or None, having deleted nothing, when the day has no weigh-ins
+            # or (with delete_all=False) has more than one
+            if deleted_count is None:
+                if delete_all:
+                    message = f"No weight measurements found for {date}; nothing was deleted"
+                else:
+                    message = (
+                        f"Nothing was deleted for {date}: the day has either no weight "
+                        f"measurements or more than one, and deleting more than one "
+                        f"requires delete_all=true"
+                    )
+                return json.dumps({
+                    "status": "nothing_deleted",
+                    "date": date,
+                    "deleted_count": 0,
+                    "message": message
+                }, indent=2)
             return json.dumps({
                 "status": "success",
                 "date": date,
@@ -181,24 +198,37 @@ def register_tools(app):
     ) -> str:
         """Add a new weight measurement with specific timestamps
 
+        If both timestamps are omitted, the current time is used. If only
+        date_timestamp is given, the GMT timestamp is derived from it.
+
         Args:
             weight: Weight value
             unit_key: Unit of weight ('kg' or 'lb')
             date_timestamp: Local timestamp in format YYYY-MM-DDThh:mm:ss
+                (required if gmt_timestamp is given -- it sets the day the
+                weigh-in is recorded on)
             gmt_timestamp: GMT timestamp in format YYYY-MM-DDThh:mm:ss
         """
         try:
-            if date_timestamp is None or gmt_timestamp is None:
+            if not date_timestamp and not gmt_timestamp:
                 # Generate timestamps if not provided
                 now = datetime.datetime.now()
                 date_timestamp = now.strftime('%Y-%m-%dT%H:%M:%S')
                 gmt_timestamp = now.astimezone(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+            elif not date_timestamp:
+                # garminconnect would fill the local timestamp with "now" rather
+                # than derive it from gmt_timestamp, recording the wrong day
+                return (
+                    "date_timestamp is required when gmt_timestamp is given: the "
+                    "local timestamp sets the day the weigh-in is recorded on."
+                )
 
             result = garmin_client.add_weigh_in_with_timestamps(
                 weight=weight,
                 unitKey=unit_key,
                 dateTimestamp=date_timestamp,
-                gmtTimestamp=gmt_timestamp
+                # garminconnect derives the GMT timestamp from dateTimestamp when empty
+                gmtTimestamp=gmt_timestamp or ""
             )
             # Return structured response
             return json.dumps({
