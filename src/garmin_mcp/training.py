@@ -172,6 +172,20 @@ def _convert_progress_metric(metric: str, value: Optional[float]) -> Optional[fl
     return value / _PROGRESS_CALORIES_FACTOR
 
 
+# Garmin returns the lactate threshold speed in cm/ms, not seconds/meter:
+# Garmin Connect's web app converts it with CmPerMsToMps = 10 before showing
+# the pace (a raw 0.3888878 is 3.889 m/s, shown as 4:17 min/km). Inverting
+# looked plausible only near ~0.32, where 1/x and 10x are both ~3.1-3.2 m/s.
+_CM_PER_MS_TO_MPS = 10
+
+
+def _lactate_threshold_speed_mps(value: Optional[float]) -> Optional[float]:
+    """Convert a raw lactate threshold speed to m/s."""
+    if not value:
+        return None
+    return value * _CM_PER_MS_TO_MPS
+
+
 def _extract_vo2_measurements(data: Any) -> Dict[str, float]:
     """Find all VO2 max values by sport in known Garmin response shapes."""
     if isinstance(data, list):
@@ -1094,13 +1108,10 @@ def register_tools(app):
                 # Process speed history
                 speed_history = threshold.get("speed", [])
                 if speed_history:
-                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
                     curated["speed_history"] = [
                         {
                             "date": entry.get("from"),
-                            "speed_mps": (
-                                1 / entry.get("value") if entry.get("value") else None
-                            ),
+                            "speed_mps": _lactate_threshold_speed_mps(entry.get("value")),
                             "series": entry.get("series"),
                         }
                         for entry in speed_history
@@ -1137,8 +1148,7 @@ def register_tools(app):
                 raw_speed = speed_hr.get("speed")
                 curated = {
                     # Speed and heart rate data
-                    # Garmin returns speed as seconds/metre (inverse pace); invert to m/s.
-                    "lactate_threshold_speed_mps": 1 / raw_speed if raw_speed else None,
+                    "lactate_threshold_speed_mps": _lactate_threshold_speed_mps(raw_speed),
                     "lactate_threshold_heart_rate_bpm": speed_hr.get("heartRate"),
                     "heart_rate_cycling_bpm": speed_hr.get("heartRateCycling"),
                     "speed_hr_date": speed_hr.get("calendarDate"),
