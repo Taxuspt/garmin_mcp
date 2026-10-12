@@ -120,6 +120,10 @@
       "description": "Create a steady Z2 walking workout and upload it to Garmin Connect."
     },
     {
+      "name": "delete_activity",
+      "description": "Permanently delete an activity from Garmin Connect."
+    },
+    {
       "name": "delete_course",
       "description": "Delete a course from Garmin Connect."
     },
