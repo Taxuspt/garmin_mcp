@@ -922,7 +922,7 @@ def register_tools(app):
         targetValueOne/targetValueTwo for custom heart-rate ranges.
 
         IMPORTANT: Sport type IDs for workouts (different from activity API!):
-        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 11 = walking
+        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio_training, 12 = walking
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
         Garmin treats conditionTypeId as authoritative, so mismatches such as
