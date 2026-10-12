@@ -7,12 +7,20 @@ import sys
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
-_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+_DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
 
 
 def _validate_date(value: str, field: str = "date") -> str:
-    if not _DATE_RE.match(value):
-        raise ValueError(f"Invalid {field} '{value}': expected YYYY-MM-DD")
+    # fullmatch, because match() with $ lets a trailing newline through.
+    # fromisoformat rejects dates that don't exist (2026-02-30) but on 3.11+
+    # also accepts other ISO forms (20261014), so it can't replace the regex.
+    if isinstance(value, str) and _DATE_RE.fullmatch(value):
+        try:
+            datetime.date.fromisoformat(value)
+            return value
+        except ValueError:
+            pass
+    raise ValueError(f"Invalid {field} {value!r}: expected YYYY-MM-DD")
 
 # The garmin_client will be set by the main file
 garmin_client = None

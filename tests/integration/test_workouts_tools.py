@@ -11,6 +11,7 @@ from garmin_mcp import workouts
 from garmin_mcp.workouts import (
     _fix_repeat_group_step,
     _normalize_workout_steps,
+    _validate_date,
 )
 from tests.fixtures.garmin_responses import (
     MOCK_WORKOUTS,
@@ -2485,6 +2486,62 @@ async def test_schedule_workouts_idempotent(app_with_workouts, mock_garmin_clien
 
 
 @pytest.mark.asyncio
+async def test_schedule_workouts_non_string_date_keeps_earlier_results(
+    app_with_workouts, mock_garmin_client
+):
+    """A non-string date fails its own item instead of aborting the batch."""
+    import json as json_module
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_garmin_client.client.post.return_value = mock_response
+
+    schedules = [
+        {"workout_id": 111, "calendar_date": "2024-01-15"},
+        {"workout_id": 222, "calendar_date": 20240117},
+    ]
+    result = await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {"schedules": schedules}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["total"] == 2
+    assert result_data["succeeded"] == 1
+    assert result_data["results"][0]["status"] == "success"
+    assert result_data["results"][1]["status"] == "failed"
+    assert "YYYY-MM-DD" in result_data["results"][1]["message"]
+    mock_garmin_client.client.post.assert_called_once_with(
+        "connectapi", "workout-service/schedule/111", json={"date": "2024-01-15"}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("calendar_date", ["2024-02-30", "2024-13-01", "2024-01-15\n"])
+async def test_schedule_workouts_rejects_nonexistent_or_padded_date(
+    app_with_workouts, mock_garmin_client, calendar_date
+):
+    """Dates that only look like YYYY-MM-DD are rejected before any API call."""
+    import json as json_module
+    from unittest.mock import MagicMock
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_garmin_client.client.post.return_value = mock_response
+
+    result = await app_with_workouts.call_tool(
+        "schedule_workouts",
+        {"schedules": [{"workout_id": 123456, "calendar_date": calendar_date}]}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["results"][0]["status"] == "failed"
+    assert "YYYY-MM-DD" in result_data["results"][0]["message"]
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_schedule_workouts_inline_upload(app_with_workouts, mock_garmin_client):
     """Test schedule_workouts with inline workout_data uploads-and-schedules in one call"""
     import json as json_module
@@ -2682,6 +2739,24 @@ async def test_schedule_workouts_inline_upload_no_id_returned(app_with_workouts,
     assert result_data["failed"] == 1
     assert result_data["results"][0]["status"] == "failed"
     mock_garmin_client.client.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Date validation helper tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["2024-02-30", "2024-13-01", "2024-01-15\n", "20240115", 20240115, None],
+)
+def test_validate_date_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="expected YYYY-MM-DD"):
+        _validate_date(value, "calendar_date")
+
+
+def test_validate_date_accepts_leap_day():
+    assert _validate_date("2024-02-29", "calendar_date") == "2024-02-29"
 
 
 # ---------------------------------------------------------------------------
