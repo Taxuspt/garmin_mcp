@@ -105,7 +105,10 @@ Some endpoints are not implemented due to performance or complexity consideratio
 - `upload_running_workout()`, `upload_cycling_workout()`, `upload_swimming_workout()` - Sport-specific workout uploads. Use `upload_workout()` for general workouts.
 
 **Maintenance & Destructive Operations:**
-- `delete_activity()`, `delete_blood_pressure()` - Destructive operations require careful consideration.
+- `delete_blood_pressure()` - Destructive operations require careful consideration.
+- `delete_activity()` is implemented with a confirmation gate: call once to
+  preview, then again with `confirm=true` to delete. Deletions are logged to
+  stderr. There is no undo.
 - Internal/Auth methods: `login()`, `resume_login()`, `connectapi()`, `download()` - Handled automatically by the library.
 
 If you need any of these endpoints, please [open an issue](https://github.com/Taxuspt/garmin_mcp/issues).
