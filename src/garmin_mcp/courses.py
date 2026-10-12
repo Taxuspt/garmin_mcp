@@ -307,10 +307,11 @@ def register_tools(app):
         Args:
             gpx_path: Absolute path to the .gpx file on disk.
             course_name: Override the course name. Defaults to the name parsed
-                from the GPX file.
+                from the GPX file. Max 128 characters; Garmin rejects longer.
             activity_type: One of running, cycling, hiking, walking, trail_running,
                 mountain_biking, road_biking, gravel_cycling. Defaults to running.
             description: Optional description shown on the course detail page.
+                Max 512 characters; Garmin rejects longer.
         """
         try:
             _p = pathlib.Path(gpx_path)
