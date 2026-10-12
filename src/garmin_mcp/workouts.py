@@ -741,7 +741,7 @@ def register_tools(app):
             return f"Error retrieving workouts: {str(e)}"
 
     @app.tool()
-    async def get_workout_by_id(workout_id: Union[int, str]) -> str:
+    async def get_workout_by_id(workout_id: Union[int, str], raw: bool = False) -> str:
         """Get detailed information for a specific workout
 
         Returns workout details including segments and step structure.
@@ -756,6 +756,8 @@ def register_tools(app):
 
         Args:
             workout_id: Workout ID (numeric) or UUID (for training plan workouts)
+            raw: Return Garmin's full workout JSON (the DTO format upload_workout
+                describes) instead of the simplified summary, which leaves fields out.
         """
         try:
             workout_id_str = str(workout_id)
@@ -772,6 +774,9 @@ def register_tools(app):
 
             if not workout:
                 return f"No workout found with ID {workout_id_str}."
+
+            if raw:
+                return json.dumps(workout, indent=2)
 
             # Return curated details with segments
             curated = _curate_workout_details(workout)
