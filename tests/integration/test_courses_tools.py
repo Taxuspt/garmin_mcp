@@ -6,6 +6,7 @@ using FastMCP integration with a mocked Garmin client. No real Garmin account or
 """
 import json
 import os
+import xml.etree.ElementTree as ET
 
 import pytest
 from mcp.server.fastmcp import FastMCP
@@ -208,6 +209,70 @@ async def test_download_course_gpx_success(app_with_courses, mock_garmin_client,
     assert "<wpt lat='46.2' lon='8.2'>" in content
     assert "<name>Summit Rest</name>" in content
     assert "<trkpt lat='46.1' lon='8.1'><ele>1200.0</ele></trkpt>" in content
+
+
+@pytest.mark.asyncio
+async def test_download_course_gpx_escapes_xml_special_characters(
+    app_with_courses, mock_garmin_client, tmp_path
+):
+    """Names containing &, < or > still produce well-formed GPX."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 891,
+        "courseName": "Rock & Roll <Loop>",
+        "geoPoints": [
+            {"latitude": 46.1, "longitude": 8.1, "elevation": 1200.0},
+            {"latitude": 46.2, "longitude": 8.2, "elevation": 1400.0},
+        ],
+        "coursePoints": [
+            {"name": "Café & Water", "pointType": "WATER", "lat": 46.2, "lon": 8.2}
+        ],
+    }
+    out_file = tmp_path / "rock_and_roll.gpx"
+
+    result = await app_with_courses.call_tool(
+        "download_course_gpx", {"course_id": 891, "output_path": str(out_file)}
+    )
+
+    data = json.loads(_result_text(result))
+    assert data["status"] == "success"
+    assert data["name"] == "Rock & Roll <Loop>"
+
+    ns = {"gpx": "http://www.topografix.com/GPX/1/1"}
+    root = ET.parse(out_file).getroot()
+    assert root.find("gpx:metadata/gpx:name", ns).text == "Rock & Roll <Loop>"
+    assert root.find("gpx:trk/gpx:name", ns).text == "Rock & Roll <Loop>"
+    assert root.find("gpx:wpt/gpx:name", ns).text == "Café & Water"
+    assert root.find("gpx:wpt/gpx:type", ns).text == "WATER"
+    assert len(root.findall("gpx:trk/gpx:trkseg/gpx:trkpt", ns)) == 2
+
+
+@pytest.mark.asyncio
+async def test_download_course_gpx_null_course_name_uses_default(
+    app_with_courses, mock_garmin_client, tmp_path
+):
+    """A null courseName falls back to a default instead of writing 'None'."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 892,
+        "courseName": None,
+        "geoPoints": [{"latitude": 46.1, "longitude": 8.1, "elevation": None}],
+        "coursePoints": [{"name": None, "pointType": None, "lat": 46.1, "lon": 8.1}],
+    }
+    out_file = tmp_path / "unnamed.gpx"
+
+    result = await app_with_courses.call_tool(
+        "download_course_gpx", {"course_id": 892, "output_path": str(out_file)}
+    )
+
+    data = json.loads(_result_text(result))
+    assert data["name"] == "Garmin Course 892"
+    content = out_file.read_text(encoding="utf-8")
+    assert "None" not in content
+
+    ns = {"gpx": "http://www.topografix.com/GPX/1/1"}
+    root = ET.fromstring(content)
+    assert root.find("gpx:metadata/gpx:name", ns).text == "Garmin Course 892"
+    assert root.find("gpx:wpt/gpx:name", ns).text == "Waypoint"
+    assert root.find("gpx:wpt/gpx:type", ns).text == "GENERIC"
 
 
 @pytest.mark.asyncio

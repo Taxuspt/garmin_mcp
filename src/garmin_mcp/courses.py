@@ -11,6 +11,7 @@ import math
 import os
 import pathlib
 from typing import Any, Dict, Optional
+from xml.sax.saxutils import escape
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -227,7 +228,10 @@ def register_tools(app):
         course_id: int,
         output_path: Optional[str] = None,
     ) -> str:
-        """Download the exact official GPX file for a Garmin Connect course.
+        """Download a Garmin Connect course as a GPX file.
+
+        The GPX is rebuilt from the course's track points (lat/lon/elevation)
+        and course points (as waypoints); it is not the originally uploaded file.
 
         Args:
             course_id: ID of the course to download.
@@ -242,7 +246,7 @@ def register_tools(app):
             target_path = _resolve_gpx_output_path(course_id, output_path)
             os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
-            name = data.get("courseName", f"Garmin Course {course_id}")
+            name = data.get("courseName") or f"Garmin Course {course_id}"
             geo_points = data.get("geoPoints") or []
             course_points = data.get("coursePoints") or []
 
@@ -250,21 +254,21 @@ def register_tools(app):
                 "<?xml version='1.0' encoding='UTF-8'?>",
                 "<gpx version='1.1' creator='GarminConnectMCP' xmlns='http://www.topografix.com/GPX/1/1'>",
                 "  <metadata>",
-                f"    <name>{name}</name>",
+                f"    <name>{escape(name)}</name>",
                 "  </metadata>",
             ]
             for cp in course_points:
                 lat, lon = cp.get("lat"), cp.get("lon")
                 if lat is not None and lon is not None:
                     cp_name = cp.get("name") or cp.get("pointType") or "Waypoint"
-                    cp_type = cp.get("pointType", "GENERIC")
+                    cp_type = cp.get("pointType") or "GENERIC"
                     lines.append(f"  <wpt lat='{lat}' lon='{lon}'>")
-                    lines.append(f"    <name>{cp_name}</name>")
-                    lines.append(f"    <type>{cp_type}</type>")
+                    lines.append(f"    <name>{escape(cp_name)}</name>")
+                    lines.append(f"    <type>{escape(cp_type)}</type>")
                     lines.append("  </wpt>")
 
             lines.append("  <trk>")
-            lines.append(f"    <name>{name}</name>")
+            lines.append(f"    <name>{escape(name)}</name>")
             lines.append("    <trkseg>")
             for p in geo_points:
                 lat = p.get("latitude")
