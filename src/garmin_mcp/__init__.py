@@ -520,7 +520,10 @@ def init_api(email, password):
             # sys.stdout is a _ThreadFilteredStream (installed in main());
             # any stray progress output from this call is already discarded
             # without a local swap here (see the token-load path above).
-            result1, result2 = garmin.login()
+            # Exchange the credentials on the client directly. Garmin.login()
+            # with no tokenstore falls back to $GARMINTOKENS and would reload
+            # the same tokens that just failed instead of using the password.
+            result1, result2 = garmin.client.login(email, password, return_on_mfa=True)
             if result1 == "needs_mfa":
                 mfa_code = get_mfa()
                 garmin.resume_login(result2, mfa_code)
@@ -546,6 +549,12 @@ def init_api(email, password):
                 f"Oauth tokens encoded as base64 string and saved to '{tokenstore_base64}' file for future use. (second method)\n",
                 file=sys.stderr,
             )
+            # The early-return login above does not load the profile or unit
+            # settings (display_name stays None, so tools that build URLs from
+            # it fail). Log in again from the saved tokens to load them, which
+            # also points token refreshes at the token directory.
+            garmin = Garmin(is_cn=is_cn)
+            garmin.login(tokenstore)
         except (
             FileNotFoundError,
             GarminConnectConnectionError,
