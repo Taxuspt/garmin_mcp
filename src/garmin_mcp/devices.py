@@ -186,13 +186,12 @@ def register_tools(app):
                 return "No primary training device found."
 
             # Extract primary device ID
-            primary_device = data.get("PrimaryTrainingDevice", {})
+            primary_device = data.get("PrimaryTrainingDevice") or {}
             primary_device_id = primary_device.get("deviceId")
 
             # Get primary training devices list
-            primary_devices = data.get("PrimaryTrainingDevices", {}).get(
-                "deviceWeights", []
-            )
+            primary_training_devices = data.get("PrimaryTrainingDevices") or {}
+            primary_devices = primary_training_devices.get("deviceWeights") or []
 
             curated = {
                 "primary_device_id": primary_device_id,
@@ -215,7 +214,7 @@ def register_tools(app):
                 curated["training_device_count"] = len(devices_list)
 
             # Add wearable device count
-            wearable_data = data.get("WearableDevices", {})
+            wearable_data = data.get("WearableDevices") or {}
             if wearable_data.get("wearableDeviceCount"):
                 curated["wearable_device_count"] = wearable_data.get(
                     "wearableDeviceCount"
@@ -242,7 +241,7 @@ def register_tools(app):
                 return f"No solar data found for device ID {device_id} on {date}."
 
             # Check if there's actual data in the response
-            daily_data = solar_data.get("solarDailyDataDTOs", [])
+            daily_data = solar_data.get("solarDailyDataDTOs") or []
             if not daily_data:
                 return f"No solar data available for device ID {device_id} on {date}. This device may not have solar capabilities."
 
