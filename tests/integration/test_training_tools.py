@@ -1020,7 +1020,27 @@ async def test_get_lactate_threshold_tool_range(app_with_training, mock_garmin_c
     assert round(1000 / data["speed_history"][0]["speed_mps"]) == 4 * 60 + 15
     assert "heart_rate_history" in data
     assert len(data["heart_rate_history"]) == 3
+    assert data["heart_rate_history"][-1] == {
+        "date": "2024-01-15",
+        "heart_rate_bpm": 169,
+        "series": "running",
+    }
     assert "power_history" in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "args",
+    [{"start_date": "2024-01-08"}, {"end_date": "2024-01-15"}],
+)
+async def test_get_lactate_threshold_rejects_partial_range(
+    app_with_training, mock_garmin_client, args
+):
+    """A single date must not silently fall back to the latest values."""
+    result = await app_with_training.call_tool("get_lactate_threshold", args)
+
+    assert "Provide both start_date and end_date" in result[0][0].text
+    mock_garmin_client.get_lactate_threshold.assert_not_called()
 
 
 # Error handling tests

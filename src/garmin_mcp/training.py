@@ -1078,9 +1078,18 @@ def register_tools(app):
         endurance training.
 
         Args:
-            start_date: Start date in YYYY-MM-DD format (optional, omit for latest)
-            end_date: End date in YYYY-MM-DD format (optional, omit for latest)
+            start_date: Start date in YYYY-MM-DD format (optional; give with
+                end_date for history, omit both for latest)
+            end_date: End date in YYYY-MM-DD format (optional; give with
+                start_date for history, omit both for latest)
         """
+        # A lone date would otherwise fall through to the latest-values query
+        # and silently ignore the requested range.
+        if bool(start_date) != bool(end_date):
+            return (
+                "Provide both start_date and end_date for lactate threshold "
+                "history, or omit both for the latest values."
+            )
         try:
             # Call API with appropriate parameters
             if start_date and end_date:
@@ -1099,7 +1108,7 @@ def register_tools(app):
 
             # Handle different response formats based on query type
             if start_date and end_date:
-                # Historical range format: {speed: [...], heartRate: [...], power: [...]}
+                # Historical range format: {speed: [...], heart_rate: [...], power: [...]}
                 curated = {
                     "start_date": start_date,
                     "end_date": end_date,
@@ -1117,8 +1126,9 @@ def register_tools(app):
                         for entry in speed_history
                     ]
 
-                # Process heart rate history
-                hr_history = threshold.get("heartRate", [])
+                # Process heart rate history. garminconnect returns it under
+                # "heart_rate"; accept the camelCase key too.
+                hr_history = threshold.get("heart_rate") or threshold.get("heartRate")
                 if hr_history:
                     curated["heart_rate_history"] = [
                         {
