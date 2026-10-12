@@ -225,16 +225,22 @@ def register_tools(app):
             return f"Error retrieving primary training device: {str(e)}"
 
     @app.tool()
-    async def get_device_solar_data(device_id: str, date: str) -> str:
+    async def get_device_solar_data(device_id: Union[int, str], date: str) -> str:
         """Get solar data for a specific device
 
-        Returns solar charging data for devices with solar panels (e.g., Instinct Solar,
-        Fenix Solar). Only applicable to solar-capable devices.
+        Returns a per-day summary of solar charging for devices with solar panels
+        (e.g., Instinct Solar, Fenix Solar): activity time gained from solar, and
+        the average/peak solar utilization and minutes with solar input across the
+        day's per-minute readings. Only applicable to solar-capable devices.
 
         Args:
             device_id: Device ID (can be obtained from get_devices)
             date: Date in YYYY-MM-DD format
         """
+        no_solar = (
+            f"No solar data available for device ID {device_id} on {date}. "
+            "This device may not have solar capabilities."
+        )
         try:
             solar_data = garmin_client.get_device_solar_data(device_id, date)
             if not solar_data:
@@ -243,18 +249,34 @@ def register_tools(app):
             # Check if there's actual data in the response
             daily_data = solar_data.get("solarDailyDataDTOs") or []
             if not daily_data:
-                return f"No solar data available for device ID {device_id} on {date}. This device may not have solar capabilities."
+                return no_solar
 
-            # Curate solar data from the daily DTOs
+            # Curate solar data from the daily DTOs. solarInputReadings is a
+            # per-minute series (~1440 entries a day), so summarise it rather
+            # than returning it.
             curated_days = []
             for day_data in daily_data:
+                readings = day_data.get("solarInputReadings") or []
+                utilization = [
+                    r["solarUtilization"]
+                    for r in readings
+                    if r.get("solarUtilization") is not None
+                ]
+                gained_ms = day_data.get("totalActivityTimeGainedMs")
                 curated_day = {
-                    "date": day_data.get("calendarDate"),
-                    "solar_intensity_avg": day_data.get("solarIntensityAvg"),
-                    "solar_intensity_max": day_data.get("solarIntensityMax"),
-                    "battery_charged_percent": day_data.get("batteryCharged"),
-                    "battery_used_percent": day_data.get("batteryUsed"),
-                    "battery_net_percent": day_data.get("batteryNet"),
+                    "date": day_data.get("localConnectDate"),
+                    "activity_time_gained_minutes": (
+                        round(gained_ms / 60000, 1) if gained_ms is not None else None
+                    ),
+                    "solar_utilization_avg_pct": (
+                        round(sum(utilization) / len(utilization), 2)
+                        if utilization
+                        else None
+                    ),
+                    "solar_utilization_max_pct": max(utilization) if utilization else None,
+                    "minutes_with_solar_input": (
+                        sum(1 for u in utilization if u > 0) if utilization else None
+                    ),
                 }
                 # Remove None values
                 curated_day = {k: v for k, v in curated_day.items() if v is not None}
@@ -264,6 +286,10 @@ def register_tools(app):
                 {"device_id": device_id, "solar_data": curated_days}, indent=2
             )
         except Exception as e:
+            # garminconnect raises this when the response has no
+            # deviceSolarInput, which is what a non-solar device returns.
+            if "No device solar input data received" in str(e):
+                return no_solar
             return f"Error retrieving solar data: {str(e)}"
 
     def _format_alarm_time(minutes: int) -> str:
