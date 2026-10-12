@@ -353,6 +353,100 @@ async def test_get_training_load_trend_omits_mismatched_ctl_and_uses_tracker_acu
     mock_garmin_client.get_training_readiness.assert_called_once_with("2026-10-09")
 
 
+def _load_balance_record(device_id, aerobic_low, feedback, **extra):
+    return {
+        "deviceId": device_id,
+        "calendarDate": "2026-10-09",
+        "monthlyLoadAerobicLow": aerobic_low,
+        "monthlyLoadAerobicLowTargetMin": 200,
+        "monthlyLoadAerobicLowTargetMax": 600,
+        "monthlyLoadAerobicHigh": 700,
+        "monthlyLoadAerobicHighTargetMin": 300,
+        "monthlyLoadAerobicHighTargetMax": 650,
+        "monthlyLoadAnaerobic": 250,
+        "monthlyLoadAnaerobicTargetMin": 100,
+        "monthlyLoadAnaerobicTargetMax": 300,
+        "trainingBalanceFeedbackPhrase": feedback,
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_balance_prefers_primary_tracker_over_first_record(
+    app_with_training, mock_garmin_client
+):
+    """A secondary device that sorts first must not be reported as the athlete's load."""
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+        {"deviceId": 200, "displayName": "Edge", "primaryDevice": False},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "200": _load_balance_record(200, 50, "AEROBIC_LOW_SHORTAGE"),
+                "100": _load_balance_record(100, 400, "BALANCED"),
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_balance", {"date": "2026-10-09"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["load_device_id"] == 100
+    assert data["load_device_name"] == "Forerunner"
+    assert data["feedback"] == "BALANCED"
+    assert data["aerobic_low"] == {
+        "load": 400,
+        "target_min": 200,
+        "target_max": 600,
+        "status": "within",
+    }
+    assert data["aerobic_high"]["status"] == "above"
+    assert data["anaerobic"]["status"] == "within"
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_balance_falls_back_to_primary_training_marker(
+    app_with_training, mock_garmin_client
+):
+    """Without device discovery, keep Garmin's marker and still report provenance."""
+    mock_garmin_client.get_devices.side_effect = Exception("devices unavailable")
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "200": _load_balance_record(200, 50, "AEROBIC_LOW_SHORTAGE"),
+                "100": _load_balance_record(
+                    100, 400, "BALANCED", primaryTrainingDevice=True
+                ),
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_balance", {"date": "2026-10-09"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["load_device_id"] == 100
+    assert "load_device_name" not in data
+    assert data["feedback"] == "BALANCED"
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_balance_no_data(app_with_training, mock_garmin_client):
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingLoadBalance": {"metricsTrainingLoadBalanceDTOMap": None}
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_balance", {"date": "2026-10-09"}
+    )
+
+    assert result[0][0].text == "No training load balance data found for 2026-10-09."
+
+
 @pytest.mark.asyncio
 async def test_get_training_status_preserves_status_when_readiness_fails(
     app_with_training, mock_garmin_client

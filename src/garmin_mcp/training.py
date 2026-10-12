@@ -1332,6 +1332,10 @@ def register_tools(app):
         alongside Garmin's target range; a `status` of "below", "within", or
         "above" is computed from the load relative to that range.
 
+        Garmin reports Load Focus per device. The primary activity tracker's
+        record is used when it can be identified; `load_device_id` and
+        `load_device_name` say which device the numbers came from.
+
         Args:
             date: Date in YYYY-MM-DD format
         """
@@ -1349,17 +1353,16 @@ def register_tools(app):
         load_balance = data.get("mostRecentTrainingLoadBalance") or {}
         load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap") or {}
 
-        # device-keyed dict; prefer the primary training device, fall back to
-        # the first device with data.
-        load_data: Dict[str, Any] = {}
-        for dev_data in load_map.values():
-            if not isinstance(dev_data, dict):
-                continue
-            if dev_data.get("primaryTrainingDevice"):
-                load_data = dev_data
-                break
-            if not load_data:
-                load_data = dev_data
+        # Device-keyed like the status map: select with the same helper as
+        # get_training_status (primary tracker, then Garmin's primary-training
+        # marker) rather than whichever device happens to come first.
+        try:
+            devices = garmin_client.get_devices()
+        except Exception:
+            devices = None
+        load_data, load_device_id, load_device_name, _ = _select_training_device(
+            load_map, devices
+        )
 
         if not load_data:
             return f"No training load balance data found for {date}."
@@ -1389,6 +1392,12 @@ def register_tools(app):
         result: Dict[str, Any] = {
             "date": load_data.get("calendarDate", date),
         }
+        if load_device_id is not None:
+            result["load_device_id"] = (
+                int(load_device_id) if load_device_id.isdigit() else load_device_id
+            )
+        if load_device_name is not None:
+            result["load_device_name"] = load_device_name
         feedback = load_data.get("trainingBalanceFeedbackPhrase")
         if feedback:
             result["feedback"] = feedback
