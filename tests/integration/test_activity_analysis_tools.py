@@ -1482,3 +1482,42 @@ async def test_get_activity_fit_data_session_reads_enhanced_speed(app_with_activ
     session = json.loads(result[0][0].text)["session"]
     assert session["avg_speed_mps"] == 5.27
     assert session["max_speed_mps"] == 15.1
+
+
+# ---------------------------------------------------------------------------
+# Wrapped-around negative lap distance
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_wrapped_lap_distance_is_nulled(app_with_activity_analysis, mock_garmin_client):
+    """A small negative uint32 lap distance is nulled and flagged, not reported as ~42,950 km.
+
+    Live values from a fenix 8 treadmill run: a zero-length lap at a lap/stop
+    boundary recorded total_distance 0xFFFFFFFC cm (-4 cm), which fitparse
+    returns as 42949672.92 m. The zero-length lap before it (0.2 m) is sane.
+    """
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    sane_zero_lap = _make_mock_fit_message("lap", {
+        "total_elapsed_time": 0.0,
+        "total_distance": 0.2,
+    })
+    wrapped_lap = _make_mock_fit_message("lap", {
+        "total_elapsed_time": 0.0,
+        "total_distance": 42949672.92,
+        "avg_heart_rate": 140,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([sane_zero_lap, wrapped_lap])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert len(data["laps"]) == 2
+    assert data["laps"][0]["total_distance_m"] == 0.2
+    assert "distance_invalid" not in data["laps"][0]
+    assert "total_distance_m" not in data["laps"][1]
+    assert data["laps"][1]["distance_invalid"] is True
+    assert data["laps"][1]["avg_heart_rate_bpm"] == 140

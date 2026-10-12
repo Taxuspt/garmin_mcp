@@ -5,6 +5,23 @@ import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
+# FIT stores lap distance as uint32 centimetres. A device that writes a small
+# negative distance (seen on zero-length laps at a lap/stop boundary) wraps it
+# to just under 2**32 / 100 m, e.g. -4 cm -> 42,949,672.92 m. Garmin's own
+# splits API passes the wrapped value through unchanged.
+_UINT32_DISTANCE_WRAP_M = 2**32 / 100
+_MAX_WRAPPED_NEGATIVE_M = 1000.0
+
+
+def sanitize_lap_distance(value):
+    """Return ``value``, or None if it is a wrapped-around negative distance."""
+    if (
+        isinstance(value, (int, float))
+        and _UINT32_DISTANCE_WRAP_M - _MAX_WRAPPED_NEGATIVE_M <= value <= _UINT32_DISTANCE_WRAP_M
+    ):
+        return None
+    return value
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -638,6 +655,9 @@ def register_tools(app):
                     "elevation_loss_meters": lap.get('elevationLoss'),
                     "workout_step_index": lap.get('wktStepIndex'),
                 }
+                if lap.get('distance') is not None and sanitize_lap_distance(lap.get('distance')) is None:
+                    lap_data["distance_meters"] = None
+                    lap_data["distance_invalid"] = True
 
                 length_dtos = lap.get('lengthDTOs') or []
                 if length_dtos:

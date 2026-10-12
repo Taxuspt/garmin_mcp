@@ -1247,3 +1247,32 @@ async def test_create_manual_activity_exception(app_with_activity_management, mo
     )
     assert "Error" in result[0][0].text
     assert "Garmin API error" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_get_activity_splits_wrapped_lap_distance_is_nulled(app_with_activity_management, mock_garmin_client):
+    """Garmin's splits API passes a wrapped negative lap distance through; null and flag it.
+
+    Live value: a zero-length fenix 8 lap recorded -4 cm, which the splits
+    API returns as distance 42949672.0.
+    """
+    import json
+
+    mock_garmin_client.get_activity_splits.return_value = {
+        "activityId": 24687347098,
+        "lapDTOs": [
+            {"lapIndex": 4, "distance": 680.96, "duration": 301.797},
+            {"lapIndex": 5, "distance": 42949672.0, "duration": 0.0},
+        ],
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity_splits", {"activity_id": 24687347098}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["laps"][0]["distance_meters"] == 680.96
+    assert "distance_invalid" not in data["laps"][0]
+    assert "distance_meters" not in data["laps"][1]
+    assert data["laps"][1]["distance_invalid"] is True
+    assert data["laps"][1]["duration_seconds"] == 0.0
