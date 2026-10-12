@@ -860,6 +860,46 @@ def test_power_duration_curve_sliding_window():
     assert pdc["5s"] == 400
 
 
+def _mock_power_fitfile(watts, count=60):
+    """Mock FitFile whose record messages all carry the given power."""
+    return _mock_fitfile(
+        [_make_mock_fit_message("record", {"power": watts}) for _ in range(count)]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "activity_type,expected_watts,expected_id",
+    [("running", 250, 1), ("cycling", 900, 2)],
+)
+async def test_power_duration_curve_filters_by_requested_activity_type(
+    app_with_activity_analysis, mock_garmin_client, activity_type, expected_watts, expected_id
+):
+    """Bike power only counts toward the curve when cycling is requested."""
+    mock_garmin_client.get_activities.return_value = [
+        {"activityId": 1, "startTimeLocal": "2024-06-01 08:00:00",
+         "activityType": {"typeKey": "running", "parentTypeId": 17}},
+        {"activityId": 2, "startTimeLocal": "2024-06-02 08:00:00",
+         "activityType": {"typeKey": "road_biking", "parentTypeId": 2}},
+    ]
+    mock_garmin_client.download_activity.side_effect = (
+        lambda activity_id, dl_fmt: b"run" if activity_id == 1 else b"ride"
+    )
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.side_effect = lambda buf: _mock_power_fitfile(
+            250 if buf.getvalue() == b"run" else 900
+        )
+        result = await app_with_activity_analysis.call_tool(
+            "get_power_duration_curve", {"activity_type": activity_type}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities_analyzed"] == 1
+    assert data["season_bests"]["5s"]["watts"] == expected_watts
+    assert data["season_bests"]["5s"]["activity_id"] == expected_id
+
+
 # ---------------------------------------------------------------------------
 # Climb detection + VAM (unit tests)
 # ---------------------------------------------------------------------------

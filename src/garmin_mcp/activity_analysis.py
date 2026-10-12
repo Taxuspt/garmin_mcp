@@ -1689,13 +1689,17 @@ def register_tools(app):
             if not activities:
                 return "No activities found."
 
-            # Filter by sport type
+            # Filter by sport type. "cycling" also matches the *_biking typeKeys
+            # (road_biking, mountain_biking); other types must not pull in bike power.
+            requested_type = activity_type.lower()
             cycling_activities = [
                 a for a in activities
-                if activity_type.lower() in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or activity_type.lower() in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
-                or "cycling" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                if requested_type in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                or requested_type in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
+                or (
+                    requested_type == "cycling"
+                    and "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                )
             ]
 
             if not cycling_activities:
