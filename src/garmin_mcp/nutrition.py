@@ -525,8 +525,8 @@ def register_tools(app):
         serving_id: str,
         food_name: str,
         calories: float,
-        serving_unit: str = "G",
-        number_of_units: float = 100,
+        serving_unit: Optional[str] = None,
+        number_of_units: Optional[float] = None,
         brand_name: Optional[str] = None,
         carbs: Optional[float] = None,
         protein: Optional[float] = None,
@@ -560,8 +560,10 @@ def register_tools(app):
             serving_id: Serving ID of the food (from get_custom_foods)
             food_name: Name of the custom food
             calories: Calories per serving
-            serving_unit: Unit for serving size (e.g. "G", "ML", "OZ"). Default "G"
-            number_of_units: Serving size in the specified unit. Default 100
+            serving_unit: Unit for serving size (e.g. "G", "ML", "OZ");
+                omit to preserve the existing value
+            number_of_units: Serving size in the specified unit;
+                omit to preserve the existing value
             brand_name: Brand or vendor name; omit to preserve the existing value
             carbs: Carbohydrates in grams per serving
             protein: Protein in grams per serving
@@ -616,10 +618,19 @@ def register_tools(app):
                 "iron": iron,
                 "vitaminD": vitamin_d,
             }
+            # Effective serving basis: caller-supplied wins, else preserve existing,
+            # else fall back to the create-time defaults (no prior record to preserve).
+            effective_serving_unit = serving_unit
+            if effective_serving_unit is None:
+                effective_serving_unit = existing_nutrition.get("servingUnit", "G")
+            effective_number_of_units = number_of_units
+            if effective_number_of_units is None:
+                effective_number_of_units = existing_nutrition.get("numberOfUnits", 100)
+
             nutrition: dict = {
                 "servingId": serving_id,
-                "servingUnit": serving_unit,
-                "numberOfUnits": _num_to_str(number_of_units),
+                "servingUnit": effective_serving_unit,
+                "numberOfUnits": _num_to_str(effective_number_of_units),
                 "calories": _num_to_str(calories),
             }
             # Carry forward existing optional fields, then overlay caller-supplied values.
