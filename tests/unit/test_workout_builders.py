@@ -194,6 +194,44 @@ def test_build_run_interval_json_recovery_hr_target():
     assert "120-140bpm" in recovery["description"]
 
 
+@pytest.mark.parametrize(
+    "recovery_bounds",
+    [{"recovery_hr_min": 120}, {"recovery_hr_max": 140}],
+)
+def test_build_run_interval_json_recovery_hr_requires_both_bounds(recovery_bounds):
+    """A single recovery bound is rejected, as a single work bound is."""
+    with pytest.raises(
+        ValueError,
+        match="recovery_hr_min and recovery_hr_max must both be provided together",
+    ):
+        build_run_interval_json(
+            name="Half a recovery range",
+            repeats=4,
+            rep_seconds=240,
+            recovery_seconds=120,
+            warmup_min=10,
+            cooldown_min=5,
+            **recovery_bounds,
+        )
+
+
+def test_build_run_interval_json_recovery_hr_rejects_inverted_bounds():
+    with pytest.raises(
+        ValueError,
+        match=r"recovery_hr_min \(140\) must be less than recovery_hr_max \(120\)",
+    ):
+        build_run_interval_json(
+            name="Inverted recovery range",
+            repeats=4,
+            rep_seconds=240,
+            recovery_seconds=120,
+            warmup_min=10,
+            cooldown_min=5,
+            recovery_hr_min=140,
+            recovery_hr_max=120,
+        )
+
+
 def test_build_run_interval_json_zero_recovery_omits_step():
     result = build_run_interval_json(
         name="Strides",

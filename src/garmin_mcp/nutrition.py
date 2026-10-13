@@ -176,6 +176,38 @@ def _response_text_from_connection_error(exc: GarminConnectConnectionError) -> s
     return ""
 
 
+_CUSTOM_FOOD_PAGE_SIZE = 20
+_CUSTOM_FOOD_MAX_SCAN = 500
+
+
+def _find_custom_food(food_id: str, food_name: str) -> Optional[dict]:
+    """Return the stored custom food with ``food_id``, or None if not found.
+
+    Garmin has no read-by-ID for custom foods, so search by ``food_name``
+    first (the usual case) and fall back to paging through the unfiltered
+    list: after a rename, the new name does not match the stored record.
+    """
+    for search in (food_name, ""):
+        for start in range(0, _CUSTOM_FOOD_MAX_SCAN, _CUSTOM_FOOD_PAGE_SIZE):
+            data = garmin_client.connectapi(
+                "/nutrition-service/customFood",
+                params={
+                    "searchExpression": search,
+                    "start": start,
+                    "limit": _CUSTOM_FOOD_PAGE_SIZE,
+                    "includeContent": "true",
+                },
+            )
+            foods = (data.get("customFoods") or []) if isinstance(data, dict) else []
+            for food in foods:
+                meta = (food.get("foodMetaData") or {}) if isinstance(food, dict) else {}
+                if str(meta.get("foodId", "")) == food_id:
+                    return food
+            if len(foods) < _CUSTOM_FOOD_PAGE_SIZE:
+                break
+    return None
+
+
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
@@ -656,10 +688,16 @@ def register_tools(app):
     ) -> str:
         """Update an existing custom food in the user's Garmin nutrition library
 
-        Fetches the food's current record before writing so that omitted optional
-        fields (brand, carbs, protein, fat, micros, etc.) preserve their existing
-        values rather than being cleared. Only the fields you explicitly pass are
-        changed; everything else is carried forward from the current record.
+        Fetches the food's current record (by food_id, so renaming is safe)
+        before writing so that omitted optional fields (brand, carbs, protein,
+        fat, micros, etc.) preserve their existing values rather than being
+        cleared. Only the fields you explicitly pass are changed; everything
+        else is carried forward from the current record.
+
+        Garmin replaces the whole record on update. If the current record
+        cannot be read, the update is refused unless serving_unit and
+        number_of_units are given; the call then replaces the record in full,
+        and any brand or nutrient you omit is cleared.
 
         All nutrient amounts are ABSOLUTE values per serving, not %DV.
         Nutrition labels often print %DV for calcium/iron/vitamin D —
@@ -693,26 +731,26 @@ def register_tools(app):
         """
         try:
             # Fetch current record so omitted fields are preserved (not wiped).
-            existing_nutrition: dict = {}
-            existing_brand: Optional[str] = None
             try:
-                search_data = garmin_client.connectapi(
-                    "/nutrition-service/customFood",
-                    params={
-                        "searchExpression": food_name,
-                        "start": 0,
-                        "limit": 20,
-                        "includeContent": "true",
-                    },
-                )
-                foods = (search_data.get("customFoods") or []) if isinstance(search_data, dict) else []
-                for f in foods:
-                    if str(f.get("foodMetaData", {}).get("foodId", "")) == food_id:
-                        existing_nutrition = (f.get("nutritionContents") or [{}])[0]
-                        existing_brand = f.get("foodMetaData", {}).get("brandName")
-                        break
+                existing = _find_custom_food(food_id, food_name)
             except Exception:
-                pass  # proceed without existing data; caller's values win
+                existing = None
+            if existing is None and (serving_unit is None or number_of_units is None):
+                # The PUT is a full replace: writing without the stored record
+                # would silently wipe the brand, nutrients and serving size.
+                return (
+                    f"Error updating custom food: could not read the current record "
+                    f"for food_id {food_id}, so omitted fields cannot be preserved. "
+                    "Check the food_id with get_custom_foods, or pass serving_unit "
+                    "and number_of_units (plus every nutrient and brand to keep) to "
+                    "replace the record in full."
+                )
+            existing_nutrition: dict = (
+                ((existing or {}).get("nutritionContents") or [{}])[0] or {}
+            )
+            existing_brand: Optional[str] = (
+                (existing or {}).get("foodMetaData") or {}
+            ).get("brandName")
 
             # API field name → optional param value (None means "not supplied by caller")
             optional_updates = {
@@ -731,7 +769,7 @@ def register_tools(app):
                 "vitaminD": vitamin_d,
             }
             # Effective serving basis: caller-supplied wins, else preserve existing,
-            # else fall back to the create-time defaults (no prior record to preserve).
+            # else fall back to the create-time defaults (stored record lacks them).
             effective_serving_unit = serving_unit
             if effective_serving_unit is None:
                 effective_serving_unit = existing_nutrition.get("servingUnit", "G")
@@ -1048,27 +1086,32 @@ def register_tools(app):
         data and then logs it. This avoids duplicate food entries and removes
         the need for separate search → create → log round-trips.
 
-        Matching is by food_name alone — brand_name never affects find-or-create
-        lookup, so it can't cause a duplicate by missing an existing unbranded
-        record. If an existing match is found, brand_name is ignored (log-only);
-        it only takes effect when creating a new food. To brand an existing
-        unbranded food, use update_custom_food.
+        Matching is by food_name alone (case-insensitive) — brand_name never
+        affects find-or-create lookup, so it can't cause a duplicate by missing
+        an existing unbranded record. If an existing match is found, it is
+        logged as stored, using its first serving: calories, carbs, protein,
+        fat, brand_name, serving_unit and number_of_units are all ignored and
+        the stored food is not changed; only serving_qty applies. Those values
+        only take effect when creating a new food. To change an existing
+        food's nutrition, serving size or brand, use update_custom_food.
 
         Args:
             meal_date: Date in YYYY-MM-DD format
             meal_time: Time in HH:MM:SS format (account timezone); used to
                 determine the meal automatically
             food_name: Name of the food to find or create
-            calories: Calories per serving
-            carbs: Carbohydrates in grams per serving
-            protein: Protein in grams per serving
-            fat: Total fat in grams per serving
-            brand_name: Brand or vendor name, applied only when creating a new
-                food; ignored when food_name already exists
+            calories: Calories per serving (new food only)
+            carbs: Carbohydrates in grams per serving (new food only)
+            protein: Protein in grams per serving (new food only)
+            fat: Total fat in grams per serving (new food only)
+            brand_name: Brand or vendor name (new food only)
             serving_unit: Unit for serving size (e.g. "G", "ML", "OZ"). Default "G"
+                (new food only)
             number_of_units: Serving size in the specified unit. Default 100
+                (new food only)
             serving_qty: Number of servings to log (default 1)
         """
+        tracker = WriteTracker("upsert_and_log", "Error in upsert_and_log")
         try:
             from datetime import datetime, timezone
 
@@ -1086,9 +1129,11 @@ def register_tools(app):
 
             food_id = None
             serving_id = None
+            created = False
             for f in foods:
-                meta = f.get("foodMetaData", f)
-                name_match = meta.get("foodName", "").lower() == food_name.lower()
+                # `or`: Garmin can return explicit nulls, which .get defaults miss.
+                meta = f.get("foodMetaData") or f
+                name_match = (meta.get("foodName") or "").lower() == food_name.lower()
                 if name_match:
                     food_id = str(meta.get("foodId") or f.get("foodId", ""))
                     contents = f.get("nutritionContents", [])
@@ -1120,12 +1165,15 @@ def register_tools(app):
                     "foodMetaData": food_meta,
                     "nutritionContents": [nutrition],
                 }
+                tracker.sending()
                 create_resp = garmin_client.client.put(
                     "connectapi", "/nutrition-service/customFood", json=create_payload, api=True
                 )
+                tracker.committed()
+                created = True
                 # api=True means create_resp is already a parsed dict; errors raise GarminConnectConnectionError.
                 if create_resp:  # non-empty: response body contains foodId/servingId
-                    meta = create_resp.get("foodMetaData", create_resp)
+                    meta = create_resp.get("foodMetaData") or create_resp
                     food_id = str(meta.get("foodId", ""))
                     contents = create_resp.get("nutritionContents", [])
                     if contents:
@@ -1143,8 +1191,8 @@ def register_tools(app):
                     )
                     lookup_foods = (lookup_data.get("customFoods") or []) if isinstance(lookup_data, dict) else []
                     for f in lookup_foods:
-                        meta = f.get("foodMetaData", f)
-                        if meta.get("foodName", "").lower() == food_name.lower():
+                        meta = f.get("foodMetaData") or f
+                        if (meta.get("foodName") or "").lower() == food_name.lower():
                             food_id = str(meta.get("foodId") or f.get("foodId", ""))
                             contents = f.get("nutritionContents", [])
                             if contents:
@@ -1152,6 +1200,16 @@ def register_tools(app):
                             break
                 if not food_id or not serving_id:
                     return f"Error: could not retrieve foodId/servingId for '{food_name}' after creation."
+
+            # The log is a second write: track it on its own so a failure from
+            # here on reports whether the log landed, not the create. A retry
+            # finds a food created above by name, so it is not duplicated.
+            tracker = WriteTracker(
+                "upsert_and_log",
+                f"Error in upsert_and_log (custom food {food_id} was created)"
+                if created
+                else "Error in upsert_and_log",
+            )
 
             # 3. Resolve meal_id from meal_time
             meals_data = garmin_client.connectapi(f"/nutrition-service/meals/{meal_date}")
@@ -1190,16 +1248,15 @@ def register_tools(app):
                     }
                 ],
             }
+            tracker.sending()
             log_resp = garmin_client.client.put(
                 "connectapi", "/nutrition-service/food/logs", json=log_payload, api=True
             )
+            tracker.committed()
             if not log_resp:
                 return "Food logged successfully."
             return json.dumps(log_resp, indent=2)
-        except GarminConnectConnectionError as e:
-            body = _response_text_from_connection_error(e)
-            return f"Error in upsert_and_log: {e} | Response: {body}"
         except Exception as e:
-            return f"Error in upsert_and_log: {str(e)}"
+            return tracker.error(e)
 
     return app

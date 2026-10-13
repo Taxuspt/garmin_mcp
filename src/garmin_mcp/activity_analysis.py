@@ -11,6 +11,7 @@ Exposes data not available through the REST API:
 - Temperature correlation with HR and power
 - Variability Index per session and lap
 """
+import datetime
 import gzip
 import io
 import json
@@ -45,15 +46,15 @@ def configure(client):
 def _decode_gear_change(data: int) -> dict:
     """Decode a packed gear_change_data uint32 from a Di2 shift event.
 
-    Shimano Di2 packs gear information as:
+    The FIT profile packs gear information as:
       bits 0-7:   rear gear number (1 = smallest/hardest cog)
-      bits 8-15:  front gear number (1 = inner/small ring)
-      bits 16-23: rear gear teeth count
+      bits 8-15:  rear gear teeth count
+      bits 16-23: front gear number (1 = inner/small ring)
       bits 24-31: front gear teeth count
     """
     rear_gear_num = data & 0xFF
-    front_gear_num = (data >> 8) & 0xFF
-    rear_teeth = (data >> 16) & 0xFF
+    rear_teeth = (data >> 8) & 0xFF
+    front_gear_num = (data >> 16) & 0xFF
     front_teeth = (data >> 24) & 0xFF
     return {
         "rear_gear_num": rear_gear_num,
@@ -63,19 +64,31 @@ def _decode_gear_change(data: int) -> dict:
     }
 
 
-def _decode_left_right_balance(value) -> Optional[float]:
-    """Decode Garmin's left_right_balance field to left power percentage."""
+def _decode_left_right_balance(value, *, per_record: bool = False) -> Optional[float]:
+    """Decode a FIT left_right_balance value to left power percentage.
+
+    Session and lap messages use the uint16 left_right_balance_100 type
+    (bit 15 = right, low 14 bits = percent x 100). Record messages use the
+    uint8 left_right_balance type (bit 7 = right, low 7 bits = whole percent).
+    When the right bit is set the percentage is the right leg's share.
+    """
     if value is None:
         return None
     try:
         int_val = int(value)
-        right_dominant = bool(int_val & 0x8000)
-        pct = (int_val & 0x7FFF) / 100.0
-        if right_dominant:
-            return round(100.0 - pct, 1)
-        return round(pct, 1)
     except (TypeError, ValueError):
         return None
+    if per_record:
+        right_dominant = bool(int_val & 0x80)
+        pct = float(int_val & 0x7F)
+    else:
+        right_dominant = bool(int_val & 0x8000)
+        pct = (int_val & 0x3FFF) / 100.0
+    if pct > 100:
+        return None
+    if right_dominant:
+        return round(100.0 - pct, 1)
+    return round(pct, 1)
 
 
 def _get_field(message, *names):
@@ -596,6 +609,22 @@ def _safe_round(value, ndigits: int = 1) -> Optional[float]:
     return round(value, ndigits)
 
 
+def _parse_fit_timestamp(value) -> Optional[datetime.datetime]:
+    """Parse a FIT timestamp (datetime or its str()) as naive UTC, or None."""
+    if isinstance(value, datetime.datetime):
+        ts = value
+    else:
+        if not value:
+            return None
+        try:
+            ts = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return ts
+
+
 # ---------------------------------------------------------------------------
 # Power Duration Curve (Mean Maximal Power)
 # ---------------------------------------------------------------------------
@@ -607,15 +636,22 @@ _PDC_LABELS = ["5s", "30s", "1min", "5min", "10min", "20min", "60min"]
 def _compute_power_duration_curve(records: List[Dict]) -> Optional[Dict]:
     """Compute best mean maximal power for standard durations.
 
-    Uses a sliding window over the per-second power values.
+    Uses a sliding window over power resampled to 1 Hz from the record
+    timestamps (records without timestamps are taken as 1 s each).
     O(n * num_durations) — efficient for rides up to ~8 hours.
     """
     powers = [r.get("power_w") for r in records]
     if not any(p is not None for p in powers):
         return None
 
-    # Fill None gaps with 0 (coasting) for window computation
-    filled = [p if p is not None else 0 for p in powers]
+    # Fill None gaps with 0 (coasting) for window computation. Each sample is
+    # held until the next record; a pause counts as 0 W rather than inventing
+    # power, and zeros beyond the longest window cannot change any result.
+    filled: List[float] = []
+    for p, gap in zip(powers, _record_gaps_s(records)):
+        held = _held_seconds(gap)
+        filled.extend([p if p is not None else 0] * held)
+        filled.extend([0] * min(gap - held, _PDC_DURATIONS_S[-1]))
     n = len(filled)
     if n == 0:
         return None
@@ -642,6 +678,44 @@ def _compute_power_duration_curve(records: List[Dict]) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# Record timing (smart recording, pauses)
+# ---------------------------------------------------------------------------
+
+# Smart recording writes a record every few seconds (up to ~8 s); a longer gap
+# between records is a pause (auto-pause, a stop), not slow sampling.
+_MAX_RECORD_GAP_S = 10
+
+
+def _record_gaps_s(records: List[Dict]) -> List[int]:
+    """Seconds from each record to the next, from the record timestamps.
+
+    The last record gets the preceding sampling interval. Falls back to 1 s
+    per record (the 1 Hz assumption) when a timestamp is missing or
+    unparseable or the timestamps go backwards.
+    """
+    times = [_parse_fit_timestamp(r.get("timestamp")) for r in records]
+    if any(t is None for t in times):
+        return [1] * len(records)
+    gaps = [int((b - a).total_seconds()) for a, b in zip(times, times[1:])]
+    if any(g < 0 for g in gaps):
+        return [1] * len(records)
+    if not records:
+        return []
+    return gaps + [_held_seconds(gaps[-1]) if gaps else 1]
+
+
+def _held_seconds(gap_s: int) -> int:
+    """Seconds a record's values hold for: its gap to the next record, or only
+    1 s when that gap is a pause, so paused time is not attributed to it."""
+    return gap_s if gap_s <= _MAX_RECORD_GAP_S else 1
+
+
+def _record_seconds(records: List[Dict]) -> List[int]:
+    """Seconds each record covers (1 per record for 1 Hz files)."""
+    return [_held_seconds(gap) for gap in _record_gaps_s(records)]
+
+
+# ---------------------------------------------------------------------------
 # Climb detection + VAM
 # ---------------------------------------------------------------------------
 
@@ -663,7 +737,9 @@ def _detect_climbs(
     in_climb = False
     climb_start_idx = 0
     flat_count = 0
+    flat_s = 0
     FLAT_TOLERANCE_S = 30
+    held_s = _record_seconds(records)
 
     for i, rec in enumerate(records):
         grade = rec.get("grade_pct")
@@ -675,24 +751,28 @@ def _detect_climbs(
                 in_climb = True
                 climb_start_idx = i
                 flat_count = 0
+                flat_s = 0
         else:
             if grade < min_avg_grade_pct:
                 flat_count += 1
-                if flat_count > FLAT_TOLERANCE_S:
+                flat_s += held_s[i]
+                if flat_s > FLAT_TOLERANCE_S:
                     # End the climb at where the flat started
                     end_idx = i - flat_count
-                    climb = _summarize_climb(records, climb_start_idx, end_idx)
+                    climb = _summarize_climb(records, climb_start_idx, end_idx, held_s)
                     if (climb.get("elevation_gain_m", 0) >= min_elevation_gain_m and
                             climb.get("duration_s", 0) >= min_duration_s):
                         climbs.append(climb)
                     in_climb = False
                     flat_count = 0
+                    flat_s = 0
             else:
                 flat_count = 0
+                flat_s = 0
 
     # Close any open climb at end of ride
     if in_climb:
-        climb = _summarize_climb(records, climb_start_idx, len(records) - 1)
+        climb = _summarize_climb(records, climb_start_idx, len(records) - 1, held_s)
         if (climb.get("elevation_gain_m", 0) >= min_elevation_gain_m and
                 climb.get("duration_s", 0) >= min_duration_s):
             climbs.append(climb)
@@ -700,13 +780,19 @@ def _detect_climbs(
     return climbs
 
 
-def _summarize_climb(records: List[Dict], start_idx: int, end_idx: int) -> Dict:
-    """Compute aggregate stats for a climb segment."""
+def _summarize_climb(
+    records: List[Dict], start_idx: int, end_idx: int, held_s: List[int]
+) -> Dict:
+    """Compute aggregate stats for a climb segment.
+
+    held_s gives the seconds each record covers (see _record_gaps_s).
+    """
     segment = records[start_idx:end_idx + 1]
     if not segment:
         return {}
 
-    duration_s = len(segment)  # 1 record ≈ 1 second
+    segment_held_s = held_s[start_idx:end_idx + 1]
+    duration_s = sum(segment_held_s)
     start_alt = segment[0].get("altitude_m")
     end_alt = segment[-1].get("altitude_m")
     elevation_gain = (end_alt - start_alt) if (start_alt is not None and end_alt is not None) else None
@@ -715,7 +801,12 @@ def _summarize_climb(records: List[Dict], start_idx: int, end_idx: int) -> Dict:
     cadences = [r["cadence_rpm"] for r in segment if r.get("cadence_rpm") is not None]
     hrs = [r["heart_rate_bpm"] for r in segment if r.get("heart_rate_bpm") is not None]
     grades = [r["grade_pct"] for r in segment if r.get("grade_pct") is not None]
-    speeds = [r["speed_mps"] for r in segment if r.get("speed_mps") is not None]
+    speeds = [
+        (r["speed_mps"], held) for r, held in zip(segment, segment_held_s)
+        if r.get("speed_mps") is not None
+    ]
+    start_dist = segment[0].get("distance_m")
+    end_dist = segment[-1].get("distance_m")
 
     result: Dict[str, Any] = {
         "start_time": segment[0].get("timestamp", ""),
@@ -728,8 +819,10 @@ def _summarize_climb(records: List[Dict], start_idx: int, end_idx: int) -> Dict:
         if duration_s > 0:
             result["vam_m_per_hr"] = round((elevation_gain / duration_s) * 3600)
 
-    if speeds:
-        total_dist = sum(s for s in speeds)  # m/s * 1s = m per record
+    if start_dist is not None and end_dist is not None:
+        result["distance_m"] = round(end_dist - start_dist)  # cumulative odometer
+    elif speeds:
+        total_dist = sum(s * held for s, held in speeds)  # m/s * s = m per record
         result["distance_m"] = round(total_dist)
 
     if grades:
@@ -755,15 +848,15 @@ def _summarize_climb(records: List[Dict], start_idx: int, end_idx: int) -> Dict:
 def _grade_analysis(records: List[Dict]) -> Optional[Dict]:
     """Bin per-second records by grade and report avg power/cadence/HR per bin."""
     bins = {
-        "descending": {"label": "descending (<-3%)", "records": []},
-        "flat": {"label": "flat (-3% to 3%)", "records": []},
-        "gentle": {"label": "gentle (3-6%)", "records": []},
-        "moderate": {"label": "moderate (6-9%)", "records": []},
-        "steep": {"label": "steep (>9%)", "records": []},
+        "descending": {"label": "descending (<-3%)", "records": [], "time_s": 0},
+        "flat": {"label": "flat (-3% to 3%)", "records": [], "time_s": 0},
+        "gentle": {"label": "gentle (3-6%)", "records": [], "time_s": 0},
+        "moderate": {"label": "moderate (6-9%)", "records": [], "time_s": 0},
+        "steep": {"label": "steep (>9%)", "records": [], "time_s": 0},
     }
 
     has_grade = False
-    for rec in records:
+    for rec, held in zip(records, _record_seconds(records)):
         grade = rec.get("grade_pct")
         if grade is None:
             continue
@@ -779,6 +872,7 @@ def _grade_analysis(records: List[Dict]) -> Optional[Dict]:
         else:
             bucket = "steep"
         bins[bucket]["records"].append(rec)
+        bins[bucket]["time_s"] += held
 
     if not has_grade:
         return None
@@ -788,7 +882,7 @@ def _grade_analysis(records: List[Dict]) -> Optional[Dict]:
         recs = data["records"]
         if not recs:
             continue
-        entry: Dict[str, Any] = {"time_s": len(recs)}
+        entry: Dict[str, Any] = {"time_s": data["time_s"]}
         powers = [r["power_w"] for r in recs if r.get("power_w") is not None]
         cadences = [r["cadence_rpm"] for r in recs if r.get("cadence_rpm") is not None]
         hrs = [r["heart_rate_bpm"] for r in recs if r.get("heart_rate_bpm") is not None]
@@ -815,15 +909,17 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
     Drift % = change in ratio from first to second half.
     Negative drift = HR increased relative to power (decoupling = less efficient).
     """
-    MIN_RECORDS = 3600  # require ≥60 min of data
+    MIN_DURATION_S = 3600  # require ≥60 min of data (by timestamps, not record count)
 
-    filtered = [
-        r for r in records
-        if r.get("power_w") is not None and r.get("heart_rate_bpm") is not None
-        and r["heart_rate_bpm"] > 0
-    ]
+    filtered = []
+    filtered_s = 0
+    for r, held in zip(records, _record_seconds(records)):
+        if (r.get("power_w") is not None and r.get("heart_rate_bpm") is not None
+                and r["heart_rate_bpm"] > 0):
+            filtered.append(r)
+            filtered_s += held
 
-    if len(filtered) < MIN_RECORDS:
+    if filtered_s < MIN_DURATION_S:
         return None
 
     mid = len(filtered) // 2
@@ -845,9 +941,12 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
 
     drift_pct = ((r2 - r1) / r1) * 100
 
+    # Only negative drift (HR rising relative to power) is decoupling.
     if abs(drift_pct) < 5:
         interpretation = "well_coupled"
-    elif abs(drift_pct) < 10:
+    elif drift_pct > 0:
+        interpretation = "power_increased_vs_hr"
+    elif drift_pct > -10:
         interpretation = "moderate_drift"
     else:
         interpretation = "significant_decoupling"
@@ -857,7 +956,11 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
         "first_half_power_hr_ratio": round(r1, 3),
         "second_half_power_hr_ratio": round(r2, 3),
         "interpretation": interpretation,
-        "note": "Negative drift = HR increased vs power (decoupling). >10% suggests aerobic base is limiting factor.",
+        "note": (
+            "Negative drift = HR increased vs power (decoupling); below -10% suggests "
+            "aerobic base is limiting factor. Positive drift = power increased vs HR "
+            "(not decoupling)."
+        ),
     }
 
 
@@ -959,16 +1062,23 @@ def _compute_shift_summary(shifts: list) -> dict:
     gear_usage: dict = {}
     cadences_at_shift = []
 
-    # Burst detection: 3+ shifts within ~6 consecutive events
+    # Burst detection: 3+ shifts within 10 seconds count as one episode, then
+    # skip past that burst. Shifts without a parseable timestamp are ignored.
+    BURST_MIN_SHIFTS = 3
+    BURST_WINDOW_S = 10
+    shift_times = sorted(
+        t for t in (_parse_fit_timestamp(s.get("timestamp")) for s in shifts) if t is not None
+    )
     panic_bursts = 0
     burst_i = 0
-    while burst_i < len(shifts):
-        window = [shifts[burst_i]]
-        for j in range(burst_i + 1, min(burst_i + 6, len(shifts))):
-            window.append(shifts[j])
-        if len(window) >= 3:
+    while burst_i < len(shift_times):
+        burst_end = burst_i
+        while (burst_end + 1 < len(shift_times) and
+               (shift_times[burst_end + 1] - shift_times[burst_i]).total_seconds() <= BURST_WINDOW_S):
+            burst_end += 1
+        if burst_end - burst_i + 1 >= BURST_MIN_SHIFTS:
             panic_bursts += 1
-            burst_i += len(window)
+            burst_i = burst_end + 1
         else:
             burst_i += 1
 
@@ -1143,7 +1253,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "avg_left_pedal_smoothness_pct": _get_field(message, "avg_left_pedal_smoothness"),
                 "avg_right_pedal_smoothness_pct": _get_field(message, "avg_right_pedal_smoothness"),
             }
-            balance_raw = _get_field(message, "avg_left_right_balance")
+            balance_raw = _get_field(message, "left_right_balance")
             session["avg_left_power_pct"] = _decode_left_right_balance(balance_raw)
             if session["avg_left_power_pct"] is not None:
                 session["avg_right_power_pct"] = round(100.0 - session["avg_left_power_pct"], 1)
@@ -1175,7 +1285,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
             if lap["total_distance_m"] is not None and sanitize_lap_distance(lap["total_distance_m"]) is None:
                 lap["total_distance_m"] = None
                 lap["distance_invalid"] = True
-            balance_raw = _get_field(message, "avg_left_right_balance")
+            balance_raw = _get_field(message, "left_right_balance")
             left_pct = _decode_left_right_balance(balance_raw)
             if left_pct is not None:
                 lap["avg_left_power_pct"] = left_pct
@@ -1276,7 +1386,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "right_pedal_smoothness_pct": _get_field(message, "right_pedal_smoothness"),
             }
             balance_raw = _get_field(message, "left_right_balance")
-            left_pct = _decode_left_right_balance(balance_raw)
+            left_pct = _decode_left_right_balance(balance_raw, per_record=True)
             if left_pct is not None:
                 record["left_power_pct"] = left_pct
                 record["right_power_pct"] = round(100.0 - left_pct, 1)
@@ -1694,13 +1804,17 @@ def register_tools(app):
             if not activities:
                 return "No activities found."
 
-            # Filter by sport type
+            # Filter by sport type. "cycling" also matches the *_biking typeKeys
+            # (road_biking, mountain_biking); other types must not pull in bike power.
+            requested_type = activity_type.lower()
             cycling_activities = [
                 a for a in activities
-                if activity_type.lower() in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or activity_type.lower() in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
-                or "cycling" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                if requested_type in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                or requested_type in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
+                or (
+                    requested_type == "cycling"
+                    and "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                )
             ]
 
             if not cycling_activities:
@@ -1729,11 +1843,11 @@ def register_tools(app):
                     extracted = _extract_fit_bytes(raw)
                     fitfile = fitparse.FitFile(io.BytesIO(extracted))
 
-                    # Extract just the power records
+                    # Extract just the power records (with timestamps for 1 Hz resampling)
                     act_records = []
                     for msg in fitfile.get_messages("record"):
                         p = msg.get_value("power")
-                        act_records.append({"power_w": p})
+                        act_records.append({"power_w": p, "timestamp": msg.get_value("timestamp")})
 
                     pdc = _compute_power_duration_curve(act_records)
                     if pdc:

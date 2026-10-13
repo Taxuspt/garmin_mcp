@@ -120,6 +120,10 @@
       "description": "Create a steady Z2 walking workout and upload it to Garmin Connect."
     },
     {
+      "name": "delete_activity",
+      "description": "Permanently delete an activity from Garmin Connect."
+    },
+    {
       "name": "delete_course",
       "description": "Delete a course from Garmin Connect."
     },
@@ -149,7 +153,7 @@
     },
     {
       "name": "download_course_gpx",
-      "description": "Download the exact official GPX file for a Garmin Connect course."
+      "description": "Download a Garmin Connect course as a GPX file."
     },
     {
       "name": "download_workout",
@@ -521,7 +525,7 @@
     },
     {
       "name": "get_training_load_trend",
-      "description": "Get the Performance Management Chart (CTL/ATL/TSB) over a date range."
+      "description": "Get Garmin's daily acute and chronic training load over a date range."
     },
     {
       "name": "get_training_plan_workouts",

@@ -207,15 +207,55 @@ MOCK_DAILY_STEPS = [
     }
 ]
 
-MOCK_TRAINING_READINESS = {
-    "trainingReadinessLevel": 75,
-    "trainingReadinessLevelKey": "GOOD",
-    "sleepScore": 85,
-    "hrvStatus": "BALANCED",
-    "bodyBatteryLevel": 75,
-    "restingHeartRate": 55,
-    "recentExerciseLoad": 250
-}
+# get_training_readiness returns a list of snapshots for the day (one per
+# reset: after waking, after an exercise, ...), not a single dict.
+MOCK_TRAINING_READINESS = [
+    {
+        "calendarDate": "2024-01-15",
+        "timestamp": "2024-01-15T14:05:00.0",
+        "timestampLocal": "2024-01-15T06:05:00.0",
+        "inputContext": "AFTER_WAKEUP_RESET",
+        "level": "MODERATE",
+        "score": 62,
+        "feedbackShort": "WELL_RECOVERED",
+        "sleepScore": 81,
+        "sleepScoreFactorPercent": 78,
+        "sleepScoreFactorFeedback": "GOOD",
+        "recoveryTime": 330,
+        "recoveryTimeChangePhrase": "NO_CHANGE_SLEEP",
+        "recoveryTimeFactorPercent": 90,
+        "recoveryTimeFactorFeedback": "GOOD",
+        "acwrFactorPercent": 95,
+        "acwrFactorFeedback": "VERY_GOOD",
+        "acuteLoad": 310,
+        "hrvFactorPercent": 70,
+        "hrvFactorFeedback": "GOOD",
+        "hrvWeeklyAverage": 58,
+        "stressHistoryFactorPercent": 80,
+        "stressHistoryFactorFeedback": "GOOD",
+        "sleepHistoryFactorPercent": 65,
+        "sleepHistoryFactorFeedback": "MODERATE",
+    },
+    {
+        "calendarDate": "2024-01-15",
+        "timestamp": "2024-01-15T19:40:00.0",
+        "timestampLocal": "2024-01-15T11:40:00.0",
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "level": "LOW",
+        "score": 38,
+        "feedbackShort": "TAKE_IT_EASY",
+        "recoveryTime": 1080,
+        "recoveryTimeChangePhrase": "INCREASED_EXERCISE",
+        "recoveryTimeFactorPercent": 40,
+        "recoveryTimeFactorFeedback": "POOR",
+        "acwrFactorPercent": 85,
+        "acwrFactorFeedback": "GOOD",
+        "acuteLoad": 395,
+        "hrvFactorPercent": 70,
+        "hrvFactorFeedback": "GOOD",
+        "hrvWeeklyAverage": 58,
+    },
+]
 
 MOCK_BODY_BATTERY = [
     {
@@ -439,15 +479,40 @@ MOCK_GOALS = {
     ]
 }
 
-MOCK_PERSONAL_RECORD = {
-    "personalRecords": [
-        {
-            "recordType": "FASTEST_5K",
-            "recordValue": 1200.0,  # 20 minutes
-            "recordDate": "2024-01-15"
-        }
-    ]
-}
+# get_personal_record returns a list of records, not a dict
+MOCK_PERSONAL_RECORD = [
+    {
+        "id": 1001,
+        "typeId": 3,  # Fastest 5K
+        "status": "ACCEPTED",
+        "activityId": 12345678901,
+        "activityName": "Evening Run",
+        "activityType": "running",
+        "value": 1200.0,  # 20 minutes
+        # Set late on Jan 14 local time, which is already Jan 15 in GMT
+        "prStartTimeGmt": 1705304700000,
+        "prStartTimeGmtFormatted": "2024-01-15T07:45:00.0",
+        "prStartTimeLocal": 1705275900000,
+        "prStartTimeLocalFormatted": "2024-01-14T23:45:00.0",
+        "prTypeLabelKey": None,
+        "poolLengthUnit": None,
+    },
+    {
+        "id": 1002,
+        "typeId": 12,  # Most Steps Day
+        "status": "ACCEPTED",
+        "activityId": None,
+        "activityName": None,
+        "activityType": None,
+        "value": 25000.0,
+        "prStartTimeGmt": 1704873600000,
+        "prStartTimeGmtFormatted": "2024-01-10T08:00:00.0",
+        "prStartTimeLocal": 1704844800000,
+        "prStartTimeLocalFormatted": "2024-01-10T00:00:00.0",
+        "prTypeLabelKey": None,
+        "poolLengthUnit": None,
+    },
+]
 
 MOCK_BADGES = [
     {
@@ -486,6 +551,45 @@ MOCK_DEVICE_LAST_USED = {
     "lastUsedDeviceApplicationKey": "123456789",
     "lastUsedDeviceUploadTime": 1706457600000,
     "imageUrl": "https://example.com/device.png",
+}
+
+# get_device_solar_data returns resp["deviceSolarInput"]: one DTO per day with a
+# per-minute solarInputReadings series (~1440 entries; shortened here). Shape
+# from a live Instinct 2X Solar (upstream PR #247); values are made up.
+MOCK_DEVICE_SOLAR_DATA = {
+    "solarDailyDataDTOs": [
+        {
+            "localConnectDate": "2024-01-15",
+            "deviceId": 123456789,
+            "totalActivityTimeGainedMs": 1800000,
+            "solarInputReadings": [
+                {
+                    "readingTimestampGmt": "2024-01-15T09:00:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:00:00.0",
+                    "solarUtilization": 0.0,
+                    "activityTimeGainedMs": 0,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:01:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:01:00.0",
+                    "solarUtilization": 40.0,
+                    "activityTimeGainedMs": 12000,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:02:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:02:00.0",
+                    "solarUtilization": 100.0,
+                    "activityTimeGainedMs": 30000,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:03:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:03:00.0",
+                    "solarUtilization": 20.0,
+                    "activityTimeGainedMs": 6000,
+                },
+            ],
+        }
+    ]
 }
 
 # Weight Management - API returns nested structure
@@ -845,19 +949,9 @@ MOCK_WEEKLY_INTENSITY_MINUTES = [
     },
 ]
 
-MOCK_MORNING_TRAINING_READINESS = {
-    "readinessScore": 75,
-    "readinessLevel": "GOOD",
-    "recoveryTime": 12,
-    "hrvStatus": "BALANCED",
-    "sleepQuality": "GOOD",
-    "sleepScore": 82,
-    "restingHeartRate": 55,
-    "hrvBaseline": 65,
-    "hrvLastNight": 68,
-    "bodyBattery": 85,
-    "stressLevel": 25,
-}
+# get_morning_training_readiness returns the AFTER_WAKEUP_RESET entry of the
+# get_training_readiness list as-is, not a differently-shaped summary.
+MOCK_MORNING_TRAINING_READINESS = MOCK_TRAINING_READINESS[0]
 
 # Activity Management
 MOCK_ACTIVITY_COUNT = 523
@@ -960,14 +1054,15 @@ MOCK_LACTATE_THRESHOLD = {
     },
 }
 
-# Response format for latest=False (date range)
+# Response format for latest=False (date range). garminconnect assembles this
+# dict itself, with snake_case keys: {"speed", "heart_rate", "power"}.
 MOCK_LACTATE_THRESHOLD_RANGE = {
     "speed": [
         {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-08"},
         {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-12"},
         {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.3888878, "updatedDate": "2024-01-15"},
     ],
-    "heartRate": [
+    "heart_rate": [
         {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 165, "updatedDate": "2024-01-08"},
         {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 167, "updatedDate": "2024-01-12"},
         {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 169, "updatedDate": "2024-01-15"},

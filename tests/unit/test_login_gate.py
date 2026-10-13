@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from garmin_mcp import _ThreadFilteredStream
+from garmin_mcp import _ThreadFilteredStream, _ThreadSuppressibleStream
 
 
 class TestThreadFilteredStream:
@@ -33,6 +33,56 @@ class TestThreadFilteredStream:
     def test_unknown_attribute_delegates_to_real_stream(self):
         real_stream = type("Fake", (), {"encoding": "utf-8"})()
         stream = _ThreadFilteredStream(real_stream, threading.current_thread())
+
+        assert stream.encoding == "utf-8"
+
+
+class TestThreadSuppressibleStream:
+    """Tests for _ThreadSuppressibleStream (login-thread stderr silencing)."""
+
+    def _fake(self):
+        written = []
+        real_stream = type("Fake", (), {"write": lambda self, s: written.append(s)})()
+        return written, _ThreadSuppressibleStream(real_stream)
+
+    def test_suppressed_thread_write_is_swallowed(self):
+        written, stream = self._fake()
+
+        with stream.suppressed():
+            result = stream.write("noisy\n")
+        stream.write("after\n")
+
+        assert written == ["after\n"]
+        assert result == len("noisy\n")
+
+    def test_other_thread_writes_while_one_is_suppressed(self):
+        """The main thread's writes survive while the login thread is silenced.
+
+        Regression: init_api() used to swap the process-wide sys.stderr for a
+        StringIO, so the main thread's "Serving MCP over ..." line (and
+        uvicorn's startup logs) printed during login were lost.
+        """
+        written, stream = self._fake()
+        entered, release = threading.Event(), threading.Event()
+
+        def login():
+            with stream.suppressed():
+                entered.set()
+                stream.write("library warning\n")
+                release.wait(5)
+
+        worker = threading.Thread(target=login)
+        worker.start()
+        assert entered.wait(5)
+        stream.write("Serving MCP over streamable-http\n")
+        release.set()
+        worker.join(5)
+
+        assert written == ["Serving MCP over streamable-http\n"]
+
+    def test_unknown_attribute_delegates_to_real_stream(self):
+        real_stream = type("Fake", (), {"encoding": "utf-8"})()
+        stream = _ThreadSuppressibleStream(real_stream)
 
         assert stream.encoding == "utf-8"
 
@@ -73,6 +123,27 @@ class TestPendingGarminClient:
 
         with pytest.raises(ValueError, match="boom"):
             pending.get_full_name()
+
+    def test_repeated_login_failures_do_not_grow_the_traceback(self):
+        def failing_login():
+            raise ValueError("boom")
+
+        pending = _PendingGarminClient(timeout=5).start(failing_login)
+
+        def traceback_depth():
+            with pytest.raises(ValueError) as excinfo:
+                pending.get_full_name()
+            depth, tb = 0, excinfo.value.__traceback__
+            while tb is not None:
+                depth += 1
+                tb = tb.tb_next
+            return depth
+
+        first = traceback_depth()
+        for _ in range(20):
+            traceback_depth()
+
+        assert traceback_depth() == first
 
     def test_timeout_elapses_raises_actionable_error(self):
         never_finishes = threading.Event()

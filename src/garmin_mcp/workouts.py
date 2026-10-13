@@ -3,15 +3,24 @@ Workout-related functions for Garmin Connect MCP Server
 """
 import json
 import re
+import sys
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
-_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+_DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
 
 
 def _validate_date(value: str, field: str = "date") -> str:
-    if not _DATE_RE.match(value):
-        raise ValueError(f"Invalid {field} '{value}': expected YYYY-MM-DD")
+    # fullmatch, because match() with $ lets a trailing newline through.
+    # fromisoformat rejects dates that don't exist (2026-02-30) but on 3.11+
+    # also accepts other ISO forms (20261014), so it can't replace the regex.
+    if isinstance(value, str) and _DATE_RE.fullmatch(value):
+        try:
+            datetime.date.fromisoformat(value)
+            return value
+        except ValueError:
+            pass
+    raise ValueError(f"Invalid {field} {value!r}: expected YYYY-MM-DD")
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -335,7 +344,7 @@ def _validate_target_type_steps(workout_data: dict) -> None:
 
 def _curate_workout_summary(workout: dict) -> dict:
     """Extract essential workout metadata for list views"""
-    sport_type = workout.get('sportType', {})
+    sport_type = workout.get('sportType') or {}
 
     summary = {
         "id": workout.get('workoutId'),
@@ -358,6 +367,87 @@ def _curate_workout_summary(workout: dict) -> dict:
 
     # Remove None values
     return {k: v for k, v in summary.items() if v is not None}
+
+
+# garminconnect's get_workouts returns a single page (start=0, limit=100 by
+# default), so one call silently drops the rest of a larger library.
+_WORKOUTS_PAGE_SIZE = 100
+
+
+def _get_all_workouts(client: Any) -> List[Dict[str, Any]]:
+    """Page through get_workouts until a short page and return every workout."""
+    workouts: List[Dict[str, Any]] = []
+    seen_ids = set()
+    # Garmin's start is 1-based (0 is treated as 1), so start=0 then
+    # start=100 would overlap by one workout.
+    start = 1
+    while True:
+        page = client.get_workouts(start, _WORKOUTS_PAGE_SIZE)
+        if not isinstance(page, list):
+            break
+        # Skipping workouts already seen keeps an overlapping page from
+        # duplicating entries, and stops the loop if the offset is ignored.
+        new = [
+            w for w in page
+            if isinstance(w, dict) and w.get('workoutId') not in seen_ids
+        ]
+        if not new:
+            break
+        workouts.extend(new)
+        seen_ids.update(w.get('workoutId') for w in new)
+        if len(page) < _WORKOUTS_PAGE_SIZE:
+            break
+        start += _WORKOUTS_PAGE_SIZE
+    return workouts
+
+
+def _workout_preview(client: Any, workout_id: int) -> Dict[str, Any]:
+    """Build a compact preview of a workout before deleting it."""
+    preview: Dict[str, Any] = {"workout_id": workout_id}
+
+    workout = None
+    try:
+        workout = client.get_workout_by_id(workout_id)
+    except Exception:
+        workout = None
+
+    if isinstance(workout, dict) and workout:
+        summary = _curate_workout_summary(workout)
+        preview.update(
+            {
+                "name": summary.get("name"),
+                "sport": summary.get("sport"),
+                "provider": summary.get("provider"),
+                "updated_date": summary.get("updated_date"),
+            }
+        )
+        return {key: value for key, value in preview.items() if value is not None}
+
+    get_workouts = getattr(client, "get_workouts", None)
+    if not callable(get_workouts):
+        return preview
+    try:
+        items = _get_all_workouts(client)
+    except Exception:
+        return preview
+
+    if not isinstance(items, list):
+        return preview
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("workoutId") == workout_id:
+            summary = _curate_workout_summary(item)
+            preview.update(
+                {
+                    "name": summary.get("name"),
+                    "sport": summary.get("sport"),
+                    "provider": summary.get("provider"),
+                    "updated_date": summary.get("updated_date"),
+                }
+            )
+            break
+    return {key: value for key, value in preview.items() if value is not None}
 
 
 def _curate_step_target(
@@ -735,7 +825,7 @@ def register_tools(app):
         For detailed workout information including segments, use get_workout_by_id.
         """
         try:
-            workouts = garmin_client.get_workouts()
+            workouts = _get_all_workouts(garmin_client)
             if not workouts:
                 return "No workouts found."
 
@@ -839,6 +929,8 @@ def register_tools(app):
           "targetValueOne" (low bpm) / "targetValueTwo" (high bpm). Do NOT set "zoneNumber".
           This matches Garmin Connect's "Custom" heart rate target.
         For non-HR targets (pace, power, cadence), use targetValueOne/targetValueTwo directly.
+        Pace targets are speeds in meters per second, not min/km:
+        5:00/km = 1000 m / 300 s = 3.333 m/s.
         Target values are fields on the workout step, alongside targetType; do not put
         targetValueOne, targetValueTwo, or zoneNumber inside the targetType object.
         Use either zoneNumber or targetValueOne/targetValueTwo, not both. Garmin silently
@@ -872,7 +964,7 @@ def register_tools(app):
         targetValueOne/targetValueTwo for custom heart-rate ranges.
 
         IMPORTANT: Sport type IDs for workouts (different from activity API!):
-        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio, 11 = walking
+        - 1 = running, 2 = cycling, 5 = strength_training, 6 = cardio_training, 12 = walking
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
         Garmin treats conditionTypeId as authoritative, so mismatches such as
@@ -983,6 +1075,8 @@ def register_tools(app):
         For cycling power zone targets (zone-based), use workoutTargetTypeId 2, key "power.zone".
         For cycling absolute watt range targets, use workoutTargetTypeId 6, key "power.between",
         with targetValueOne (low watts) and targetValueTwo (high watts).
+        Pace targets use targetValueOne/targetValueTwo in meters per second, not
+        min/km: 5:00/km = 1000 m / 300 s = 3.333 m/s.
         Target type IDs and keys must match Garmin's canonical mapping.
 
         IMPORTANT: End condition IDs and keys must match Garmin's canonical mapping.
@@ -1026,23 +1120,47 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
-    async def delete_workout(workout_id: int) -> str:
+    async def delete_workout(workout_id: int, confirm: bool = False) -> str:
         """Delete a workout from Garmin Connect
 
         Permanently removes a workout from your Garmin Connect workout library.
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the workout, then call again with confirm=true to delete it.
 
         Args:
             workout_id: ID of the workout to delete (get IDs from get_workouts)
+            confirm: Must be true to actually delete. Default false returns a preview.
         """
         try:
+            preview = _workout_preview(garmin_client, workout_id)
+            if not confirm:
+                return json.dumps(
+                    {
+                        "status": "needs_confirmation",
+                        "workout": preview,
+                        "message": (
+                            "This permanently deletes the workout from Garmin Connect "
+                            "and cannot be undone. Call again with confirm=true to proceed."
+                        ),
+                    },
+                    indent=2,
+                )
+
             # Use the high-level garminconnect method. In garminconnect 0.3.2,
             # client.delete(..., api=True) returns resp.json() (a dict), not a
             # Response, so checking response.status_code raises AttributeError.
             # Delegate to the library and rely on exceptions to signal failure.
             garmin_client.delete_workout(workout_id)
+            print(
+                "delete_workout: deleted workout "
+                f"{workout_id} name={preview.get('name')!r} "
+                f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                file=sys.stderr,
+            )
             return json.dumps({
                 "status": "success",
                 "workout_id": workout_id,
+                "workout": preview,
                 "message": f"Workout {workout_id} deleted successfully"
             }, indent=2)
         except Exception as e:
@@ -1053,23 +1171,48 @@ def register_tools(app):
             }, indent=2)
 
     @app.tool()
-    async def delete_workouts(workout_ids: list[int]) -> str:
+    async def delete_workouts(workout_ids: list[int], confirm: bool = False) -> str:
         """Delete multiple workouts from Garmin Connect in a single call
 
         Permanently removes multiple workouts from your Garmin Connect workout library.
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the workouts, then call again with confirm=true to delete them.
 
         Args:
             workout_ids: List of workout IDs to delete (get IDs from get_workouts)
+            confirm: Must be true to actually delete. Default false returns a preview.
         """
+        previews = [_workout_preview(garmin_client, workout_id) for workout_id in workout_ids]
+        if not confirm:
+            return json.dumps(
+                {
+                    "status": "needs_confirmation",
+                    "total": len(workout_ids),
+                    "workouts": previews,
+                    "message": (
+                        "This permanently deletes these workouts from Garmin Connect "
+                        "and cannot be undone. Call again with confirm=true to proceed."
+                    ),
+                },
+                indent=2,
+            )
+
         results = []
-        for workout_id in workout_ids:
+        for workout_id, preview in zip(workout_ids, previews):
             try:
                 # See note in delete_workout: high-level call avoids the
                 # garminconnect 0.3.2 dict-vs-Response trap.
                 garmin_client.delete_workout(workout_id)
+                print(
+                    "delete_workouts: deleted workout "
+                    f"{workout_id} name={preview.get('name')!r} "
+                    f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                    file=sys.stderr,
+                )
                 results.append({
                     "status": "success",
                     "workout_id": workout_id,
+                    "workout": preview,
                     "message": f"Workout {workout_id} deleted successfully"
                 })
             except Exception as e:
@@ -1258,7 +1401,8 @@ def register_tools(app):
                 - workout_id (int): ID of an existing workout to schedule (required unless workout_data is provided)
                 - workout_data (dict): Inline workout JSON to upload first, then schedule (optional).
                   When provided, workout_id is not required. Uses the same structure and
-                  target-value rules as upload_workout.
+                  target-value rules as upload_workout; pace targets are in m/s, not
+                  min/km (5:00/km = 3.333 m/s).
 
         Examples:
             Schedule existing workouts by ID:
@@ -1322,6 +1466,10 @@ def register_tools(app):
                         continue
                     workout_id = upload_result['workoutId']
                     workout_name = upload_result.get('workoutName')
+
+                # Garmin reports workoutId as an int; a string id ("123")
+                # would never match in the pre-check and get double-booked.
+                workout_id = int(workout_id)
 
                 if _is_already_scheduled(workout_id, calendar_date):
                     entry = {
