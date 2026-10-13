@@ -160,7 +160,10 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
     try:
         garmin = Garmin(email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True)
-        result1, result2 = garmin.login()
+        # Exchange the credentials on the client directly. Garmin.login() with
+        # no tokenstore falls back to $GARMINTOKENS and, if tokens load from
+        # there, uses them instead of these credentials.
+        result1, result2 = garmin.client.login(email, password, return_on_mfa=True)
 
         if result1 == "needs_mfa":
             mfa_code = get_mfa()

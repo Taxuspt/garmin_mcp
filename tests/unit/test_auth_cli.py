@@ -139,8 +139,8 @@ class TestAuthenticate:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -148,7 +148,9 @@ class TestAuthenticate:
                 result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=True)
 
         assert result is True
-        mock_garmin_instance.login.assert_called_once()
+        mock_garmin_instance.client.login.assert_called_once_with(
+            "test@example.com", "secret", return_on_mfa=True
+        )
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
@@ -161,8 +163,8 @@ class TestAuthenticate:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         token_data = '{"token": "test"}'
@@ -175,7 +177,9 @@ class TestAuthenticate:
                 result = authenticate(tmpdir, base64_path, force_reauth=False)
 
         assert result is True
-        mock_garmin_instance.login.assert_called_once()
+        mock_garmin_instance.client.login.assert_called_once_with(
+            "test@example.com", "secret", return_on_mfa=True
+        )
         mock_garmin_instance.client.dump.assert_called_once_with(tmpdir)
         # Tokens are verified by an independent token-based login
         mock_verify.assert_called_once()
@@ -208,7 +212,7 @@ class TestAuthenticate:
         """The CLI writes and verifies tokens at the same resolved paths."""
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        mock_garmin.return_value.login.return_value = (None, None)
+        mock_garmin.return_value.client.login.return_value = (None, None)
 
         with patch("builtins.open", mock_open(read_data="{}")):
             result = authenticate(
@@ -239,8 +243,8 @@ class TestAuthenticate:
         mock_verify.return_value = (False, "session is not authenticated (no profile returned)")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -270,7 +274,7 @@ class TestAuthenticate:
 
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "wrongpassword")
-        mock_garmin.return_value.login.side_effect = GarminConnectAuthenticationError("Invalid credentials")
+        mock_garmin.return_value.client.login.side_effect = GarminConnectAuthenticationError("Invalid credentials")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
@@ -446,8 +450,8 @@ class TestAuthenticateIsCn:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -475,8 +479,8 @@ class TestAuthenticateIsCn:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
