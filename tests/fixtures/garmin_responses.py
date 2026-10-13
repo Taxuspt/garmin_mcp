@@ -488,6 +488,45 @@ MOCK_DEVICE_LAST_USED = {
     "imageUrl": "https://example.com/device.png",
 }
 
+# get_device_solar_data returns resp["deviceSolarInput"]: one DTO per day with a
+# per-minute solarInputReadings series (~1440 entries; shortened here). Shape
+# from a live Instinct 2X Solar (upstream PR #247); values are made up.
+MOCK_DEVICE_SOLAR_DATA = {
+    "solarDailyDataDTOs": [
+        {
+            "localConnectDate": "2024-01-15",
+            "deviceId": 123456789,
+            "totalActivityTimeGainedMs": 1800000,
+            "solarInputReadings": [
+                {
+                    "readingTimestampGmt": "2024-01-15T09:00:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:00:00.0",
+                    "solarUtilization": 0.0,
+                    "activityTimeGainedMs": 0,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:01:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:01:00.0",
+                    "solarUtilization": 40.0,
+                    "activityTimeGainedMs": 12000,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:02:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:02:00.0",
+                    "solarUtilization": 100.0,
+                    "activityTimeGainedMs": 30000,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:03:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:03:00.0",
+                    "solarUtilization": 20.0,
+                    "activityTimeGainedMs": 6000,
+                },
+            ],
+        }
+    ]
+}
+
 # Weight Management - API returns nested structure
 MOCK_WEIGH_INS = {
     "dailyWeightSummaries": [

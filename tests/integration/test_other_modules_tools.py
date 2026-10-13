@@ -31,6 +31,7 @@ from tests.fixtures.garmin_responses import (
     MOCK_DEVICES,
     MOCK_DEVICE_SETTINGS,
     MOCK_DEVICE_LAST_USED,
+    MOCK_DEVICE_SOLAR_DATA,
     MOCK_WEIGH_INS,
     MOCK_DAILY_WEIGH_INS,
     MOCK_USER_PROFILE,
@@ -137,15 +138,54 @@ async def test_get_primary_training_device_handles_null_nested_sections(
 
 @pytest.mark.asyncio
 async def test_get_device_solar_data_tool(app_with_devices, mock_garmin_client):
-    """Test get_device_solar_data tool"""
-    solar_data = {"solarIntensity": 75, "batteryLevel": 90}
-    mock_garmin_client.get_device_solar_data.return_value = solar_data
+    """Per-minute readings are summarised per day; an int deviceId (as get_devices returns it) is accepted"""
+    mock_garmin_client.get_device_solar_data.return_value = MOCK_DEVICE_SOLAR_DATA
     result = await app_with_devices.call_tool(
         "get_device_solar_data",
-        {"device_id": "abc123456789", "date": "2024-01-15"}
+        {"device_id": 123456789, "date": "2024-01-15"}
     )
-    assert result is not None
-    mock_garmin_client.get_device_solar_data.assert_called_once_with("abc123456789", "2024-01-15")
+    data = json.loads(result[0][0].text)
+    assert data == {
+        "device_id": 123456789,
+        "solar_data": [
+            {
+                "date": "2024-01-15",
+                "activity_time_gained_minutes": 30.0,
+                "solar_utilization_avg_pct": 40.0,
+                "solar_utilization_max_pct": 100.0,
+                "minutes_with_solar_input": 3,
+            }
+        ],
+    }
+    mock_garmin_client.get_device_solar_data.assert_called_once_with(123456789, "2024-01-15")
+
+
+@pytest.mark.asyncio
+async def test_get_device_solar_data_non_solar_device(app_with_devices, mock_garmin_client):
+    """The library's error for a response without solar input maps to a friendly message"""
+    mock_garmin_client.get_device_solar_data.side_effect = GarminConnectConnectionError(
+        "No device solar input data received"
+    )
+    result = await app_with_devices.call_tool(
+        "get_device_solar_data",
+        {"device_id": "123456789", "date": "2024-01-15"}
+    )
+    text = result[0][0].text
+    assert "may not have solar capabilities" in text
+    assert not text.startswith("Error")
+
+
+@pytest.mark.asyncio
+async def test_get_device_solar_data_other_error(app_with_devices, mock_garmin_client):
+    """Other failures still surface as an error"""
+    mock_garmin_client.get_device_solar_data.side_effect = GarminConnectConnectionError(
+        "API Error 500 - "
+    )
+    result = await app_with_devices.call_tool(
+        "get_device_solar_data",
+        {"device_id": "123456789", "date": "2024-01-15"}
+    )
+    assert result[0][0].text == "Error retrieving solar data: API Error 500 - "
 
 
 @pytest.mark.asyncio
