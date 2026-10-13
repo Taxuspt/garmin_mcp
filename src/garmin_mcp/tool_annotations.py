@@ -47,6 +47,7 @@ ADDITIVE_TOOLS = frozenset(
 # they are deliberately not marked read-only either.
 DESTRUCTIVE_TOOLS = frozenset(
     {
+        "delete_activity",
         "delete_course",
         "delete_custom_food",
         "delete_food_log",
