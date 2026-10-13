@@ -3,6 +3,7 @@ Integration tests for activity_analysis module MCP tools
 
 Tests the get_activity_fit_data tool using mocked Garmin API and fitparse responses.
 """
+import datetime
 import io
 import json
 import os
@@ -1140,6 +1141,127 @@ def test_grade_analysis_bins_correctly():
     assert "descending" in result
     # Steeper terrain should have higher avg power
     assert result["gentle"]["avg_power_w"] < result["moderate"]["avg_power_w"]
+
+
+# ---------------------------------------------------------------------------
+# Smart recording: timing comes from record timestamps (unit tests)
+# ---------------------------------------------------------------------------
+
+_RIDE_START = datetime.datetime(2024, 6, 1, 10, 0, 0)
+
+
+def _records_every(step_s, rows, start=_RIDE_START):
+    """Records step_s seconds apart, timestamped the way _parse_fit emits them."""
+    return [
+        {**row, "timestamp": str(start + datetime.timedelta(seconds=i * step_s))}
+        for i, row in enumerate(rows)
+    ]
+
+
+def test_power_duration_curve_resamples_3s_records_to_1hz():
+    """20 min @300 W then 40 min @100 W, one record every 3 s."""
+    records = _records_every(3, [{"power_w": 300}] * 400 + [{"power_w": 100}] * 800)
+    pdc = _compute_power_duration_curve(records)
+    assert pdc["20min"] == 300
+    assert pdc["60min"] == 167  # (20 * 300 + 40 * 100) / 60
+
+
+def test_power_duration_curve_counts_pauses_as_zero():
+    """Power is not carried across a pause, and windows cannot skip over it."""
+    before = _records_every(1, [{"power_w": 400}] * 60)
+    after = _records_every(
+        1, [{"power_w": 400}] * 60, start=_RIDE_START + datetime.timedelta(minutes=31)
+    )
+    pdc = _compute_power_duration_curve(before + after)
+    assert pdc["1min"] == 400
+    assert pdc["5min"] == 80  # 60 s @400 W + 240 s paused
+
+
+def test_detect_climbs_uses_timestamps_for_3s_records():
+    """Climb duration, VAM and distance use real elapsed time and odometer."""
+    climbing = [
+        {"grade_pct": 6.0, "power_w": 300, "speed_mps": 5.0,
+         "altitude_m": 100 + 0.9 * i, "distance_m": 15.0 * i}
+        for i in range(400)
+    ]
+    flat = [
+        {"grade_pct": 0.0, "power_w": 150, "speed_mps": 9.0,
+         "altitude_m": 100 + 0.9 * 399, "distance_m": 5985.0 + 27.0 * (i + 1)}
+        for i in range(40)
+    ]
+    climbs = _detect_climbs(_records_every(3, climbing + flat))
+    assert len(climbs) == 1
+    climb = climbs[0]
+    assert climb["duration_s"] == 1200
+    assert climb["elevation_gain_m"] == 359.1
+    assert climb["vam_m_per_hr"] == 1077  # 359.1 m in 20 min
+    assert climb["distance_m"] == 5985
+
+
+def test_detect_climbs_flat_tolerance_is_in_seconds():
+    """A 45 s flat (15 records at 3 s) splits two climbs; the tolerance is 30 s."""
+    climb = [{"grade_pct": 6.0, "altitude_m": 100 + 0.9 * i} for i in range(200)]
+    flat = [{"grade_pct": 0.0, "altitude_m": 280.0}] * 15
+    second = [{"grade_pct": 6.0, "altitude_m": 280 + 0.9 * i} for i in range(200)]
+    climbs = _detect_climbs(_records_every(3, climb + flat + second))
+    assert [c["duration_s"] for c in climbs] == [600, 600]
+
+
+def test_detect_climbs_speed_distance_uses_record_spacing():
+    """Without an odometer, each speed sample covers its 3 s interval."""
+    climbing = [
+        {"grade_pct": 6.0, "speed_mps": 5.0, "altitude_m": 100 + 0.9 * i}
+        for i in range(400)
+    ]
+    climbs = _detect_climbs(_records_every(3, climbing))
+    assert climbs[0]["distance_m"] == 6000
+
+
+def test_hr_drift_requires_60_minutes_not_3600_records():
+    """70 min recorded every 3 s qualifies; 50 min does not."""
+    row = {"power_w": 200, "heart_rate_bpm": 145}
+    drift = _compute_hr_drift(_records_every(3, [row] * 1400))
+    assert drift is not None
+    assert drift["interpretation"] == "well_coupled"
+    assert _compute_hr_drift(_records_every(3, [row] * 1000)) is None
+
+
+def test_grade_analysis_time_uses_record_spacing():
+    """time_s per grade bin is elapsed seconds, not a record count."""
+    records = _records_every(
+        3, [{"grade_pct": 0.5}] * 100 + [{"grade_pct": 4.5}] * 50
+    )
+    result = _grade_analysis(records)
+    assert result["flat"]["time_s"] == 300
+    assert result["gentle"]["time_s"] == 150
+
+
+@pytest.mark.asyncio
+async def test_power_duration_curve_tool_uses_record_timestamps(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """get_power_duration_curve resamples each activity's records by timestamp."""
+    mock_garmin_client.get_activities.return_value = [
+        {"activityId": 2, "startTimeLocal": "2024-06-01 10:00:00",
+         "activityType": {"typeKey": "road_biking", "parentTypeId": 2}},
+    ]
+    mock_garmin_client.download_activity.return_value = b"ride"
+    messages = [
+        _make_mock_fit_message("record", {
+            "power": 300 if i < 400 else 100,
+            "timestamp": _RIDE_START + datetime.timedelta(seconds=3 * i),
+        })
+        for i in range(1200)
+    ]
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app_with_activity_analysis.call_tool("get_power_duration_curve", {})
+
+    data = json.loads(result[0][0].text)
+    assert data["season_bests"]["20min"]["watts"] == 300
+    assert data["season_bests"]["60min"]["watts"] == 167
+    assert data["ftp_estimate_w"] == 285
 
 
 # ---------------------------------------------------------------------------
