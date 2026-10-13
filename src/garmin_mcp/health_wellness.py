@@ -81,6 +81,52 @@ def _recovery_from_readiness(payload: Any, source: str) -> Optional[Dict[str, An
     return {key: value for key, value in curated.items() if value is not None}
 
 
+def _curate_training_readiness(r: Dict[str, Any]) -> Dict[str, Any]:
+    """Curate one training-readiness snapshot.
+
+    Shared by get_training_readiness and get_morning_training_readiness:
+    garminconnect's get_morning_training_readiness returns one entry of the
+    same payload (the AFTER_WAKEUP_RESET snapshot), not a different shape.
+    """
+    entry = {
+        "date": r.get('calendarDate'),
+        "timestamp": r.get('timestampLocal'),
+        "context": r.get('inputContext'),
+
+        # Overall readiness
+        "level": r.get('level'),
+        "score": r.get('score'),
+        "feedback": r.get('feedbackShort'),
+
+        # Contributing factors
+        "sleep_score": r.get('sleepScore'),
+        "sleep_factor_percent": r.get('sleepScoreFactorPercent'),
+        "sleep_factor_feedback": r.get('sleepScoreFactorFeedback'),
+
+        "recovery_time_hours": _hours_from_recovery_minutes(
+            r.get('recoveryTime'), r.get('recoveryTimeChangePhrase')
+        ),
+        "recovery_factor_percent": r.get('recoveryTimeFactorPercent'),
+        "recovery_factor_feedback": r.get('recoveryTimeFactorFeedback'),
+
+        "training_load_factor_percent": r.get('acwrFactorPercent'),
+        "training_load_feedback": r.get('acwrFactorFeedback'),
+        "acute_load": r.get('acuteLoad'),
+
+        "hrv_factor_percent": r.get('hrvFactorPercent'),
+        "hrv_factor_feedback": r.get('hrvFactorFeedback'),
+        "hrv_weekly_avg": r.get('hrvWeeklyAverage'),
+
+        "stress_history_factor_percent": r.get('stressHistoryFactorPercent'),
+        "stress_history_feedback": r.get('stressHistoryFactorFeedback'),
+
+        "sleep_history_factor_percent": r.get('sleepHistoryFactorPercent'),
+        "sleep_history_feedback": r.get('sleepHistoryFactorFeedback'),
+    }
+    # Remove None values
+    return {k: v for k, v in entry.items() if v is not None}
+
+
 def _activity_end_utc(activity: Dict[str, Any]) -> Optional[datetime.datetime]:
     """Estimate activity end time from list-search fields."""
     begin = activity.get("beginTimestamp")
@@ -378,16 +424,15 @@ def _body_comp_gate_failure(xs: List[float]) -> Optional[str]:
     leverages = [1 / n + (x - mean_x) ** 2 / sxx for x in xs]
     total_leverage = sum(leverages)  # == 2 for a 2-parameter fit
 
-    # Cluster readings whose day-offsets sit within 2 days of a neighbor.
-    order = sorted(range(n), key=lambda i: xs[i])
-    clusters: List[List[int]] = []
-    for idx in order:
-        if clusters and xs[idx] - xs[clusters[-1][-1]] <= 2:
-            clusters[-1].append(idx)
-        else:
-            clusters.append([idx])
-
-    max_cluster_leverage = max(sum(leverages[i] for i in c) for c in clusters)
+    # A cluster is every reading within 2 days of the cluster's first
+    # (earliest) reading, tried from each reading in turn. Anchoring to the
+    # first reading rather than chaining neighbor-to-neighbor keeps regular
+    # daily or every-other-day weigh-ins from merging into one cluster that
+    # spans the whole window.
+    max_cluster_leverage = max(
+        sum(lev for x, lev in zip(xs, leverages) if 0 <= x - anchor <= 2)
+        for anchor in xs
+    )
     if max_cluster_leverage > total_leverage / 2:
         return (
             f"a single cluster of readings within 48h of each other accounts for "
@@ -957,44 +1002,7 @@ def register_tools(app):
                 return f"No training readiness data found for {date}"
 
             # Curate each readiness entry (usually 1-2 per day)
-            curated = []
-            for r in readiness_list:
-                entry = {
-                    "date": r.get('calendarDate'),
-                    "timestamp": r.get('timestampLocal'),
-                    "context": r.get('inputContext'),
-
-                    # Overall readiness
-                    "level": r.get('level'),
-                    "score": r.get('score'),
-                    "feedback": r.get('feedbackShort'),
-
-                    # Contributing factors
-                    "sleep_score": r.get('sleepScore'),
-                    "sleep_factor_percent": r.get('sleepScoreFactorPercent'),
-                    "sleep_factor_feedback": r.get('sleepScoreFactorFeedback'),
-
-                    "recovery_time_hours": round(r.get('recoveryTime', 0) / 60, 1) if r.get('recoveryTime') else None,
-                    "recovery_factor_percent": r.get('recoveryTimeFactorPercent'),
-                    "recovery_factor_feedback": r.get('recoveryTimeFactorFeedback'),
-
-                    "training_load_factor_percent": r.get('acwrFactorPercent'),
-                    "training_load_feedback": r.get('acwrFactorFeedback'),
-                    "acute_load": r.get('acuteLoad'),
-
-                    "hrv_factor_percent": r.get('hrvFactorPercent'),
-                    "hrv_factor_feedback": r.get('hrvFactorFeedback'),
-                    "hrv_weekly_avg": r.get('hrvWeeklyAverage'),
-
-                    "stress_history_factor_percent": r.get('stressHistoryFactorPercent'),
-                    "stress_history_feedback": r.get('stressHistoryFactorFeedback'),
-
-                    "sleep_history_factor_percent": r.get('sleepHistoryFactorPercent'),
-                    "sleep_history_feedback": r.get('sleepHistoryFactorFeedback'),
-                }
-                # Remove None values
-                entry = {k: v for k, v in entry.items() if v is not None}
-                curated.append(entry)
+            curated = [_curate_training_readiness(r) for r in readiness_list]
 
             return json.dumps(curated, indent=2)
         except Exception as e:
@@ -1573,7 +1581,10 @@ def register_tools(app):
         """Get weekly intensity minutes data aggregates
 
         Returns weekly intensity minutes (moderate and vigorous) for the specified
-        number of weeks ending at end_date.
+        number of weeks ending at end_date. total_minutes counts each vigorous
+        minute twice (moderate + 2 x vigorous), as Garmin does, so it is the
+        figure to compare against weekly_goal; moderate_minutes and
+        vigorous_minutes are the raw, unweighted minutes.
 
         Args:
             end_date: End date in YYYY-MM-DD format
@@ -1603,7 +1614,7 @@ def register_tools(app):
                 # Calculate total intensity minutes (vigorous counts double per WHO guidelines)
                 moderate = week.get("moderateValue") or 0
                 vigorous = week.get("vigorousValue") or 0
-                week_entry["total_minutes"] = moderate + vigorous
+                week_entry["total_minutes"] = moderate + 2 * vigorous
 
                 # Remove None values
                 week_entry = {k: v for k, v in week_entry.items() if v is not None}
@@ -1630,6 +1641,8 @@ def register_tools(app):
 
         Returns the morning training readiness assessment, which evaluates
         recovery status and readiness to train based on overnight metrics.
+        Fields match one get_training_readiness entry (the snapshot taken
+        right after waking).
 
         Args:
             date: Date in YYYY-MM-DD format
@@ -1639,27 +1652,9 @@ def register_tools(app):
             if not readiness:
                 return f"No morning training readiness data found for {date}"
 
-            # Curate the morning training readiness data
-            curated = {
-                "date": date,
-                "readiness_score": readiness.get('readinessScore'),
-                "readiness_level": readiness.get('readinessLevel'),
-                "recovery_time_hours": round(readiness.get('recoveryTime', 0) / 60, 1) if readiness.get('recoveryTime') is not None else None,
-                "hrv_status": readiness.get('hrvStatus'),
-                "sleep_quality": readiness.get('sleepQuality'),
-                "sleep_score": readiness.get('sleepScore'),
-                "resting_heart_rate_bpm": readiness.get('restingHeartRate'),
-                "hrv_baseline": readiness.get('hrvBaseline'),
-                "hrv_last_night": readiness.get('hrvLastNight'),
-                "body_battery_percent": readiness.get('bodyBattery'),
-                "stress_level": readiness.get('stressLevel'),
-                "training_load_balance": readiness.get('trainingLoadBalance'),
-                "acute_load": readiness.get('acuteLoad'),
-                "chronic_load": readiness.get('chronicLoad'),
-            }
-
-            # Remove None values
-            curated = {k: v for k, v in curated.items() if v is not None}
+            # Same entry shape as get_training_readiness, so curate it the same way
+            curated = _curate_training_readiness(readiness)
+            curated.setdefault("date", date)
 
             return json.dumps(curated, indent=2)
         except Exception as e:
