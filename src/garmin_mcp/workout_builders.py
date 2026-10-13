@@ -794,19 +794,40 @@ def register_tools(app):
         reported as already scheduled and the POST is skipped (avoids
         duplicating calendar entries).
 
+        Each entry is handled on its own: an invalid or failing entry is
+        reported with status "failed" or "error" and the rest still run.
+
         Args:
             week: List of dicts with keys: date (YYYY-MM-DD), workout_id (int)
         """
         # Imported here (not at module top) to avoid any import-time ordering
         # surprises between sibling modules. Both modules share the same
         # garmin_client instance via configure() in __main__.
-        from garmin_mcp.workouts import _is_already_scheduled
+        from garmin_mcp.workouts import _is_already_scheduled, _validate_date
 
-        try:
-            results = []
-            for item in week:
-                calendar_date = item["date"]
-                workout_id = int(item["workout_id"])
+        results = []
+        for item in week:
+            calendar_date = item.get("date")
+            workout_id = item.get("workout_id")
+
+            # Validate here: _is_already_scheduled swallows a bad date, which
+            # would then be POSTed to Garmin as-is.
+            try:
+                _validate_date(calendar_date, "date")
+            except ValueError as e:
+                results.append({
+                    "date": calendar_date,
+                    "workout_id": workout_id,
+                    "status": "failed",
+                    "message": str(e),
+                })
+                continue
+
+            # Handle errors per item: earlier items are already on the
+            # calendar, and losing their results invites a retry that
+            # double-books them.
+            try:
+                workout_id = int(workout_id)
 
                 if _is_already_scheduled(workout_id, calendar_date):
                     results.append({
@@ -835,11 +856,16 @@ def register_tools(app):
                         "status": "failed",
                         "http_status": response.status_code,
                     })
-            return json.dumps({
-                "status": "complete",
-                "scheduled": results,
-            }, indent=2)
-        except Exception as e:
-            return f"Error scheduling week: {str(e)}"
+            except Exception as e:
+                results.append({
+                    "date": calendar_date,
+                    "workout_id": workout_id,
+                    "status": "error",
+                    "message": f"Error scheduling workout: {str(e)}",
+                })
+        return json.dumps({
+            "status": "complete",
+            "scheduled": results,
+        }, indent=2)
 
     return app

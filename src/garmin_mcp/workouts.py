@@ -7,12 +7,20 @@ import sys
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
-_DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+_DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
 
 
 def _validate_date(value: str, field: str = "date") -> str:
-    if not _DATE_RE.match(value):
-        raise ValueError(f"Invalid {field} '{value}': expected YYYY-MM-DD")
+    # fullmatch, because match() with $ lets a trailing newline through.
+    # fromisoformat rejects dates that don't exist (2026-02-30) but on 3.11+
+    # also accepts other ISO forms (20261014), so it can't replace the regex.
+    if isinstance(value, str) and _DATE_RE.fullmatch(value):
+        try:
+            datetime.date.fromisoformat(value)
+            return value
+        except ValueError:
+            pass
+    raise ValueError(f"Invalid {field} {value!r}: expected YYYY-MM-DD")
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -336,7 +344,7 @@ def _validate_target_type_steps(workout_data: dict) -> None:
 
 def _curate_workout_summary(workout: dict) -> dict:
     """Extract essential workout metadata for list views"""
-    sport_type = workout.get('sportType', {})
+    sport_type = workout.get('sportType') or {}
 
     summary = {
         "id": workout.get('workoutId'),
@@ -359,6 +367,38 @@ def _curate_workout_summary(workout: dict) -> dict:
 
     # Remove None values
     return {k: v for k, v in summary.items() if v is not None}
+
+
+# garminconnect's get_workouts returns a single page (start=0, limit=100 by
+# default), so one call silently drops the rest of a larger library.
+_WORKOUTS_PAGE_SIZE = 100
+
+
+def _get_all_workouts(client: Any) -> List[Dict[str, Any]]:
+    """Page through get_workouts until a short page and return every workout."""
+    workouts: List[Dict[str, Any]] = []
+    seen_ids = set()
+    # Garmin's start is 1-based (0 is treated as 1), so start=0 then
+    # start=100 would overlap by one workout.
+    start = 1
+    while True:
+        page = client.get_workouts(start, _WORKOUTS_PAGE_SIZE)
+        if not isinstance(page, list):
+            break
+        # Skipping workouts already seen keeps an overlapping page from
+        # duplicating entries, and stops the loop if the offset is ignored.
+        new = [
+            w for w in page
+            if isinstance(w, dict) and w.get('workoutId') not in seen_ids
+        ]
+        if not new:
+            break
+        workouts.extend(new)
+        seen_ids.update(w.get('workoutId') for w in new)
+        if len(page) < _WORKOUTS_PAGE_SIZE:
+            break
+        start += _WORKOUTS_PAGE_SIZE
+    return workouts
 
 
 def _workout_preview(client: Any, workout_id: int) -> Dict[str, Any]:
@@ -387,7 +427,7 @@ def _workout_preview(client: Any, workout_id: int) -> Dict[str, Any]:
     if not callable(get_workouts):
         return preview
     try:
-        items = get_workouts()
+        items = _get_all_workouts(client)
     except Exception:
         return preview
 
@@ -785,7 +825,7 @@ def register_tools(app):
         For detailed workout information including segments, use get_workout_by_id.
         """
         try:
-            workouts = garmin_client.get_workouts()
+            workouts = _get_all_workouts(garmin_client)
             if not workouts:
                 return "No workouts found."
 
@@ -1421,6 +1461,10 @@ def register_tools(app):
                         continue
                     workout_id = upload_result['workoutId']
                     workout_name = upload_result.get('workoutName')
+
+                # Garmin reports workoutId as an int; a string id ("123")
+                # would never match in the pre-check and get double-booked.
+                workout_id = int(workout_id)
 
                 if _is_already_scheduled(workout_id, calendar_date):
                     entry = {
