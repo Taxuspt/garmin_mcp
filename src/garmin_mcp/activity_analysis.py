@@ -11,6 +11,7 @@ Exposes data not available through the REST API:
 - Temperature correlation with HR and power
 - Variability Index per session and lap
 """
+import datetime
 import gzip
 import io
 import json
@@ -606,6 +607,22 @@ def _safe_round(value, ndigits: int = 1) -> Optional[float]:
     return round(value, ndigits)
 
 
+def _parse_fit_timestamp(value) -> Optional[datetime.datetime]:
+    """Parse a FIT timestamp (datetime or its str()) as naive UTC, or None."""
+    if isinstance(value, datetime.datetime):
+        ts = value
+    else:
+        if not value:
+            return None
+        try:
+            ts = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+    if ts.tzinfo is not None:
+        ts = ts.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return ts
+
+
 # ---------------------------------------------------------------------------
 # Power Duration Curve (Mean Maximal Power)
 # ---------------------------------------------------------------------------
@@ -855,9 +872,12 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
 
     drift_pct = ((r2 - r1) / r1) * 100
 
+    # Only negative drift (HR rising relative to power) is decoupling.
     if abs(drift_pct) < 5:
         interpretation = "well_coupled"
-    elif abs(drift_pct) < 10:
+    elif drift_pct > 0:
+        interpretation = "power_increased_vs_hr"
+    elif drift_pct > -10:
         interpretation = "moderate_drift"
     else:
         interpretation = "significant_decoupling"
@@ -867,7 +887,11 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
         "first_half_power_hr_ratio": round(r1, 3),
         "second_half_power_hr_ratio": round(r2, 3),
         "interpretation": interpretation,
-        "note": "Negative drift = HR increased vs power (decoupling). >10% suggests aerobic base is limiting factor.",
+        "note": (
+            "Negative drift = HR increased vs power (decoupling); below -10% suggests "
+            "aerobic base is limiting factor. Positive drift = power increased vs HR "
+            "(not decoupling)."
+        ),
     }
 
 
@@ -969,16 +993,23 @@ def _compute_shift_summary(shifts: list) -> dict:
     gear_usage: dict = {}
     cadences_at_shift = []
 
-    # Burst detection: 3+ shifts within ~6 consecutive events
+    # Burst detection: 3+ shifts within 10 seconds count as one episode, then
+    # skip past that burst. Shifts without a parseable timestamp are ignored.
+    BURST_MIN_SHIFTS = 3
+    BURST_WINDOW_S = 10
+    shift_times = sorted(
+        t for t in (_parse_fit_timestamp(s.get("timestamp")) for s in shifts) if t is not None
+    )
     panic_bursts = 0
     burst_i = 0
-    while burst_i < len(shifts):
-        window = [shifts[burst_i]]
-        for j in range(burst_i + 1, min(burst_i + 6, len(shifts))):
-            window.append(shifts[j])
-        if len(window) >= 3:
+    while burst_i < len(shift_times):
+        burst_end = burst_i
+        while (burst_end + 1 < len(shift_times) and
+               (shift_times[burst_end + 1] - shift_times[burst_i]).total_seconds() <= BURST_WINDOW_S):
+            burst_end += 1
+        if burst_end - burst_i + 1 >= BURST_MIN_SHIFTS:
             panic_bursts += 1
-            burst_i += len(window)
+            burst_i = burst_end + 1
         else:
             burst_i += 1
 
@@ -1701,13 +1732,17 @@ def register_tools(app):
             if not activities:
                 return "No activities found."
 
-            # Filter by sport type
+            # Filter by sport type. "cycling" also matches the *_biking typeKeys
+            # (road_biking, mountain_biking); other types must not pull in bike power.
+            requested_type = activity_type.lower()
             cycling_activities = [
                 a for a in activities
-                if activity_type.lower() in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or activity_type.lower() in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
-                or "cycling" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                if requested_type in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                or requested_type in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
+                or (
+                    requested_type == "cycling"
+                    and "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                )
             ]
 
             if not cycling_activities:

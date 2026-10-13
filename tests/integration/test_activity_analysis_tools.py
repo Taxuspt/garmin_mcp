@@ -596,6 +596,38 @@ async def test_get_activity_fit_data_shift_summary(app_with_activity_analysis, m
     assert summary["gear_usage"]["53/17t"] == 3
 
 
+def _shift_at(timestamp):
+    return {"event": "rear_gear_change", "quality": "proactive", "timestamp": timestamp}
+
+
+def test_shift_summary_spaced_shifts_are_not_panic_bursts():
+    """Shifts minutes apart never count as a panic burst, however many there are."""
+    shifts = [_shift_at(f"2024-06-01 10:{minute:02d}:00") for minute in range(0, 60, 5)]
+    assert _compute_shift_summary(shifts)["panic_burst_episodes"] == 0
+
+
+def test_shift_summary_counts_clustered_shifts_as_one_episode_each():
+    """3+ shifts within 10 s form one episode; separate clusters count separately."""
+    shifts = [
+        _shift_at("2024-06-01 10:00:00"),
+        _shift_at("2024-06-01 10:00:02"),
+        _shift_at("2024-06-01 10:00:04"),
+        _shift_at("2024-06-01 10:00:06"),
+        _shift_at("2024-06-01 10:05:00"),
+        _shift_at("2024-06-01 10:05:03"),
+        _shift_at("2024-06-01 10:05:05"),
+    ]
+    assert _compute_shift_summary(shifts)["panic_burst_episodes"] == 2
+
+
+def test_shift_summary_ignores_shifts_without_timestamps():
+    """Missing or unparseable timestamps are not counted as bursts."""
+    shifts = [_shift_at(""), _shift_at("not a time"), {"event": "rear_gear_change"}]
+    summary = _compute_shift_summary(shifts)
+    assert summary["total_shifts"] == 3
+    assert summary["panic_burst_episodes"] == 0
+
+
 # ---------------------------------------------------------------------------
 # Records (time series)
 # ---------------------------------------------------------------------------
@@ -916,6 +948,46 @@ def test_power_duration_curve_sliding_window():
     assert pdc["5s"] == 400
 
 
+def _mock_power_fitfile(watts, count=60):
+    """Mock FitFile whose record messages all carry the given power."""
+    return _mock_fitfile(
+        [_make_mock_fit_message("record", {"power": watts}) for _ in range(count)]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "activity_type,expected_watts,expected_id",
+    [("running", 250, 1), ("cycling", 900, 2)],
+)
+async def test_power_duration_curve_filters_by_requested_activity_type(
+    app_with_activity_analysis, mock_garmin_client, activity_type, expected_watts, expected_id
+):
+    """Bike power only counts toward the curve when cycling is requested."""
+    mock_garmin_client.get_activities.return_value = [
+        {"activityId": 1, "startTimeLocal": "2024-06-01 08:00:00",
+         "activityType": {"typeKey": "running", "parentTypeId": 17}},
+        {"activityId": 2, "startTimeLocal": "2024-06-02 08:00:00",
+         "activityType": {"typeKey": "road_biking", "parentTypeId": 2}},
+    ]
+    mock_garmin_client.download_activity.side_effect = (
+        lambda activity_id, dl_fmt: b"run" if activity_id == 1 else b"ride"
+    )
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.side_effect = lambda buf: _mock_power_fitfile(
+            250 if buf.getvalue() == b"run" else 900
+        )
+        result = await app_with_activity_analysis.call_tool(
+            "get_power_duration_curve", {"activity_type": activity_type}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities_analyzed"] == 1
+    assert data["season_bests"]["5s"]["watts"] == expected_watts
+    assert data["season_bests"]["5s"]["activity_id"] == expected_id
+
+
 # ---------------------------------------------------------------------------
 # Climb detection + VAM (unit tests)
 # ---------------------------------------------------------------------------
@@ -985,6 +1057,28 @@ def test_hr_drift_significant():
     assert drift is not None
     assert drift["hr_drift_pct"] < -10  # significant negative drift
     assert drift["interpretation"] == "significant_decoupling"
+
+
+@pytest.mark.parametrize(
+    "second_half_hr,expected_sign,expected_interpretation",
+    [
+        (155, -1, "moderate_drift"),  # ratio 1.429 -> 1.290: -9.7%
+        (132, 1, "power_increased_vs_hr"),  # ratio 1.429 -> 1.515: +6.1%
+        (125, 1, "power_increased_vs_hr"),  # ratio 1.429 -> 1.600: +12.0%
+    ],
+)
+def test_hr_drift_interpretation_uses_drift_sign(
+    second_half_hr, expected_sign, expected_interpretation
+):
+    """Only negative drift is decoupling; positive drift gets its own label."""
+    records = (
+        [{"power_w": 200, "heart_rate_bpm": 140}] * 1900
+        + [{"power_w": 200, "heart_rate_bpm": second_half_hr}] * 1900
+    )
+    drift = _compute_hr_drift(records)
+    assert drift is not None
+    assert drift["hr_drift_pct"] * expected_sign > 5
+    assert drift["interpretation"] == expected_interpretation
 
 
 def test_hr_drift_well_coupled():
