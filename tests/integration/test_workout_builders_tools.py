@@ -360,3 +360,29 @@ async def test_create_run_interval_workout_exception(app_with_builders, mock_gar
     assert result is not None
     assert "Error" in result[0][0].text
     assert "Upload failed" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_run_interval_workout_rejects_single_recovery_bound(
+    app_with_builders, mock_garmin_client
+):
+    """A lone recovery_hr_min is an error, not silently dropped from the upload."""
+    result = await app_with_builders.call_tool(
+        "create_run_interval_workout",
+        {
+            "name": "Threshold 3x6min",
+            "repeats": 3,
+            "rep_seconds": 360,
+            "recovery_seconds": 180,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+            "hr_min": 172,
+            "hr_max": 180,
+            "recovery_hr_min": 120,
+        },
+    )
+
+    text = result[0][0].text
+    assert "Error creating run interval workout" in text
+    assert "recovery_hr_min and recovery_hr_max must both be provided together" in text
+    mock_garmin_client.upload_workout.assert_not_called()

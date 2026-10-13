@@ -49,19 +49,26 @@ def _hr_target(
     hr_zone: str,
     hr_min: Optional[int],
     hr_max: Optional[int],
+    prefix: str = "",
 ) -> tuple:
     """Resolve HR target fields and a short description suffix.
 
     Returns (target_extra_fields, description_suffix). If hr_min/hr_max are
     both given, builds a custom bpm-range target (targetValueOne/targetValueTwo)
     instead of a named Garmin zone. A custom range and a named zone are mutually
-    exclusive -- if a range is given, hr_zone is ignored.
+    exclusive -- if a range is given, hr_zone is ignored. prefix names the
+    caller's parameters in errors (e.g. "recovery_" for recovery_hr_min).
     """
     if hr_min is not None or hr_max is not None:
         if hr_min is None or hr_max is None:
-            raise ValueError("hr_min and hr_max must both be provided together.")
+            raise ValueError(
+                f"{prefix}hr_min and {prefix}hr_max must both be provided together."
+            )
         if hr_min >= hr_max:
-            raise ValueError(f"hr_min ({hr_min}) must be less than hr_max ({hr_max}).")
+            raise ValueError(
+                f"{prefix}hr_min ({hr_min}) must be less than "
+                f"{prefix}hr_max ({hr_max})."
+            )
         return (
             {"targetValueOne": float(hr_min), "targetValueTwo": float(hr_max)},
             f"{hr_min}-{hr_max}bpm",
@@ -210,8 +217,12 @@ def build_run_interval_json(
                 "workoutTargetTypeKey": "no.target",
             },
         }
-        if recovery_hr_min is not None and recovery_hr_max is not None:
-            rec_fields, rec_desc = _hr_target(None, recovery_hr_min, recovery_hr_max)
+        # `or`, not `and`: a single bound must raise like hr_min/hr_max do,
+        # not be silently dropped.
+        if recovery_hr_min is not None or recovery_hr_max is not None:
+            rec_fields, rec_desc = _hr_target(
+                None, recovery_hr_min, recovery_hr_max, prefix="recovery_"
+            )
             recovery_step["targetType"] = {
                 "workoutTargetTypeId": 4,
                 "workoutTargetTypeKey": "heart.rate.zone",
