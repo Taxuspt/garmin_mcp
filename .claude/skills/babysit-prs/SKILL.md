@@ -67,8 +67,21 @@ reply in the same run.
 git remote -v
 git fetch <up>
 gh pr list -R Taxuspt/garmin_mcp --state open --limit 100 \
-  --json number,title,author,isDraft,isCrossRepository,maintainerCanModify,mergeable,headRefOid,headRefName,files,closingIssuesReferences
+  --json number,title,author,isDraft,isCrossRepository,maintainerCanModify,mergeable,headRefOid,headRefName,files
 gh issue list -R Taxuspt/garmin_mcp --state open --limit 50 --json number,title,author,labels
+```
+
+`closingIssuesReferences` isn't a valid field for `gh pr list`/`gh pr view --json`
+(it only exists in GitHub's GraphQL schema), so fetch it for every open PR in one
+batched call instead:
+
+```bash
+gh api graphql -f query='
+  query { repository(owner: "Taxuspt", name: "garmin_mcp") {
+    pullRequests(states: OPEN, first: 100) {
+      nodes { number closingIssuesReferences(first: 10) { nodes { number } } }
+    }
+  } }' --jq '.data.repository.pullRequests.nodes[] | select(.closingIssuesReferences.nodes != []) | {number, closes: [.closingIssuesReferences.nodes[].number]}'
 ```
 
 For each PR that isn't skipped:
