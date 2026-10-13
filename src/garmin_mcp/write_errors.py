@@ -13,10 +13,10 @@ error result carrying:
 - ``write_committed``: ``true`` | ``false`` | ``"unknown"``
 - ``correlation_id``: also written to the server log along with the traceback
 
-Writes are never retried here: a request that timed out after being sent may
-already have committed, and replaying it would create a duplicate. (The
-garminconnect client already refreshes the token and retries once on a 401;
-that retry is safe because Garmin rejected the first request.)
+Writes are never retried here: a request that timed out or got a 5xx after
+being sent may already have committed, and replaying it would create a
+duplicate. (The garminconnect client already refreshes the token and retries
+once on a 401; that retry is safe because Garmin rejected the first request.)
 """
 import json
 import logging
@@ -103,7 +103,12 @@ class WriteTracker:
             # Token refresh runs before the request is sent.
             return "auth_refresh", False
         if isinstance(exc, (GarminConnectConnectionError, GarminConnectTooManyRequestsError)):
-            # Garmin answered with an error status: the write was rejected.
+            status, _ = _upstream(exc)
+            if self.sent and status is not None and status >= 500:
+                # A 5xx (e.g. a gateway timeout) can come back after Garmin's
+                # backend already applied the write.
+                return "garmin_request", "unknown"
+            # Garmin answered with a 4xx: the write was rejected.
             return "garmin_request", False
         if isinstance(exc, requests.exceptions.JSONDecodeError):
             # Garmin answered 2xx but the body wasn't JSON. Checked before
