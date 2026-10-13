@@ -153,7 +153,7 @@
     },
     {
       "name": "download_course_gpx",
-      "description": "Download the exact official GPX file for a Garmin Connect course."
+      "description": "Download a Garmin Connect course as a GPX file."
     },
     {
       "name": "download_workout",

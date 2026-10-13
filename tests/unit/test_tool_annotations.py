@@ -19,7 +19,7 @@ def test_annotation_registry_is_exhaustive_and_disjoint():
     tools = asyncio.run(app.list_tools())
     names = {tool.name for tool in tools}
 
-    assert len(names) == 154
+    assert len(names) == 155
     assert tool_annotations.ALL_ANNOTATED_TOOLS == names
     assert not (
         tool_annotations.READ_ONLY_TOOLS
