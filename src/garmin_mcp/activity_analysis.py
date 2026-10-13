@@ -19,6 +19,8 @@ import os
 import zipfile
 from typing import Any, Dict, List, Optional, Union
 
+from garmin_mcp.activity_management import sanitize_lap_distance
+
 try:
     import fitparse
     from fitparse.profile import FIELD_TYPES as FIT_FIELD_TYPES
@@ -1280,6 +1282,9 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
                 "total_ascent_m": _get_field(message, "total_ascent"),
                 "total_descent_m": _get_field(message, "total_descent"),
             }
+            if lap["total_distance_m"] is not None and sanitize_lap_distance(lap["total_distance_m"]) is None:
+                lap["total_distance_m"] = None
+                lap["distance_invalid"] = True
             balance_raw = _get_field(message, "left_right_balance")
             left_pct = _decode_left_right_balance(balance_raw)
             if left_pct is not None:
