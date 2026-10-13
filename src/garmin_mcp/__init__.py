@@ -31,6 +31,7 @@ from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
 from garmin_mcp import calendar_events
+from garmin_mcp.tool_annotations import annotations_for
 
 
 def is_interactive_terminal() -> bool:
@@ -411,6 +412,7 @@ class _ToolFilter:
         self._enabled = enabled
         self._disabled = disabled
         self._seen = set()  # tool names encountered, for typo detection
+        self._unannotated = set()
 
     def _allowed(self, name):
         name = name.lower()
@@ -425,7 +427,6 @@ class _ToolFilter:
         # size for clients that forward both blocks (issue #331). Opt out
         # globally; callers can still pass structured_output=True explicitly.
         kwargs.setdefault("structured_output", False)
-        decorator = self._app.tool(*args, **kwargs)
         # Prefer the explicit registered name if given (@app.tool(name="x")),
         # so the env-var filter matches what the user actually configures.
         explicit = kwargs.get("name") or (
@@ -436,6 +437,12 @@ class _ToolFilter:
             name = explicit or getattr(fn, "__name__", "")
             self._seen.add(name.lower())
             if self._allowed(name):
+                annotations = annotations_for(name)
+                if annotations is None:
+                    self._unannotated.add(name)
+                else:
+                    kwargs.setdefault("annotations", annotations)
+                decorator = self._app.tool(*args, **kwargs)
                 return decorator(fn)
             return fn  # skip registration; tool never reaches the LLM
 
@@ -445,6 +452,10 @@ class _ToolFilter:
         """Configured names that never matched a real tool (likely typos)."""
         configured = self._enabled or self._disabled
         return sorted(configured - self._seen)
+
+    def unannotated_tool_names(self):
+        """Registered tools missing an explicit effect classification."""
+        return sorted(self._unannotated)
 
     def __getattr__(self, item):
         return getattr(self._app, item)
@@ -694,6 +705,14 @@ def main():
     if unknown:
         print(
             f"Tool filter: warning — name(s) not found and ignored: {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+
+    unannotated = app.unannotated_tool_names()
+    if unannotated:
+        print(
+            "Tool annotations: warning — unclassified tool(s): "
+            + ", ".join(unannotated),
             file=sys.stderr,
         )
 
