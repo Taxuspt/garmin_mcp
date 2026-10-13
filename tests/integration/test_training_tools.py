@@ -354,6 +354,160 @@ async def test_get_training_load_trend_omits_mismatched_ctl_and_uses_tracker_acu
 
 
 @pytest.mark.asyncio
+async def test_get_training_load_trend_reports_primary_tracker_loads(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "100": {
+                    "deviceId": 100,
+                    "trainingStatusFeedbackPhrase": "PRODUCTIVE_1",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": 520,
+                        "dailyTrainingLoadChronic": 410,
+                        "dailyAcuteChronicWorkloadRatio": 1.27,
+                        "acwrStatus": "HIGH",
+                        "minTrainingLoadChronic": 330,
+                        "maxTrainingLoadChronic": 610,
+                    },
+                }
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_trend",
+        {"start_date": "2026-10-08", "end_date": "2026-10-09"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["days_with_data"] == 2
+    entry = data["trend"][-1]
+    assert entry["date"] == "2026-10-09"
+    assert entry["reporting_device_id"] == 100
+    assert entry["atl"] == 520
+    assert entry["ctl"] == 410
+    assert entry["tsb"] == -110
+    assert entry["acwr"] == 1.27
+    assert entry["acwr_status"] == "HIGH"
+    assert entry["optimal_chronic_load_min"] == 330
+    assert entry["optimal_chronic_load_max"] == 610
+    assert entry["training_status"] == "PRODUCTIVE_1"
+    mock_garmin_client.get_training_readiness.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_trend_description_uses_garmin_load_scale(
+    app_with_training,
+):
+    """The tool must not tell the model to read Garmin loads as TrainingPeaks PMC."""
+    tools = {tool.name: tool for tool in await app_with_training.list_tools()}
+    description = tools["get_training_load_trend"].description
+
+    assert "42-day" not in description
+    assert "not comparable to TrainingPeaks" in description
+    assert "acwr_status" in description
+
+
+def _load_balance_record(device_id, aerobic_low, feedback, **extra):
+    return {
+        "deviceId": device_id,
+        "calendarDate": "2026-10-09",
+        "monthlyLoadAerobicLow": aerobic_low,
+        "monthlyLoadAerobicLowTargetMin": 200,
+        "monthlyLoadAerobicLowTargetMax": 600,
+        "monthlyLoadAerobicHigh": 700,
+        "monthlyLoadAerobicHighTargetMin": 300,
+        "monthlyLoadAerobicHighTargetMax": 650,
+        "monthlyLoadAnaerobic": 250,
+        "monthlyLoadAnaerobicTargetMin": 100,
+        "monthlyLoadAnaerobicTargetMax": 300,
+        "trainingBalanceFeedbackPhrase": feedback,
+        **extra,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_balance_prefers_primary_tracker_over_first_record(
+    app_with_training, mock_garmin_client
+):
+    """A secondary device that sorts first must not be reported as the athlete's load."""
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "displayName": "Forerunner", "primaryDevice": True},
+        {"deviceId": 200, "displayName": "Edge", "primaryDevice": False},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "200": _load_balance_record(200, 50, "AEROBIC_LOW_SHORTAGE"),
+                "100": _load_balance_record(100, 400, "BALANCED"),
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_balance", {"date": "2026-10-09"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["load_device_id"] == 100
+    assert data["load_device_name"] == "Forerunner"
+    assert data["feedback"] == "BALANCED"
+    assert data["aerobic_low"] == {
+        "load": 400,
+        "target_min": 200,
+        "target_max": 600,
+        "status": "within",
+    }
+    assert data["aerobic_high"]["status"] == "above"
+    assert data["anaerobic"]["status"] == "within"
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_balance_falls_back_to_primary_training_marker(
+    app_with_training, mock_garmin_client
+):
+    """Without device discovery, keep Garmin's marker and still report provenance."""
+    mock_garmin_client.get_devices.side_effect = Exception("devices unavailable")
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingLoadBalance": {
+            "metricsTrainingLoadBalanceDTOMap": {
+                "200": _load_balance_record(200, 50, "AEROBIC_LOW_SHORTAGE"),
+                "100": _load_balance_record(
+                    100, 400, "BALANCED", primaryTrainingDevice=True
+                ),
+            }
+        }
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_balance", {"date": "2026-10-09"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["load_device_id"] == 100
+    assert "load_device_name" not in data
+    assert data["feedback"] == "BALANCED"
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_balance_no_data(app_with_training, mock_garmin_client):
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingLoadBalance": {"metricsTrainingLoadBalanceDTOMap": None}
+    }
+
+    result = await app_with_training.call_tool(
+        "get_training_load_balance", {"date": "2026-10-09"}
+    )
+
+    assert result[0][0].text == "No training load balance data found for 2026-10-09."
+
+
+@pytest.mark.asyncio
 async def test_get_training_status_preserves_status_when_readiness_fails(
     app_with_training, mock_garmin_client
 ):
@@ -1020,7 +1174,27 @@ async def test_get_lactate_threshold_tool_range(app_with_training, mock_garmin_c
     assert round(1000 / data["speed_history"][0]["speed_mps"]) == 4 * 60 + 15
     assert "heart_rate_history" in data
     assert len(data["heart_rate_history"]) == 3
+    assert data["heart_rate_history"][-1] == {
+        "date": "2024-01-15",
+        "heart_rate_bpm": 169,
+        "series": "running",
+    }
     assert "power_history" in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "args",
+    [{"start_date": "2024-01-08"}, {"end_date": "2024-01-15"}],
+)
+async def test_get_lactate_threshold_rejects_partial_range(
+    app_with_training, mock_garmin_client, args
+):
+    """A single date must not silently fall back to the latest values."""
+    result = await app_with_training.call_tool("get_lactate_threshold", args)
+
+    assert "Provide both start_date and end_date" in result[0][0].text
+    mock_garmin_client.get_lactate_threshold.assert_not_called()
 
 
 # Error handling tests

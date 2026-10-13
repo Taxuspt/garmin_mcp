@@ -1078,9 +1078,18 @@ def register_tools(app):
         endurance training.
 
         Args:
-            start_date: Start date in YYYY-MM-DD format (optional, omit for latest)
-            end_date: End date in YYYY-MM-DD format (optional, omit for latest)
+            start_date: Start date in YYYY-MM-DD format (optional; give with
+                end_date for history, omit both for latest)
+            end_date: End date in YYYY-MM-DD format (optional; give with
+                start_date for history, omit both for latest)
         """
+        # A lone date would otherwise fall through to the latest-values query
+        # and silently ignore the requested range.
+        if bool(start_date) != bool(end_date):
+            return (
+                "Provide both start_date and end_date for lactate threshold "
+                "history, or omit both for the latest values."
+            )
         try:
             # Call API with appropriate parameters
             if start_date and end_date:
@@ -1099,7 +1108,7 @@ def register_tools(app):
 
             # Handle different response formats based on query type
             if start_date and end_date:
-                # Historical range format: {speed: [...], heartRate: [...], power: [...]}
+                # Historical range format: {speed: [...], heart_rate: [...], power: [...]}
                 curated = {
                     "start_date": start_date,
                     "end_date": end_date,
@@ -1117,8 +1126,9 @@ def register_tools(app):
                         for entry in speed_history
                     ]
 
-                # Process heart rate history
-                hr_history = threshold.get("heartRate", [])
+                # Process heart rate history. garminconnect returns it under
+                # "heart_rate"; accept the camelCase key too.
+                hr_history = threshold.get("heart_rate") or threshold.get("heartRate")
                 if hr_history:
                     curated["heart_rate_history"] = [
                         {
@@ -1185,12 +1195,14 @@ def register_tools(app):
 
     @app.tool()
     async def get_training_load_trend(start_date: str, end_date: str) -> str:
-        """Get the Performance Management Chart (CTL/ATL/TSB) over a date range.
+        """Get Garmin's daily acute and chronic training load over a date range.
 
-        Returns Chronic Training Load (CTL, 42-day fitness), Acute Training Load (ATL, 7-day fatigue),
-        Training Stress Balance (TSB = CTL - ATL, form/freshness), and Acute:Chronic Workload Ratio
-        (ACWR) per day. Use this to assess whether the athlete is building fitness, peaking, or
-        accumulating too much fatigue.
+        Returns, per day, Garmin's acute load (`atl`, the 7-day load), chronic load (`ctl`), their
+        difference (`tsb` = ctl - atl), and Garmin's Acute:Chronic Workload Ratio (`acwr`,
+        `acwr_status`). These are Garmin's dailyTrainingLoadAcute/Chronic values, not TrainingPeaks
+        CTL/ATL: they are on Garmin's weekly load scale, so `tsb` is not comparable to TrainingPeaks
+        TSB and TSB form thresholds do not apply. Use `acwr`/`acwr_status` (and the optimal chronic
+        load range) to judge whether load is building steadily or spiking.
 
         Recommended range: 4-8 weeks. Maximum: 90 days.
 
@@ -1322,6 +1334,10 @@ def register_tools(app):
         alongside Garmin's target range; a `status` of "below", "within", or
         "above" is computed from the load relative to that range.
 
+        Garmin reports Load Focus per device. The primary activity tracker's
+        record is used when it can be identified; `load_device_id` and
+        `load_device_name` say which device the numbers came from.
+
         Args:
             date: Date in YYYY-MM-DD format
         """
@@ -1339,17 +1355,16 @@ def register_tools(app):
         load_balance = data.get("mostRecentTrainingLoadBalance") or {}
         load_map = load_balance.get("metricsTrainingLoadBalanceDTOMap") or {}
 
-        # device-keyed dict; prefer the primary training device, fall back to
-        # the first device with data.
-        load_data: Dict[str, Any] = {}
-        for dev_data in load_map.values():
-            if not isinstance(dev_data, dict):
-                continue
-            if dev_data.get("primaryTrainingDevice"):
-                load_data = dev_data
-                break
-            if not load_data:
-                load_data = dev_data
+        # Device-keyed like the status map: select with the same helper as
+        # get_training_status (primary tracker, then Garmin's primary-training
+        # marker) rather than whichever device happens to come first.
+        try:
+            devices = garmin_client.get_devices()
+        except Exception:
+            devices = None
+        load_data, load_device_id, load_device_name, _ = _select_training_device(
+            load_map, devices
+        )
 
         if not load_data:
             return f"No training load balance data found for {date}."
@@ -1379,6 +1394,12 @@ def register_tools(app):
         result: Dict[str, Any] = {
             "date": load_data.get("calendarDate", date),
         }
+        if load_device_id is not None:
+            result["load_device_id"] = (
+                int(load_device_id) if load_device_id.isdigit() else load_device_id
+            )
+        if load_device_name is not None:
+            result["load_device_name"] = load_device_name
         feedback = load_data.get("trainingBalanceFeedbackPhrase")
         if feedback:
             result["feedback"] = feedback

@@ -26,6 +26,7 @@ def test_main_registers_tools_and_starts_stdio(monkeypatch):
                 "transport": kwargs.get("transport"),
                 "tool_count": len(tools),
                 "tool_names": [tool.name for tool in tools],
+                "tools": {tool.name: tool for tool in tools},
             }
         )
 
@@ -38,6 +39,13 @@ def test_main_registers_tools_and_starts_stdio(monkeypatch):
     assert run_calls[0]["tool_count"] >= 10
     assert "get_devices" in run_calls[0]["tool_names"]
     assert "get_workouts" in run_calls[0]["tool_names"]
+
+    tools = run_calls[0]["tools"]
+    assert tools["get_devices"].annotations.readOnlyHint is True
+    assert tools["create_run_workout"].annotations.destructiveHint is False
+    assert tools["delete_workout"].annotations.destructiveHint is True
+    assert tools["schedule_workout"].annotations.idempotentHint is True
+    assert tools["set_fit_download_dir"].annotations.openWorldHint is False
 
 
 def test_main_rejects_malformed_allowlist_before_garmin_initialization(

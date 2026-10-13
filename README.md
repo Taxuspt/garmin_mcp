@@ -1113,7 +1113,10 @@ This project includes comprehensive tests for all MCP tools. **All tests are cur
 ### Running Tests
 
 ```bash
-# Run all integration tests (default - uses mocked Garmin API)
+# Run unit and integration tests (default - uses mocked Garmin API, e2e tests are deselected)
+uv run pytest
+
+# Run only the integration tests
 uv run pytest tests/integration/
 
 # Run tests with verbose output
@@ -1122,14 +1125,15 @@ uv run pytest tests/integration/ -v
 # Run a specific test module
 uv run pytest tests/integration/test_health_wellness_tools.py -v
 
-# Run end-to-end tests (requires real Garmin credentials)
+# Run end-to-end tests (requires real Garmin credentials).
+# Some of these create and delete foods, food logs and workouts in your account.
 uv run pytest tests/e2e/ -m e2e -v
 ```
 
 ### Test Structure
 
 - **Integration tests** (200+ tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
-- **End-to-end tests** (4 tests): Test with real MCP server and Garmin API (requires valid credentials)
+- **End-to-end tests** (`tests/e2e/`): Test with real MCP server and Garmin API (requires valid credentials). Only run with `-m e2e`.
 
 ## Reinstalling from local path
 

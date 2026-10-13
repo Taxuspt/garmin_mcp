@@ -14,8 +14,10 @@ class _FakeClient:
             raise self._error
         return self._workout
 
-    def get_workouts(self):
-        return self._workouts
+    def get_workouts(self, start=0, limit=100):
+        # Like Garmin: start is 1-based and 0 is treated as 1.
+        offset = max(start, 1) - 1
+        return self._workouts[offset:offset + limit]
 
 
 def test_preview_from_workout_details():
@@ -48,3 +50,24 @@ def test_preview_falls_back_to_workout_list_on_details_error():
     preview = _workout_preview(client, 99)
     assert preview["name"] == "Sweet Spot"
     assert preview["sport"] == "cycling"
+
+
+def test_preview_fallback_searches_past_first_page():
+    client = _FakeClient(
+        error=Exception("403 Forbidden"),
+        workouts=[
+            {"workoutId": i, "workoutName": f"Workout {i}"}
+            for i in range(1, 151)
+        ],
+    )
+    preview = _workout_preview(client, 120)
+    assert preview["name"] == "Workout 120"
+
+
+def test_get_all_workouts_pages_a_large_library_without_gaps_or_duplicates():
+    from garmin_mcp.workouts import _get_all_workouts
+
+    workouts = [{"workoutId": i} for i in range(250)]
+    client = _FakeClient(workouts=workouts)
+
+    assert [w["workoutId"] for w in _get_all_workouts(client)] == list(range(250))

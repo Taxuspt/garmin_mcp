@@ -87,7 +87,7 @@ def _verify_saved_tokens(token_path: str, is_cn: bool = False) -> tuple[bool, st
     silent "logged in as None" into a real failure.
 
     Returns:
-        (True, full_name) on success, or (False, error_summary) on failure.
+        (True, account_name) on success, or (False, error_summary) on failure.
     """
     import io
 
@@ -97,10 +97,10 @@ def _verify_saved_tokens(token_path: str, is_cn: bool = False) -> tuple[bool, st
     sys.stderr = io.StringIO()
     try:
         garmin = Garmin(is_cn=is_cn)
+        # login() raises unless it can fetch the profile, so getting past it
+        # means the tokens work. The profile's fullName may still be empty.
         garmin.login(token_path)
-        name = garmin.get_full_name()
-        if not name:
-            return False, "session is not authenticated (no profile returned)"
+        name = garmin.get_full_name() or garmin.display_name or "your Garmin account"
         return True, name
     except Exception as e:
         return False, str(e).split(":")[0].strip() or e.__class__.__name__
@@ -160,7 +160,10 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
     try:
         garmin = Garmin(email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True)
-        result1, result2 = garmin.login()
+        # Exchange the credentials on the client directly. Garmin.login() with
+        # no tokenstore falls back to $GARMINTOKENS and, if tokens load from
+        # there, uses them instead of these credentials.
+        result1, result2 = garmin.client.login(email, password, return_on_mfa=True)
 
         if result1 == "needs_mfa":
             mfa_code = get_mfa()

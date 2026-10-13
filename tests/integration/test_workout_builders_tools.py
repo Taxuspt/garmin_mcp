@@ -4,6 +4,7 @@ Integration tests for high-level workout builder tools (workout_builders.py).
 import json
 
 import pytest
+from garminconnect import GarminConnectConnectionError
 from mcp.server.fastmcp import FastMCP
 from unittest.mock import MagicMock
 
@@ -141,6 +142,91 @@ async def test_schedule_week_partial_idempotency(
 
 
 @pytest.mark.asyncio
+async def test_schedule_week_keeps_results_when_an_item_fails(
+    app_with_builders, mock_garmin_client
+):
+    """A failing item must not discard the items already scheduled around it.
+
+    garminconnect 0.3.2 raises GarminConnectConnectionError for HTTP >= 400
+    instead of returning the response, so a 404 arrives as an exception.
+    """
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    mock_garmin_client.client.post.side_effect = [
+        ok_response,
+        GarminConnectConnectionError("API Error 404 - workout not found"),
+        ok_response,
+    ]
+
+    result = await app_with_builders.call_tool(
+        "schedule_week",
+        {
+            "week": [
+                {"date": "2026-05-12", "workout_id": 111},
+                {"date": "2026-05-13", "workout_id": 222},
+                {"date": "2026-05-14", "workout_id": 333},
+            ]
+        },
+    )
+
+    payload = json.loads(result[0][0].text)
+    scheduled = payload["scheduled"]
+    assert [s["status"] for s in scheduled] == ["scheduled", "error", "scheduled"]
+    assert scheduled[1]["workout_id"] == 222
+    assert "API Error 404" in scheduled[1]["message"]
+    assert mock_garmin_client.client.post.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_date", ["10/14/2026", "2026-02-30"])
+async def test_schedule_week_rejects_invalid_date(
+    app_with_builders, mock_garmin_client, bad_date
+):
+    """An invalid date is reported for that item and never POSTed to Garmin."""
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    mock_garmin_client.client.post.return_value = ok_response
+
+    result = await app_with_builders.call_tool(
+        "schedule_week",
+        {"week": [{"date": bad_date, "workout_id": 111}]},
+    )
+
+    payload = json.loads(result[0][0].text)
+    assert payload["scheduled"][0]["status"] == "failed"
+    assert "YYYY-MM-DD" in payload["scheduled"][0]["message"]
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_schedule_week_missing_date_does_not_abort_batch(
+    app_with_builders, mock_garmin_client
+):
+    """An entry without a date fails on its own; the rest of the week still runs."""
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    mock_garmin_client.client.post.return_value = ok_response
+
+    result = await app_with_builders.call_tool(
+        "schedule_week",
+        {
+            "week": [
+                {"workout_id": 111},
+                {"date": "2026-05-14", "workout_id": 222},
+            ]
+        },
+    )
+
+    payload = json.loads(result[0][0].text)
+    scheduled = payload["scheduled"]
+    assert scheduled[0]["status"] == "failed"
+    assert scheduled[1]["status"] == "scheduled"
+    mock_garmin_client.client.post.assert_called_once_with(
+        "connectapi", "workout-service/schedule/222", json={"date": "2026-05-14"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_run_workout_success(app_with_builders, mock_garmin_client):
     """create_run_workout uploads the workout and returns the workout_id."""
     mock_garmin_client.upload_workout.return_value = {
@@ -274,3 +360,29 @@ async def test_create_run_interval_workout_exception(app_with_builders, mock_gar
     assert result is not None
     assert "Error" in result[0][0].text
     assert "Upload failed" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_run_interval_workout_rejects_single_recovery_bound(
+    app_with_builders, mock_garmin_client
+):
+    """A lone recovery_hr_min is an error, not silently dropped from the upload."""
+    result = await app_with_builders.call_tool(
+        "create_run_interval_workout",
+        {
+            "name": "Threshold 3x6min",
+            "repeats": 3,
+            "rep_seconds": 360,
+            "recovery_seconds": 180,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+            "hr_min": 172,
+            "hr_max": 180,
+            "recovery_hr_min": 120,
+        },
+    )
+
+    text = result[0][0].text
+    assert "Error creating run interval workout" in text
+    assert "recovery_hr_min and recovery_hr_max must both be provided together" in text
+    mock_garmin_client.upload_workout.assert_not_called()
