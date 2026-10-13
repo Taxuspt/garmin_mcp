@@ -479,15 +479,40 @@ MOCK_GOALS = {
     ]
 }
 
-MOCK_PERSONAL_RECORD = {
-    "personalRecords": [
-        {
-            "recordType": "FASTEST_5K",
-            "recordValue": 1200.0,  # 20 minutes
-            "recordDate": "2024-01-15"
-        }
-    ]
-}
+# get_personal_record returns a list of records, not a dict
+MOCK_PERSONAL_RECORD = [
+    {
+        "id": 1001,
+        "typeId": 3,  # Fastest 5K
+        "status": "ACCEPTED",
+        "activityId": 12345678901,
+        "activityName": "Evening Run",
+        "activityType": "running",
+        "value": 1200.0,  # 20 minutes
+        # Set late on Jan 14 local time, which is already Jan 15 in GMT
+        "prStartTimeGmt": 1705304700000,
+        "prStartTimeGmtFormatted": "2024-01-15T07:45:00.0",
+        "prStartTimeLocal": 1705275900000,
+        "prStartTimeLocalFormatted": "2024-01-14T23:45:00.0",
+        "prTypeLabelKey": None,
+        "poolLengthUnit": None,
+    },
+    {
+        "id": 1002,
+        "typeId": 12,  # Most Steps Day
+        "status": "ACCEPTED",
+        "activityId": None,
+        "activityName": None,
+        "activityType": None,
+        "value": 25000.0,
+        "prStartTimeGmt": 1704873600000,
+        "prStartTimeGmtFormatted": "2024-01-10T08:00:00.0",
+        "prStartTimeLocal": 1704844800000,
+        "prStartTimeLocalFormatted": "2024-01-10T00:00:00.0",
+        "prTypeLabelKey": None,
+        "poolLengthUnit": None,
+    },
+]
 
 MOCK_BADGES = [
     {
