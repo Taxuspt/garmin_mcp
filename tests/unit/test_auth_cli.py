@@ -16,6 +16,7 @@ from garmin_mcp.auth_cli import (
     verify_tokens,
     main,
     _secure_token_dir,
+    _verify_saved_tokens,
 )
 
 
@@ -280,6 +281,64 @@ class TestAuthenticate:
             result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
 
         assert result is False
+
+    @patch("garmin_mcp.auth_cli.token_exists", return_value=False)
+    @patch("garmin_mcp.auth_cli.get_credentials", return_value=("test@example.com", "secret"))
+    @patch("garmin_mcp.auth_cli.Garmin")
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_profile_without_full_name_succeeds(self, mock_chmod, mock_garmin, mock_get_creds, mock_exists, capsys):
+        """Valid tokens for a profile with no full name must not be reported as failed."""
+        # Mock both entry points: the credential exchange and the token login
+        # used to verify the saved tokens.
+        mock_garmin.return_value.login.return_value = (None, None)
+        mock_garmin.return_value.client.login.return_value = (None, None)
+        mock_garmin.return_value.get_full_name.return_value = ""
+        mock_garmin.return_value.display_name = "abc123"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("builtins.open", mock_open(read_data="{}")):
+                result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
+
+        assert result is True
+        assert "Logged in as: abc123" in capsys.readouterr().out
+
+
+class TestVerifySavedTokens:
+    """Tests for _verify_saved_tokens, with Garmin mocked."""
+
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_full_name_is_reported(self, mock_garmin):
+        mock_garmin.return_value.get_full_name.return_value = "Jane Doe"
+
+        assert _verify_saved_tokens("/tokens") == (True, "Jane Doe")
+        mock_garmin.return_value.login.assert_called_once_with("/tokens")
+
+    @pytest.mark.parametrize("full_name", ["", None])
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_missing_full_name_falls_back_to_display_name(self, mock_garmin, full_name):
+        # login() raises unless the profile loads; the library then sets
+        # full_name to "" (or None) for profiles without a name.
+        mock_garmin.return_value.get_full_name.return_value = full_name
+        mock_garmin.return_value.display_name = "abc123"
+
+        assert _verify_saved_tokens("/tokens") == (True, "abc123")
+
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_no_name_at_all_still_verifies(self, mock_garmin):
+        mock_garmin.return_value.get_full_name.return_value = ""
+        mock_garmin.return_value.display_name = None
+
+        assert _verify_saved_tokens("/tokens") == (True, "your Garmin account")
+
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_login_failure_is_reported(self, mock_garmin):
+        from garminconnect import GarminConnectAuthenticationError
+
+        mock_garmin.return_value.login.side_effect = GarminConnectAuthenticationError(
+            "Failed to retrieve social profile"
+        )
+
+        assert _verify_saved_tokens("/tokens") == (False, "Failed to retrieve social profile")
 
 
 class TestVerifyTokens:
