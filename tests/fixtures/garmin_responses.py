@@ -1054,14 +1054,15 @@ MOCK_LACTATE_THRESHOLD = {
     },
 }
 
-# Response format for latest=False (date range)
+# Response format for latest=False (date range). garminconnect assembles this
+# dict itself, with snake_case keys: {"speed", "heart_rate", "power"}.
 MOCK_LACTATE_THRESHOLD_RANGE = {
     "speed": [
         {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-08"},
         {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-12"},
         {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.3888878, "updatedDate": "2024-01-15"},
     ],
-    "heartRate": [
+    "heart_rate": [
         {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 165, "updatedDate": "2024-01-08"},
         {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 167, "updatedDate": "2024-01-12"},
         {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 169, "updatedDate": "2024-01-15"},
