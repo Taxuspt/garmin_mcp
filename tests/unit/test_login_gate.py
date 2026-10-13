@@ -124,6 +124,27 @@ class TestPendingGarminClient:
         with pytest.raises(ValueError, match="boom"):
             pending.get_full_name()
 
+    def test_repeated_login_failures_do_not_grow_the_traceback(self):
+        def failing_login():
+            raise ValueError("boom")
+
+        pending = _PendingGarminClient(timeout=5).start(failing_login)
+
+        def traceback_depth():
+            with pytest.raises(ValueError) as excinfo:
+                pending.get_full_name()
+            depth, tb = 0, excinfo.value.__traceback__
+            while tb is not None:
+                depth += 1
+                tb = tb.tb_next
+            return depth
+
+        first = traceback_depth()
+        for _ in range(20):
+            traceback_depth()
+
+        assert traceback_depth() == first
+
     def test_timeout_elapses_raises_actionable_error(self):
         never_finishes = threading.Event()
         pending = _PendingGarminClient(timeout=0.05).start(lambda: never_finishes.wait(5))
