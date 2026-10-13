@@ -450,7 +450,7 @@ async def test_get_activity_fit_data_session_fields(app_with_activity_analysis, 
         "avg_heart_rate": 148,
         "avg_left_pco": 3,
         "avg_right_pco": -8,
-        "avg_left_right_balance": None,
+        "left_right_balance": None,
     })
 
     with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
@@ -488,9 +488,9 @@ async def test_get_activity_fit_data_shift_events(app_with_activity_analysis, mo
         "altitude": 120.0,
     })
 
-    # gear_change_data: front=53t (0x35), rear=16t (0x10), front_num=2, rear_num=5
-    # packed: (53 << 24) | (16 << 16) | (2 << 8) | 5
-    gear_data = (53 << 24) | (16 << 16) | (2 << 8) | 5
+    # gear_change_data (FIT profile layout): front=53t, front_num=2, rear=16t, rear_num=5
+    # packed: (front_teeth << 24) | (front_num << 16) | (rear_teeth << 8) | rear_num
+    gear_data = (53 << 24) | (2 << 16) | (16 << 8) | 5
 
     shift_msg = _make_mock_fit_message("event", {
         "event": "rear_gear_change",
@@ -513,7 +513,31 @@ async def test_get_activity_fit_data_shift_events(app_with_activity_analysis, mo
     assert shift["cadence_at_shift_rpm"] == 65
     assert shift["front_teeth"] == 53
     assert shift["rear_teeth"] == 16
+    assert shift["front_gear_num"] == 2
+    assert shift["rear_gear_num"] == 5
     assert shift["gear_combo"] == "53/16t"
+
+
+def test_decode_gear_change_matches_fit_profile_layout():
+    """The decoder uses the bit offsets fitparse's profile gives gear_change_data."""
+    event_type = MESSAGE_TYPES[21]
+    gear_change_data = next(
+        sub for sub in event_type.fields[3].subfields if sub.name == "gear_change_data"
+    )
+    offsets = {c.name: c.bit_offset for c in gear_change_data.components}
+    packed = (
+        (5 << offsets["rear_gear_num"])
+        | (21 << offsets["rear_gear"])
+        | (2 << offsets["front_gear_num"])
+        | (50 << offsets["front_gear"])
+    )
+
+    assert activity_analysis._decode_gear_change(packed) == {
+        "rear_gear_num": 5,
+        "front_gear_num": 2,
+        "rear_teeth": 21,
+        "front_teeth": 50,
+    }
 
 
 @pytest.mark.asyncio
@@ -522,7 +546,7 @@ async def test_get_activity_fit_data_proactive_shift(app_with_activity_analysis,
     mock_garmin_client.download_activity.return_value = b"\x00" * 20
 
     record_msg = _make_mock_fit_message("record", {"cadence": 88})
-    gear_data = (39 << 24) | (19 << 16) | (1 << 8) | 4
+    gear_data = (39 << 24) | (1 << 16) | (19 << 8) | 4
     shift_msg = _make_mock_fit_message("event", {
         "event": "rear_gear_change",
         "gear_change_data": gear_data,
@@ -552,7 +576,7 @@ async def test_get_activity_fit_data_shift_summary(app_with_activity_analysis, m
         messages.append(_make_mock_fit_message("record", {"cadence": cadence}))
         messages.append(_make_mock_fit_message("event", {
             "event": "rear_gear_change",
-            "gear_change_data": (53 << 24) | (17 << 16) | (2 << 8) | 4,
+            "gear_change_data": (53 << 24) | (2 << 16) | (17 << 8) | 4,
             "timestamp": f"2024-03-02 {ts}",
         }))
 
@@ -647,7 +671,7 @@ async def test_get_activity_fit_data_power_balance(app_with_activity_analysis, m
     balance_raw = 4700  # 47.0% left
     session_msg = _make_mock_fit_message("session", {
         "sport": "cycling",
-        "avg_left_right_balance": balance_raw,
+        "left_right_balance": balance_raw,
     })
 
     with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
@@ -661,6 +685,38 @@ async def test_get_activity_fit_data_power_balance(app_with_activity_analysis, m
 
     assert data["session"]["avg_left_power_pct"] == 47.0
     assert data["session"]["avg_right_power_pct"] == 53.0
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_power_balance_uses_profile_field_types(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Session/lap balance is uint16 x100 and record balance is uint8 whole percent."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+
+    # 53.00% right: 0x8000 | 5300 (left_right_balance_100)
+    session_msg = _make_profile_fit_message(18, [(37, 0x8000 | 5300, 0x8000 | 5300)])
+    lap_msg = _make_profile_fit_message(19, [(34, 0x8000 | 5100, 0x8000 | 5100)])
+    # 52% right: 0x80 | 52 (left_right_balance)
+    record_msg = _make_profile_fit_message(20, [(30, 0x80 | 52, 0x80 | 52)])
+
+    assert session_msg.get_value("left_right_balance") == 0x8000 | 5300
+    assert record_msg.get_value("left_right_balance") == 0x80 | 52
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([record_msg, lap_msg, session_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data",
+            {"activity_id": ACTIVITY_ID, "include_records": True},
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["session"]["avg_left_power_pct"] == 47.0
+    assert data["session"]["avg_right_power_pct"] == 53.0
+    assert data["laps"][0]["avg_left_power_pct"] == 49.0
+    assert data["laps"][0]["avg_right_power_pct"] == 51.0
+    assert data["records"][0]["left_power_pct"] == 48.0
+    assert data["records"][0]["right_power_pct"] == 52.0
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +837,7 @@ async def test_get_activity_fit_data_shift_terrain_classification(app_with_activ
 
     # Record with climbing grade
     record_climb = _make_mock_fit_message("record", {"cadence": 75, "grade": 5.5})
-    gear_data = (53 << 24) | (17 << 16) | (2 << 8) | 4
+    gear_data = (53 << 24) | (2 << 16) | (17 << 8) | 4
     shift_climb = _make_mock_fit_message("event", {
         "event": "rear_gear_change",
         "gear_change_data": gear_data,
