@@ -699,6 +699,12 @@ def register_tools(app):
         number_of_units are given; the call then replaces the record in full,
         and any brand or nutrient you omit is cleared.
 
+        Only future logs see the change. Each food-log entry stores its own
+        copy of the food's nutrition from when it was logged, so entries
+        already logged, and those days' summaries, keep the old values. To
+        correct a past day, delete_food_log each affected entry and log it
+        again after the update.
+
         All nutrient amounts are ABSOLUTE values per serving, not %DV.
         Nutrition labels often print %DV for calcium/iron/vitamin D —
         convert to absolute units before passing.
