@@ -1198,12 +1198,84 @@ def _compute_hrv_metrics(rr_intervals_s: List[float]) -> Optional[Dict]:
     }
 
 
+def _curate_session(message) -> Dict[str, Any]:
+    """Curate one FIT ``session`` message into the tool's session summary."""
+    session = {
+        "sport": _get_field(message, "sport"),
+        "sub_sport": _get_field(message, "sub_sport"),
+        "start_time": str(_get_field(message, "start_time") or ""),
+        "total_elapsed_time_s": _get_field(message, "total_elapsed_time"),
+        "total_timer_time_s": _get_field(message, "total_timer_time"),
+        "total_distance_m": _get_field(message, "total_distance"),
+        "total_calories": _get_field(message, "total_calories"),
+        "avg_speed_mps": _get_field(message, "enhanced_avg_speed", "avg_speed"),
+        "max_speed_mps": _get_field(message, "enhanced_max_speed", "max_speed"),
+        "avg_power_w": _get_field(message, "avg_power"),
+        "max_power_w": _get_field(message, "max_power"),
+        "normalized_power_w": _get_field(message, "normalized_power"),
+        "avg_cadence_rpm": _get_field(message, "avg_cadence"),
+        "max_cadence_rpm": _get_field(message, "max_cadence"),
+        "avg_heart_rate_bpm": _get_field(message, "avg_heart_rate"),
+        "max_heart_rate_bpm": _get_field(message, "max_heart_rate"),
+        "total_ascent_m": _get_field(message, "total_ascent"),
+        "total_descent_m": _get_field(message, "total_descent"),
+        "total_training_effect": _get_field(message, "total_training_effect"),
+        "avg_left_power_phase_start_deg": _get_field(message, "avg_left_power_phase"),
+        "avg_right_power_phase_start_deg": _get_field(message, "avg_right_power_phase"),
+        "avg_left_pco_mm": _get_field(message, "avg_left_pco"),
+        "avg_right_pco_mm": _get_field(message, "avg_right_pco"),
+        "avg_left_torque_effectiveness_pct": _get_field(message, "avg_left_torque_effectiveness"),
+        "avg_right_torque_effectiveness_pct": _get_field(message, "avg_right_torque_effectiveness"),
+        "avg_left_pedal_smoothness_pct": _get_field(message, "avg_left_pedal_smoothness"),
+        "avg_right_pedal_smoothness_pct": _get_field(message, "avg_right_pedal_smoothness"),
+    }
+    balance_raw = _get_field(message, "left_right_balance")
+    session["avg_left_power_pct"] = _decode_left_right_balance(balance_raw)
+    if session["avg_left_power_pct"] is not None:
+        session["avg_right_power_pct"] = round(100.0 - session["avg_left_power_pct"], 1)
+    session = {k: v for k, v in session.items() if v is not None}
+
+    # Variability Index
+    np_w = session.get("normalized_power_w")
+    avg_w = session.get("avg_power_w")
+    if np_w and avg_w and avg_w > 0:
+        session["variability_index"] = round(np_w / avg_w, 3)
+    return session
+
+
+def _primary_session_index(sessions: List[Dict]) -> int:
+    """Leg of a multisport file to analyse: the only cycling leg, else the longest."""
+    cycling = [i for i, s in enumerate(sessions) if s.get("sport") == "cycling"]
+    if len(cycling) == 1:
+        return cycling[0]
+    return max(
+        range(len(sessions)),
+        key=lambda i: sessions[i].get("total_elapsed_time_s") or 0,
+    )
+
+
+def _records_in_session(records: List[Dict], session: Dict) -> Optional[List[Dict]]:
+    """Records within the session's [start_time, start_time + elapsed) window.
+
+    Returns None when the window or any record timestamp cannot be determined.
+    """
+    start = _parse_fit_timestamp(session.get("start_time"))
+    elapsed = session.get("total_elapsed_time_s")
+    if start is None or not elapsed:
+        return None
+    end = start + datetime.timedelta(seconds=float(elapsed))
+    times = [_parse_fit_timestamp(r.get("timestamp")) for r in records]
+    if any(t is None for t in times):
+        return None
+    return [r for r, t in zip(records, times) if start <= t < end]
+
+
 def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     """Parse a FIT file and extract structured cycling data."""
     fit_bytes = _extract_fit_bytes(fit_bytes)
     fitfile = fitparse.FitFile(io.BytesIO(fit_bytes))
 
-    session: Dict[str, Any] = {}
+    sessions: List[Dict] = []
     laps: List[Dict] = []
     shifts: List[Dict] = []
     records: List[Dict] = []
@@ -1224,40 +1296,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
         # Session summary
         # ------------------------------------------------------------------
         if msg_type == "session":
-            session = {
-                "sport": _get_field(message, "sport"),
-                "sub_sport": _get_field(message, "sub_sport"),
-                "start_time": str(_get_field(message, "start_time") or ""),
-                "total_elapsed_time_s": _get_field(message, "total_elapsed_time"),
-                "total_timer_time_s": _get_field(message, "total_timer_time"),
-                "total_distance_m": _get_field(message, "total_distance"),
-                "total_calories": _get_field(message, "total_calories"),
-                "avg_speed_mps": _get_field(message, "enhanced_avg_speed", "avg_speed"),
-                "max_speed_mps": _get_field(message, "enhanced_max_speed", "max_speed"),
-                "avg_power_w": _get_field(message, "avg_power"),
-                "max_power_w": _get_field(message, "max_power"),
-                "normalized_power_w": _get_field(message, "normalized_power"),
-                "avg_cadence_rpm": _get_field(message, "avg_cadence"),
-                "max_cadence_rpm": _get_field(message, "max_cadence"),
-                "avg_heart_rate_bpm": _get_field(message, "avg_heart_rate"),
-                "max_heart_rate_bpm": _get_field(message, "max_heart_rate"),
-                "total_ascent_m": _get_field(message, "total_ascent"),
-                "total_descent_m": _get_field(message, "total_descent"),
-                "total_training_effect": _get_field(message, "total_training_effect"),
-                "avg_left_power_phase_start_deg": _get_field(message, "avg_left_power_phase"),
-                "avg_right_power_phase_start_deg": _get_field(message, "avg_right_power_phase"),
-                "avg_left_pco_mm": _get_field(message, "avg_left_pco"),
-                "avg_right_pco_mm": _get_field(message, "avg_right_pco"),
-                "avg_left_torque_effectiveness_pct": _get_field(message, "avg_left_torque_effectiveness"),
-                "avg_right_torque_effectiveness_pct": _get_field(message, "avg_right_torque_effectiveness"),
-                "avg_left_pedal_smoothness_pct": _get_field(message, "avg_left_pedal_smoothness"),
-                "avg_right_pedal_smoothness_pct": _get_field(message, "avg_right_pedal_smoothness"),
-            }
-            balance_raw = _get_field(message, "left_right_balance")
-            session["avg_left_power_pct"] = _decode_left_right_balance(balance_raw)
-            if session["avg_left_power_pct"] is not None:
-                session["avg_right_power_pct"] = round(100.0 - session["avg_left_power_pct"], 1)
-            session = {k: v for k, v in session.items() if v is not None}
+            sessions.append(_curate_session(message))
 
         # ------------------------------------------------------------------
         # Lap data
@@ -1428,20 +1467,41 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     # Post-parse enrichment
     # ------------------------------------------------------------------
 
-    # Variability Index for session
-    np_w = session.get("normalized_power_w")
-    avg_w = session.get("avg_power_w")
-    if np_w and avg_w and avg_w > 0:
-        session["variability_index"] = round(np_w / avg_w, 3)
+    # A multisport FIT file (triathlon, duathlon) has one session per leg,
+    # transitions included, while records and laps span every leg. Summarise
+    # one leg and run the record-based analytics on that leg's records only,
+    # so e.g. run records never enter the bike power curve.
+    multisport = len(sessions) > 1
+    analysis_records = records
+    if multisport:
+        analyzed_index = _primary_session_index(sessions)
+        session = dict(sessions[analyzed_index])
+        leg = f"leg {analyzed_index} ({session.get('sport', 'unknown')})"
+        analysis_records = _records_in_session(records, session)
+        if analysis_records is None:
+            analysis_records = records
+            analysis_note = (
+                f"Multisport file: session summarises {leg}, but record "
+                "timestamps or the session window are missing, so record-based "
+                "analyses cover all legs."
+            )
+        else:
+            analysis_note = (
+                f"Multisport file: session and record-based analyses (power "
+                f"curve, climbs, grade, HR drift, temperature) cover {leg} "
+                "only. See sessions for every leg."
+            )
+    else:
+        session = sessions[0] if sessions else {}
 
     shift_summary = _compute_shift_summary(shifts)
 
     # Record-based analytics (computed from per-second data regardless of include_records flag)
-    grade_stats = _grade_analysis(records) if records else None
-    hr_drift = _compute_hr_drift(records) if records else None
-    temp_stats = _compute_temperature_stats(records) if records else None
-    climbs = _detect_climbs(records) if records else []
-    pdc = _compute_power_duration_curve(records) if records else None
+    grade_stats = _grade_analysis(analysis_records) if analysis_records else None
+    hr_drift = _compute_hr_drift(analysis_records) if analysis_records else None
+    temp_stats = _compute_temperature_stats(analysis_records) if analysis_records else None
+    climbs = _detect_climbs(analysis_records) if analysis_records else []
+    pdc = _compute_power_duration_curve(analysis_records) if analysis_records else None
 
     if grade_stats:
         session["grade_analysis"] = grade_stats
@@ -1456,6 +1516,12 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
         "shift_summary": shift_summary,
         "shifts": shifts,
     }
+
+    if multisport:
+        result["multisport"] = True
+        result["sessions"] = sessions
+        result["analyzed_session_index"] = analyzed_index
+        result["analysis_note"] = analysis_note
 
     if climbs:
         result["climbs"] = climbs
@@ -1691,6 +1757,13 @@ def register_tools(app):
         - Temperature correlation: avg HR/power in hottest vs. coolest portions of ride
         - Power Duration Curve: best mean maximal power at 5s, 30s, 1min, 5min, 10min, 20min, 60min
         - Optional full per-second time series when include_records=True
+
+        Multisport files (triathlon, duathlon) contain one session per leg. For
+        these, the response adds multisport=true and a sessions list with every
+        leg; session and the record-based analyses (power curve, climbs, grade,
+        HR drift, temperature) describe one leg only — the cycling leg if there
+        is exactly one, else the longest — given by analyzed_session_index and
+        explained in analysis_note. Laps and records still cover all legs.
 
         Shift quality:
         - proactive: shifted at 70-100 rpm (ideal cadence range)

@@ -469,6 +469,119 @@ async def test_get_activity_fit_data_session_fields(app_with_activity_analysis, 
     assert data["session"]["avg_cadence_rpm"] == 83
     assert data["session"]["avg_left_pco_mm"] == 3
     assert data["session"]["avg_right_pco_mm"] == -8
+    assert "multisport" not in data
+    assert "sessions" not in data
+    assert "analyzed_session_index" not in data
+
+
+_TRI_START = datetime.datetime(2024, 6, 1, 8, 0, 0)
+
+# (sport, start offset s, duration s, record power W) for a run-bike-run brick:
+# 10 min run at 350 W, 1 min transition, 20 min bike at 200 W, 10 min run.
+_BRICK_LEGS = [
+    ("running", 0, 600, 350),
+    ("transition", 600, 60, None),
+    ("cycling", 660, 1200, 200),
+    ("running", 1860, 600, 350),
+]
+
+
+def _multisport_messages(legs=_BRICK_LEGS, with_timestamps=True):
+    """Records for every leg, then one session message per leg (FIT order)."""
+    messages = []
+    for _, offset, duration, power in legs:
+        for i in range(duration):
+            fields = {"heart_rate": 150}
+            if power is not None:
+                fields["power"] = power
+            if with_timestamps:
+                fields["timestamp"] = _TRI_START + datetime.timedelta(seconds=offset + i)
+            messages.append(_make_mock_fit_message("record", fields))
+    for sport, offset, duration, _ in legs:
+        messages.append(_make_mock_fit_message("session", {
+            "sport": sport,
+            "start_time": _TRI_START + datetime.timedelta(seconds=offset),
+            "total_elapsed_time": float(duration),
+            "avg_power": 200 if sport == "cycling" else None,
+        }))
+    return messages
+
+
+async def _call_fit_data(app, mock_garmin_client, messages):
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    mock_garmin_client.get_body_composition.return_value = None
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+    return json.loads(result[0][0].text)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_multisport_lists_every_session(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Each leg of a multisport file is reported; session is the bike leg."""
+    data = await _call_fit_data(
+        app_with_activity_analysis, mock_garmin_client, _multisport_messages()
+    )
+
+    assert data["multisport"] is True
+    assert [s["sport"] for s in data["sessions"]] == [
+        "running", "transition", "cycling", "running"
+    ]
+    assert data["sessions"][2]["start_time"] == "2024-06-01 08:11:00"
+    assert data["sessions"][2]["total_elapsed_time_s"] == 1200.0
+    assert data["analyzed_session_index"] == 2
+    assert data["session"]["sport"] == "cycling"
+    assert data["session"]["avg_power_w"] == 200
+    assert "leg 2 (cycling)" in data["analysis_note"]
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_multisport_power_curve_is_bike_only(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Run-leg power (350 W) does not leak into the bike power curve (200 W)."""
+    data = await _call_fit_data(
+        app_with_activity_analysis, mock_garmin_client, _multisport_messages()
+    )
+
+    pdc = data["power_duration_curve"]
+    assert pdc["5s"] == 200
+    assert pdc["20min"] == 200
+    assert "60min" not in pdc  # the bike leg is only 20 min long
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_multisport_without_timestamps_falls_back(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Without record timestamps, analyses keep covering all legs and say so."""
+    data = await _call_fit_data(
+        app_with_activity_analysis,
+        mock_garmin_client,
+        _multisport_messages(with_timestamps=False),
+    )
+
+    assert data["session"]["sport"] == "cycling"
+    assert data["power_duration_curve"]["5s"] == 350
+    assert "cover all legs" in data["analysis_note"]
+
+
+def test_primary_session_index_falls_back_to_longest_leg():
+    """With no single cycling leg, the longest leg is analysed."""
+    sessions = [
+        {"sport": "cycling", "total_elapsed_time_s": 900.0},
+        {"sport": "running", "total_elapsed_time_s": 2400.0},
+        {"sport": "cycling", "total_elapsed_time_s": 1800.0},
+    ]
+    assert activity_analysis._primary_session_index(sessions) == 1
+    assert activity_analysis._primary_session_index(
+        [{"sport": "swimming", "total_elapsed_time_s": 1200.0},
+         {"sport": "running", "total_elapsed_time_s": 600.0}]
+    ) == 0
 
 
 # ---------------------------------------------------------------------------
