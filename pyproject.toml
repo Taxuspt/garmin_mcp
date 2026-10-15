@@ -18,6 +18,12 @@ dependencies = [
     "fitparse>=1.2.0",
 ]
 
+[project.optional-dependencies]
+dashboard = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]
+
 [project.scripts]
 garmin-mcp = "garmin_mcp:main"
 garmin-mcp-auth = "garmin_mcp.auth_cli:main"
