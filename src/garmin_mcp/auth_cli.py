@@ -22,6 +22,7 @@ from garmin_mcp.token_utils import (
     resolve_token_path,
     secure_token_dir as _secure_token_dir,
 )
+from garmin_mcp.garmin_cn_compat import configure_garmin_region
 
 
 def get_mfa() -> str:
@@ -96,6 +97,7 @@ def _verify_saved_tokens(token_path: str, is_cn: bool = False) -> tuple[bool, st
     old_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
+        configure_garmin_region(is_cn)
         garmin = Garmin(is_cn=is_cn)
         # login() raises unless it can fetch the profile, so getting past it
         # means the tokens work. The profile's fullName may still be empty.
@@ -159,6 +161,7 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
     print(f"Email: {email}")
 
     try:
+        configure_garmin_region(is_cn)
         garmin = Garmin(email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True)
         # Exchange the credentials on the client directly. Garmin.login() with
         # no tokenstore falls back to $GARMINTOKENS and, if tokens load from
@@ -271,18 +274,19 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         return False
 
 
-def verify_tokens(token_path: str) -> bool:
+def verify_tokens(token_path: str, is_cn: bool = False) -> bool:
     """Verify existing tokens are valid.
 
     Args:
         token_path: Path to token directory
+        is_cn: Validate against Garmin Connect China instead of international
 
     Returns:
         bool: True if tokens are valid, False otherwise
     """
     print(f"\nVerifying tokens in '{token_path}'...")
 
-    info = get_token_info(token_path)
+    info = get_token_info(token_path, is_cn=is_cn)
 
     if not info["exists"]:
         print(f"✗ Tokens not found at: {info['expanded_path']}")
@@ -370,7 +374,7 @@ Examples:
 
     # Verify mode
     if args.verify:
-        success = verify_tokens(token_path)
+        success = verify_tokens(token_path, is_cn=is_cn)
         sys.exit(0 if success else 1)
 
     # Authenticate mode
