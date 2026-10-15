@@ -620,8 +620,9 @@ async def test_add_body_composition_tool(app_with_data_management, mock_garmin_c
         {"date": "2024-01-15", "weight": 70.0, "percent_fat": 15.0}
     )
     assert result is not None
+    # A date alone is recorded at 12:00 local (here the host's zone).
     mock_garmin_client.add_body_composition.assert_called_once_with(
-        "2024-01-15",
+        "2024-01-15T12:00:00",
         weight=70.0,
         percent_fat=15.0,
         percent_hydration=None,

@@ -10,6 +10,7 @@ services:
       - GARMIN_EMAIL=${GARMIN_EMAIL}
       - GARMIN_PASSWORD=${GARMIN_PASSWORD}
       # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
+      # - GARMIN_TZ=America/Los_Angeles  # Your time zone; the container runs in UTC
 
     # Option 2: Use file-based secrets (uncomment to use)
     # environment:

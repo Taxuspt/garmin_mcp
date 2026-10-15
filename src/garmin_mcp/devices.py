@@ -6,6 +6,8 @@ import json
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
+from garmin_mcp.local_time import format_epoch_ms
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -77,8 +79,9 @@ def register_tools(app):
             # Format last upload time if available
             upload_time_ms = device.get("lastUsedDeviceUploadTime")
             if upload_time_ms:
-                dt = datetime.datetime.fromtimestamp(upload_time_ms / 1000.0)
-                curated["last_upload_time"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+                # Explicit offset: a bare host-local time is silently UTC on
+                # a UTC server.
+                curated["last_upload_time"] = format_epoch_ms(upload_time_ms)
 
             # Add image URL if available
             if device.get("imageUrl"):
