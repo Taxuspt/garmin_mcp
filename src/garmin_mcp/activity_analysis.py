@@ -17,7 +17,7 @@ import io
 import json
 import os
 import zipfile
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from garmin_mcp.activity_management import sanitize_lap_distance
 
@@ -1091,27 +1091,35 @@ def _compute_temperature_stats(records: List[Dict]) -> Optional[Dict]:
 # Weight / W/kg lookup
 # ---------------------------------------------------------------------------
 
-def _get_rider_weight_kg(activity_date_str: str) -> Optional[float]:
-    """Fetch rider weight from Garmin body composition for the given date."""
+# Look this far back for a weigh-in: most people don't weigh in on ride days.
+_WEIGHT_LOOKBACK_DAYS = 90
+
+
+def _get_rider_weight_kg(activity_date_str: str) -> Optional[Tuple[float, str]]:
+    """Return (weight_kg, weigh_in_date) of the latest weigh-in on or before
+    the activity date, looking back up to _WEIGHT_LOOKBACK_DAYS days."""
     if garmin_client is None:
         return None
     try:
-        data = garmin_client.get_body_composition(activity_date_str)
-        if not data:
+        activity_date = datetime.date.fromisoformat(activity_date_str)
+        start_date = activity_date - datetime.timedelta(days=_WEIGHT_LOOKBACK_DAYS)
+        data = garmin_client.get_body_composition(
+            start_date.isoformat(), activity_date.isoformat()
+        )
+        weight_list = (data or {}).get("dateWeightList") or []
+        readings = [
+            (entry.get("calendarDate"), entry.get("weight"))
+            for entry in weight_list
+            if isinstance(entry, dict)
+        ]
+        readings = [
+            (day, weight_g) for day, weight_g in readings
+            if day and weight_g and day <= activity_date_str
+        ]
+        if not readings:
             return None
-        # Response is typically {"startDate": ..., "endDate": ..., "dateWeightList": [...]}
-        weight_list = data.get("dateWeightList") or data.get("totalAverage") and [data]
-        if not weight_list:
-            # Try flat dict
-            weight_g = data.get("weight") or data.get("totalWeightInGrams")
-            if weight_g:
-                return round(weight_g / 1000.0, 2)
-            return None
-        # Find closest entry to the activity date
-        for entry in reversed(weight_list):
-            weight_g = entry.get("weight") or entry.get("totalWeightInGrams")
-            if weight_g:
-                return round(weight_g / 1000.0, 2)
+        day, weight_g = max(readings)
+        return round(weight_g / 1000.0, 2), day
     except Exception:
         pass
     return None
@@ -1840,7 +1848,8 @@ def register_tools(app):
           balance, torque effectiveness, pedal smoothness
         - Variability Index (NP / avg_power) per session and lap
         - Climb detection with VAM (vertical ascent rate), avg power/cadence/HR per climb,
-          and W/kg per climb (using auto-fetched body weight from Garmin)
+          and W/kg per climb (using the latest Garmin weigh-in on or before the ride,
+          up to 90 days back; rider_weight_date says which weigh-in was used)
         - Grade-correlated stats: avg power, cadence, HR broken down by terrain steepness
         - Grade comes from the device's per-record grade field when present; otherwise
           it is derived from altitude and distance (~100 m window). grade_source
@@ -1908,14 +1917,16 @@ def register_tools(app):
 
             parsed["activity_id"] = activity_id
 
-            # W/kg: fetch body weight matched to activity date
+            # W/kg: latest weigh-in on or before the activity date
             session = parsed.get("session") or {}
             start_time_str = session.get("start_time", "")
             activity_date = start_time_str[:10] if start_time_str else None
             if activity_date:
-                weight_kg = _get_rider_weight_kg(activity_date)
-                if weight_kg:
+                weight = _get_rider_weight_kg(activity_date)
+                if weight:
+                    weight_kg, weigh_in_date = weight
                     parsed["rider_weight_kg"] = weight_kg
+                    parsed["rider_weight_date"] = weigh_in_date
                     # W/kg for session avg power and NP
                     avg_w = session.get("avg_power_w")
                     np_w = session.get("normalized_power_w")

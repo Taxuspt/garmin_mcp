@@ -2023,3 +2023,63 @@ async def test_get_activity_fit_data_wrapped_lap_distance_is_nulled(app_with_act
     assert "total_distance_m" not in data["laps"][1]
     assert data["laps"][1]["distance_invalid"] is True
     assert data["laps"][1]["avg_heart_rate_bpm"] == 140
+
+
+# ---------------------------------------------------------------------------
+# W/kg body weight lookup
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_uses_latest_weigh_in_before_ride(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """W/kg uses the latest weigh-in on or before the ride, not only same-day ones."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": "2024-02-10", "weight": 72000},
+            {"calendarDate": "2024-02-27", "weight": 70000},
+            # After the ride: must not be used.
+            {"calendarDate": "2024-03-05", "weight": 68000},
+        ]
+    }
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "start_time": "2024-03-02 14:00:00",
+        "avg_power": 210,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([session_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    mock_garmin_client.get_body_composition.assert_called_once_with("2023-12-03", "2024-03-02")
+    assert data["rider_weight_kg"] == 70.0
+    assert data["rider_weight_date"] == "2024-02-27"
+    assert data["session"]["avg_w_per_kg"] == 3.0
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_without_weigh_ins_omits_w_per_kg(
+    app_with_activity_analysis, mock_garmin_client
+):
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "start_time": "2024-03-02 14:00:00",
+        "avg_power": 210,
+    })
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([session_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert "rider_weight_kg" not in data
+    assert "avg_w_per_kg" not in data["session"]
