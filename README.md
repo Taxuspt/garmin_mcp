@@ -587,6 +587,7 @@ Your Garmin Connect credentials are read from environment variables:
 - `GARMIN_PASSWORD_FILE`: Path to a file containing your Garmin Connect password
 - `GARMIN_IS_CN`: Set to `true` to use Garmin Connect China (garmin.cn) instead of the international version (default: `false`)
 - `GARMIN_FIT_DOWNLOAD_DIR`: Default directory for downloaded activity files. When set, skips the first-run setup prompt in `download_activity_file`.
+- `GARMIN_TZ`: Your IANA time zone (e.g. `America/Los_Angeles`). Write tools that take a date or local time (`add_body_composition`, `set_blood_pressure`) read it in this zone, and `get_device_last_used` reports times in it. Defaults to the server's time zone. Set it when the server runs in a different zone than you, e.g. in Docker (usually UTC) or a remote deployment; otherwise a date-only weigh-in can land on the wrong day.
 - `GARMIN_FIT_CONFIG`: Path to the persisted download-directory config file (default: `~/.garminconnect_fit_config.json`).
 
 File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
