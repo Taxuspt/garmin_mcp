@@ -30,6 +30,7 @@ jobs:
       run: uv sync
 
     - name: Run integration tests
+      id: tests
       run: uv run pytest tests/integration tests/unit -v --tb=short
       timeout-minutes: 5
 
@@ -37,8 +38,8 @@ jobs:
       if: always()
       run: |
         echo "Tests completed for Python ${{ matrix.python-version }}"
-        if [ $? -eq 0 ]; then
+        if [ "${{ steps.tests.outcome }}" = "success" ]; then
           echo "✅ All tests passed"
         else
-          echo "❌ Some tests failed"
+          echo "❌ Tests did not pass (outcome: ${{ steps.tests.outcome }})"
         fi
