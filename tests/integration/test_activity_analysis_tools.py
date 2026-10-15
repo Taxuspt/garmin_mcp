@@ -1870,6 +1870,123 @@ async def test_get_activity_fit_data_session_reads_enhanced_speed(app_with_activ
 
 
 # ---------------------------------------------------------------------------
+# Grade derived from altitude + distance when the device writes no grade
+# ---------------------------------------------------------------------------
+
+def _ride_messages(grade_field: bool, altitude: bool = True, distance: bool = True):
+    """1 Hz ride: 60 s flat, 400 s steady 6% climb at 5 m/s, 60 s flat.
+
+    A rear shift is logged mid-climb and another on the closing flat.
+    """
+    start = datetime.datetime(2024, 3, 2, 14, 0, 0)
+    gear_data = (53 << 24) | (2 << 16) | (17 << 8) | 4
+    messages = []
+    dist = alt = 0.0
+    for t in range(520):
+        on_climb = 60 <= t < 460
+        speed = 5.0 if on_climb else 8.0
+        grade = 6.0 if on_climb else 0.0
+        dist += speed
+        alt += speed * grade / 100
+        fields = {
+            "timestamp": start + datetime.timedelta(seconds=t),
+            "power": 280 if on_climb else 180,
+            "cadence": 75 if on_climb else 90,
+            "heart_rate": 160 if on_climb else 140,
+            "enhanced_speed": speed,
+        }
+        if altitude:
+            fields["enhanced_altitude"] = 100.0 + alt
+        if distance:
+            fields["distance"] = dist
+        if grade_field:
+            fields["grade"] = grade
+        messages.append(_make_mock_fit_message("record", fields))
+        if t in (300, 500):
+            messages.append(_make_mock_fit_message("event", {
+                "event": "rear_gear_change",
+                "gear_change_data": gear_data,
+                "timestamp": start + datetime.timedelta(seconds=t),
+            }))
+    return messages
+
+
+async def _fit_data_for(app, mock_garmin_client, messages):
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+    return json.loads(result[0][0].text)
+
+
+@pytest.mark.asyncio
+async def test_fit_data_derives_grade_when_device_writes_none(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """No record grade field: climbs, grade bins and shift terrain come from
+    altitude / distance instead of silently disappearing."""
+    data = await _fit_data_for(
+        app_with_activity_analysis, mock_garmin_client,
+        _ride_messages(grade_field=False),
+    )
+
+    assert data["grade_source"] == "derived"
+
+    assert len(data["climbs"]) == 1
+    climb = data["climbs"][0]
+    assert climb["avg_grade_pct"] == pytest.approx(6.0, abs=0.5)
+    assert climb["elevation_gain_m"] == pytest.approx(120, abs=10)
+
+    bins = data["session"]["grade_analysis"]
+    assert "flat" in bins
+    climbing_s = (
+        bins.get("gentle", {}).get("time_s", 0)
+        + bins.get("moderate", {}).get("time_s", 0)
+    )
+    assert climbing_s > 300
+
+    assert data["shifts"][0]["grade_at_shift_pct"] == pytest.approx(6.0, abs=0.5)
+    assert data["shifts"][1]["grade_at_shift_pct"] == pytest.approx(0.0, abs=0.5)
+    assert set(data["shift_summary"]["by_terrain"]) >= {"climbing", "flat"}
+
+
+@pytest.mark.asyncio
+async def test_fit_data_keeps_device_grade(app_with_activity_analysis, mock_garmin_client):
+    """Device grade present: used as-is and labelled as device grade."""
+    data = await _fit_data_for(
+        app_with_activity_analysis, mock_garmin_client,
+        _ride_messages(grade_field=True),
+    )
+
+    assert data["grade_source"] == "device"
+    assert data["climbs"][0]["avg_grade_pct"] == 6.0
+    assert data["climbs"][0]["max_grade_pct"] == 6.0
+    assert data["session"]["grade_analysis"]["moderate"]["time_s"] == 400
+    assert data["shifts"][0]["grade_at_shift_pct"] == 6.0
+    assert data["shifts"][1]["grade_at_shift_pct"] == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["altitude", "distance"])
+async def test_fit_data_no_grade_without_altitude_or_distance(
+    app_with_activity_analysis, mock_garmin_client, missing
+):
+    """Without altitude or distance there is nothing to derive grade from."""
+    data = await _fit_data_for(
+        app_with_activity_analysis, mock_garmin_client,
+        _ride_messages(grade_field=False, **{missing: False}),
+    )
+
+    assert "grade_source" not in data
+    assert "climbs" not in data
+    assert "grade_analysis" not in data["session"]
+    assert all("grade_at_shift_pct" not in s for s in data["shifts"])
+    assert "by_terrain" not in data["shift_summary"]
+
+
+# ---------------------------------------------------------------------------
 # Wrapped-around negative lap distance
 # ---------------------------------------------------------------------------
 

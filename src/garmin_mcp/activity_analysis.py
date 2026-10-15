@@ -716,6 +716,83 @@ def _record_seconds(records: List[Dict]) -> List[int]:
 
 
 # ---------------------------------------------------------------------------
+# Grade derivation (devices that don't write the record `grade` field)
+# ---------------------------------------------------------------------------
+
+# Derive grade over a distance window centred on each record: long enough to
+# smooth barometric/GPS altitude noise, short enough to follow real terrain.
+_GRADE_WINDOW_M = 100.0
+# Skip records whose window covers less distance than this (stopped, or the
+# very start of the ride) -- a tiny distance turns altitude noise into huge grades.
+_GRADE_MIN_SPAN_M = 20.0
+_GRADE_CLAMP_PCT = 40.0
+# Below this share of records carrying a device grade, treat it as absent.
+_MIN_DEVICE_GRADE_SHARE = 0.05
+
+
+def _derive_grades(records: List[Dict]) -> Optional[str]:
+    """Fill missing record grade_pct from altitude and cumulative distance.
+
+    Device-provided grade is kept when present on enough records. Otherwise
+    each record without a grade gets delta-altitude / delta-distance over a
+    _GRADE_WINDOW_M window centred on it, clamped to +/-_GRADE_CLAMP_PCT.
+
+    Returns "device" or "derived" for where record grades came from, or None
+    when no record ends up with a grade (e.g. no altitude or distance).
+    """
+    device_count = sum(1 for r in records if r.get("grade_pct") is not None)
+    if records and device_count >= _MIN_DEVICE_GRADE_SHARE * len(records):
+        return "device"
+
+    points = [
+        (i, float(r["distance_m"]), float(r["altitude_m"]))
+        for i, r in enumerate(records)
+        if r.get("distance_m") is not None and r.get("altitude_m") is not None
+    ]
+    half = _GRADE_WINDOW_M / 2
+    derived = 0
+    lo = hi = 0
+    for idx, dist, _alt in points:
+        while lo < len(points) - 1 and points[lo][1] < dist - half:
+            lo += 1
+        hi = max(hi, lo)
+        while hi + 1 < len(points) and points[hi + 1][1] <= dist + half:
+            hi += 1
+        span = points[hi][1] - points[lo][1]
+        if span < _GRADE_MIN_SPAN_M or records[idx].get("grade_pct") is not None:
+            continue
+        grade = (points[hi][2] - points[lo][2]) / span * 100
+        records[idx]["grade_pct"] = round(
+            max(-_GRADE_CLAMP_PCT, min(_GRADE_CLAMP_PCT, grade)), 2
+        )
+        derived += 1
+
+    if derived:
+        return "derived"
+    return "device" if device_count else None
+
+
+def _fill_shift_grades(shift_record_counts: List[tuple], records: List[Dict]) -> None:
+    """Set grade_at_shift_pct from the nearest preceding record with a grade.
+
+    shift_record_counts pairs each shift with how many records had been
+    parsed when it occurred. Shifts that already carry a grade are kept.
+    """
+    last_grades: List[Optional[float]] = []
+    last: Optional[float] = None
+    for rec in records:
+        if rec.get("grade_pct") is not None:
+            last = rec["grade_pct"]
+        last_grades.append(last)
+    for shift, n_records in shift_record_counts:
+        if "grade_at_shift_pct" in shift or n_records == 0:
+            continue
+        grade = last_grades[n_records - 1]
+        if grade is not None:
+            shift["grade_at_shift_pct"] = round(grade, 1)
+
+
+# ---------------------------------------------------------------------------
 # Climb detection + VAM
 # ---------------------------------------------------------------------------
 
@@ -1279,6 +1356,8 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     laps: List[Dict] = []
     shifts: List[Dict] = []
     records: List[Dict] = []
+    # (shift, number of records parsed before it) -- to fill derived grades
+    shift_record_counts: List[tuple] = []
     # R-R intervals from the FIT 'hrv' message type, paired with the timestamp
     # of the most recent record message so we can bucket them per lap later.
     # Requires "Log HRV" enabled on the watch AND a chest strap paired.
@@ -1384,6 +1463,7 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
 
                 shift_entry = {k: v for k, v in shift_entry.items() if v is not None}
                 shifts.append(shift_entry)
+                shift_record_counts.append((shift_entry, len(records)))
 
         # ------------------------------------------------------------------
         # Per-second records
@@ -1494,6 +1574,12 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     else:
         session = sessions[0] if sessions else {}
 
+    # Devices that don't write the record grade field: derive it from
+    # altitude + distance so climbs, grade bins and shift terrain still work.
+    grade_source = _derive_grades(records) if records else None
+    if grade_source == "derived":
+        _fill_shift_grades(shift_record_counts, records)
+
     shift_summary = _compute_shift_summary(shifts)
 
     # Record-based analytics (computed from per-second data regardless of include_records flag)
@@ -1528,6 +1614,9 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
 
     if pdc:
         result["power_duration_curve"] = pdc
+
+    if grade_source:
+        result["grade_source"] = grade_source
 
     # HRV (time-domain) — always include summary if R-R data exists.
     # Raw R-R array only included when include_records=True (can be large).
@@ -1753,6 +1842,9 @@ def register_tools(app):
         - Climb detection with VAM (vertical ascent rate), avg power/cadence/HR per climb,
           and W/kg per climb (using auto-fetched body weight from Garmin)
         - Grade-correlated stats: avg power, cadence, HR broken down by terrain steepness
+        - Grade comes from the device's per-record grade field when present; otherwise
+          it is derived from altitude and distance (~100 m window). grade_source
+          ("device" | "derived") says which
         - HR drift / cardiac drift coefficient (aerobic decoupling for rides ≥60 min)
         - Temperature correlation: avg HR/power in hottest vs. coolest portions of ride
         - Power Duration Curve: best mean maximal power at 5s, 30s, 1min, 5min, 10min, 20min, 60min
