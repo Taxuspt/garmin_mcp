@@ -635,7 +635,7 @@ def register_tools(app):
             activity_type_mapping = _get_activity_type_mapping()
 
             # Extract the current endurance score DTO
-            score_dto = endurance_data.get("enduranceScoreDTO", {})
+            score_dto = endurance_data.get("enduranceScoreDTO") or {}
 
             # Map classification number to label
             classification_labels = {
@@ -657,7 +657,7 @@ def register_tools(app):
             )
 
             # Process contributors with activity type names
-            raw_contributors = score_dto.get("contributors", [])
+            raw_contributors = score_dto.get("contributors") or []
             contributors = (
                 [_map_contributor(c, activity_type_mapping) for c in raw_contributors]
                 if raw_contributors
@@ -665,12 +665,13 @@ def register_tools(app):
             )
 
             # Process weekly breakdown from groupMap
-            group_map = endurance_data.get("groupMap", {})
+            group_map = endurance_data.get("groupMap") or {}
             weekly_breakdown = []
             for week_date, week_data in sorted(group_map.items()):
+                week_data = week_data or {}
                 week_contributors = [
                     _map_contributor(c, activity_type_mapping)
-                    for c in week_data.get("enduranceContributorDTOList", [])
+                    for c in week_data.get("enduranceContributorDTOList") or []
                 ]
                 weekly_breakdown.append(
                     {
