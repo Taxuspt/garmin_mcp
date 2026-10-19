@@ -175,6 +175,30 @@ async def test_get_course_details_error_is_caught(app_with_courses, mock_garmin_
 # --- download_course_gpx ---------------------------------------------------
 
 @pytest.mark.asyncio
+async def test_download_course_gpx_expands_small_numbers_to_decimal(
+    app_with_courses, mock_garmin_client, tmp_path
+):
+    """GPX 1.1 lat/lon/elevation are xsd:decimal, which excludes exponents."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseName": "Near the equator and prime meridian",
+        "geoPoints": [{"latitude": 0.00005, "longitude": -0.00005, "elevation": 0.000001}],
+        "coursePoints": [{"lat": -0.00000001, "lon": 0.00000001}],
+    }
+    path = tmp_path / "small_numbers.gpx"
+    result = await app_with_courses.call_tool(
+        "download_course_gpx", {"course_id": 888, "output_path": str(path)}
+    )
+    assert json.loads(_result_text(result))["status"] == "success"
+    ns = {"gpx": "http://www.topografix.com/GPX/1/1"}
+    root = ET.parse(path).getroot()
+    waypoint = root.find("gpx:wpt", ns)
+    point = root.find("gpx:trk/gpx:trkseg/gpx:trkpt", ns)
+    assert waypoint.attrib == {"lat": "-0.00000001", "lon": "0.00000001"}
+    assert point.attrib == {"lat": "0.00005", "lon": "-0.00005"}
+    assert point.find("gpx:ele", ns).text == "0.000001"
+
+
+@pytest.mark.asyncio
 async def test_download_course_gpx_success(app_with_courses, mock_garmin_client, tmp_path):
     """download_course_gpx formats a valid GPX 1.1 file and writes to disk."""
     mock_garmin_client.client.connectapi.return_value = {

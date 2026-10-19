@@ -28,6 +28,26 @@ def app_with_challenges(mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_completed_badge_challenge_description_matches_library_endpoint(
+    app_with_challenges, mock_garmin_client
+):
+    """The LLM contract must distinguish completed history from active challenges."""
+    from garminconnect import Garmin
+
+    client = Garmin()
+    client.connectapi = Mock(return_value=[])
+    mock_garmin_client.get_badge_challenges.side_effect = client.get_badge_challenges
+    await app_with_challenges.call_tool("get_badge_challenges", {})
+    client.connectapi.assert_called_once_with(
+        "/badgechallenge-service/badgeChallenge/completed",
+        params={"start": "1", "limit": "20"},
+    )
+    tool = next(tool for tool in await app_with_challenges.list_tools() if tool.name == "get_badge_challenges")
+    assert "completed and in-progress" not in tool.description
+    assert "get_non_completed_badge_challenges" in tool.description
+
+
+@pytest.mark.asyncio
 async def test_get_goals_active(app_with_challenges, mock_garmin_client):
     """Test get_goals tool returns active goals"""
     # Setup mock

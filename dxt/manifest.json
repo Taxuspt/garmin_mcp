@@ -241,7 +241,7 @@
     },
     {
       "name": "get_badge_challenges",
-      "description": "Get all badge challenges the user has joined (completed and in-progress)"
+      "description": "Get badge challenges the user has completed."
     },
     {
       "name": "get_blood_pressure",

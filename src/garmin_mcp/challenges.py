@@ -594,10 +594,10 @@ def register_tools(app):
 
     @app.tool()
     async def get_badge_challenges(start: int = 1, limit: int = 20) -> str:
-        """Get all badge challenges the user has joined (completed and in-progress)
+        """Get badge challenges the user has completed.
 
-        Returns the user's history of badge challenges including progress,
-        completion status, and earned dates.
+        Returns the completed badge-challenge history and earned dates. For
+        challenges still in progress, use get_non_completed_badge_challenges.
 
         Args:
             start: Starting index for pagination (starts at 1)

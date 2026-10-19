@@ -708,6 +708,49 @@ async def test_get_gear_tool(app_with_gear, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("total_activities", [0, 3])
+async def test_get_gear_preserves_activity_count_when_distance_is_null(
+    app_with_gear, mock_garmin_client, total_activities
+):
+    mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
+    mock_garmin_client.get_gear.return_value = [MOCK_GEAR[0]]
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_gear_defaults.return_value = []
+    mock_garmin_client.get_gear_stats.return_value = {
+        "totalActivities": total_activities, "totalDistance": None,
+    }
+    result = await app_with_gear.call_tool("get_gear", {})
+    gear = json.loads(result[0][0].text)["gear"][0]
+    assert gear["stats"] == {
+        "total_activities": total_activities, "total_distance_km": None,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 429, 503])
+async def test_get_gear_reports_partial_stats_failures(
+    app_with_gear, mock_garmin_client, status
+):
+    from garminconnect import GarminConnectConnectionError
+
+    mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
+    mock_garmin_client.get_gear.return_value = MOCK_GEAR[:2]
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_gear_defaults.return_value = []
+    error = f"API Error {status} - stats failed"
+    mock_garmin_client.get_gear_stats.side_effect = [
+        {"totalActivities": 10, "totalDistance": 1000},
+        GarminConnectConnectionError(error),
+    ]
+    result = await app_with_gear.call_tool("get_gear", {})
+    data = json.loads(result[0][0].text)
+    gear = {item["uuid"]: item for item in data["gear"]}
+    assert data["gear_count"] == 2
+    assert gear[MOCK_GEAR[0]["uuid"]]["stats"]["total_activities"] == 10
+    assert gear[MOCK_GEAR[1]["uuid"]]["stats_error"] == error
+
+
+@pytest.mark.asyncio
 async def test_get_gear_tool_default_activity_types(app_with_gear, mock_garmin_client):
     """Default activity types are labelled with Garmin's typeKey for the
     real typeId (3 is hiking, not swimming; 10 is road biking, ...)."""
