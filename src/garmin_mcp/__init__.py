@@ -34,6 +34,7 @@ from garmin_mcp import courses
 from garmin_mcp import activity_analysis
 from garmin_mcp import calendar_events
 from garmin_mcp.tool_annotations import annotations_for
+from garmin_mcp.tool_profiles import resolve_tool_profile
 
 
 def is_interactive_terminal() -> bool:
@@ -102,8 +103,12 @@ is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 # --- Tool filtering ---------------------------------------------------------
 # Optionally expose only a subset of tools, to reduce the context an LLM must
 # carry. No modules are removed; tools are simply not registered when filtered.
+#   GARMIN_TOOL_PROFILE   - built-in subset by area (see tool_profiles.py);
+#                           several may be combined with commas; "all" = default
 #   GARMIN_ENABLED_TOOLS  - comma-separated allowlist; if set, ONLY these register
 #   GARMIN_DISABLED_TOOLS - comma-separated denylist; ignored if an allowlist is set
+# With a profile the lists compose instead: the allowlist ADDS tools to the
+# profile and the denylist REMOVES tools from the result.
 # Tool names are case-insensitive. Unset = all tools register (default behaviour).
 def _parse_tool_set(value):
     if not value:
@@ -121,6 +126,11 @@ def _resolve_tool_filters():
         )
     disabled_tools = _parse_tool_set(os.getenv("GARMIN_DISABLED_TOOLS"))
     return enabled_tools, disabled_tools
+
+
+def _resolve_tool_profile():
+    """Read GARMIN_TOOL_PROFILE; None means every tool. Unknown names raise."""
+    return resolve_tool_profile(os.getenv("GARMIN_TOOL_PROFILE"))
 
 
 _VALID_TRANSPORTS = ("stdio", "streamable-http", "sse")
@@ -462,15 +472,21 @@ class _ToolFilter:
     attribute access (``run``, ``resource``, ...) passes through to the app.
     """
 
-    def __init__(self, app, enabled, disabled):
+    def __init__(self, app, enabled, disabled, profile=None):
         self._app = app
         self._enabled = enabled
         self._disabled = disabled
+        self._profile = profile  # None = every tool; else the profile's names
         self._seen = set()  # tool names encountered, for typo detection
         self._unannotated = set()
 
     def _allowed(self, name):
         name = name.lower()
+        if self._profile is not None:
+            # Profile first; the allowlist adds to it, the denylist removes.
+            return (
+                name in self._profile or name in self._enabled
+            ) and name not in self._disabled
         if self._enabled:
             return name in self._enabled
         return name not in self._disabled
@@ -505,7 +521,10 @@ class _ToolFilter:
 
     def unknown_filter_names(self):
         """Configured names that never matched a real tool (likely typos)."""
-        configured = self._enabled or self._disabled
+        if self._profile is not None:
+            configured = self._enabled | self._disabled
+        else:
+            configured = self._enabled or self._disabled
         return sorted(configured - self._seen)
 
     def unannotated_tool_names(self):
@@ -689,6 +708,7 @@ def main():
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     #   GARMIN_MCP_STATELESS_HTTP - true to run streamable-http without sessions
     try:
+        profile_tools = _resolve_tool_profile()
         enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
         stateless_http = _resolve_stateless_http()
@@ -732,8 +752,17 @@ def main():
         port=http_port,
         stateless_http=stateless_http,
     )
-    app = _ToolFilter(fastmcp, enabled_tools, disabled_tools)
-    if enabled_tools:
+    app = _ToolFilter(fastmcp, enabled_tools, disabled_tools, profile_tools)
+    if profile_tools is not None:
+        profile_name = os.getenv("GARMIN_TOOL_PROFILE", "").strip().lower()
+        print(
+            f"Tool profile: {profile_name} ({len(profile_tools)} tool(s))"
+            + (f", plus {len(enabled_tools)} from the allowlist" if enabled_tools else "")
+            + (f", minus the {len(disabled_tools)} in the denylist" if disabled_tools else "")
+            + ".",
+            file=sys.stderr,
+        )
+    elif enabled_tools:
         print(f"Tool filter: allowlist of {len(enabled_tools)} tool(s).", file=sys.stderr)
     elif disabled_tools:
         print(f"Tool filter: denylist of {len(disabled_tools)} tool(s).", file=sys.stderr)

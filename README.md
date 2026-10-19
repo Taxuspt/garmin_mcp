@@ -115,20 +115,54 @@ If you need any of these endpoints, please [open an issue](https://github.com/Ta
 
 ## Tool Filtering
 
-This server registers 110+ tools by default, which can be a lot of context for
-an LLM to carry in every session. You can expose only the tools you need with
-two optional environment variables:
+This server registers 155 tools by default, which is a lot of context for an
+LLM to carry in every session. You can expose only the tools you need with
+three optional environment variables:
 
 | Env var | Effect |
 |---|---|
-| `GARMIN_ENABLED_TOOLS` | Comma-separated **allowlist** — if set, *only* these tools are registered. |
-| `GARMIN_DISABLED_TOOLS` | Comma-separated **denylist** — listed tools are skipped. Ignored if an allowlist is set. |
+| `GARMIN_TOOL_PROFILE` | A built-in subset by area: `minimal`, `health`, `activities`, `workouts`, `training`, `nutrition`, or `all` (the default). Combine several with commas, e.g. `health,training`. |
+| `GARMIN_ENABLED_TOOLS` | Comma-separated **allowlist** — if set, *only* these tools are registered. With a profile, these are **added** to it instead. |
+| `GARMIN_DISABLED_TOOLS` | Comma-separated **denylist** — listed tools are skipped. Ignored if an allowlist is set, unless a profile is also set; then it removes tools from the profile. |
 
-Tool names are case-insensitive. With neither variable set, all tools register
+Tool names are case-insensitive. With none of them set, all tools register
 (unchanged default behaviour). Names that match no tool are ignored with a
-warning on stderr, which makes typos easy to spot.
+warning on stderr, which makes typos easy to spot. An unknown profile name
+stops the server at startup with the list of known profiles.
 
-Example — expose only sleep, stress, and recent activities:
+### Profiles
+
+| Profile | Tools | What it covers |
+|---|---:|---|
+| `minimal` | 20 | Recent activities with splits, daily stats, sleep, HRV, stress, body battery, training readiness and status |
+| `health` | 53 | Every health_wellness tool plus weight, body composition, blood pressure, hydration, women's health, fitness age, HRV and respiration trends |
+| `activities` | 41 | Activity list, detail, splits and edits; FIT analysis and power curve; gear; courses |
+| `workouts` | 26 | Workout library, upload, schedule and delete; the high-level builders; the calendar |
+| `training` | 38 | Training status, load, effect, VO2max, FTP, lactate threshold, endurance and hill scores, readiness, recovery time, personal records, race predictions, goals, badges |
+| `nutrition` | 23 | Food log, custom foods, daily nutrition settings, hydration, energy balance |
+
+Every profile also includes the identity and unit tools (`get_full_name`, `get_heart_rate_zones`, `get_unit_system`, `get_user_profile`, `get_userprofile_settings`), so the
+client can label the numbers it gets back.
+
+Example — a coaching session that needs training metrics and the workout tools:
+
+```json
+"env": {
+  "GARMIN_TOOL_PROFILE": "training,workouts"
+}
+```
+
+Example — the health profile plus recent activities, without the write tools:
+
+```json
+"env": {
+  "GARMIN_TOOL_PROFILE": "health",
+  "GARMIN_ENABLED_TOOLS": "get_activities,get_activity",
+  "GARMIN_DISABLED_TOOLS": "add_weigh_in,add_weigh_in_with_timestamps,delete_weigh_ins,add_body_composition,add_hydration_data,set_blood_pressure"
+}
+```
+
+Example — hand-pick tools without a profile:
 
 ```json
 "env": {
