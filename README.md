@@ -511,9 +511,10 @@ Trying to login to Garmin Connect using token data from directory '/home/you/.ga
 #### Notes
 
 - **No silent fallback.** If `GARMINTOKENS` points at a directory with no valid
-  tokens, startup fails with `GarminConnectAuthenticationError` rather than
-  falling back to the default store. A misconfigured second server cannot
-  silently reuse the first account's session.
+  tokens and login fails, the server logs the failure and tool calls fail;
+  HTTP `/readyz` remains unavailable (503). The server does not switch to the
+  default token store, so a misconfigured second server cannot silently reuse
+  the first account's session.
 - **`${HOME}` is expanded** even when an MCP client passes it through
   unresolved, and `~` works on Windows via `USERPROFILE`.
 - **Restrict write tools on secondary accounts.** Tools such as
@@ -857,10 +858,10 @@ docker compose up -d
 
 If you have multi-factor authentication (MFA) enabled on your Garmin account:
 
-1. Run the container in interactive mode:
+1. Run the authentication CLI with the service's token volume:
 
 ```bash
-docker compose run --rm garmin-mcp
+docker compose run --rm --entrypoint garmin-mcp-auth garmin-mcp
 ```
 
 2. When prompted, enter your MFA code:
@@ -1044,7 +1045,7 @@ garmin-mcp-auth --token-path ~/.garmin_tokens
 
 #### Alternative: Manual First Run
 
-You can also authenticate by running the server once interactively:
+You can provide credentials from files to the authentication CLI:
 
 ```bash
 # Store credentials in files for security
@@ -1052,9 +1053,9 @@ echo "your_email@example.com" > ~/.garmin_email
 echo "your_password" > ~/.garmin_password
 chmod 600 ~/.garmin_email ~/.garmin_password
 
-# Run server interactively to authenticate
+# Run the authentication CLI before starting the server
 GARMIN_EMAIL_FILE=~/.garmin_email GARMIN_PASSWORD_FILE=~/.garmin_password \
-  uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp
+  uvx --python 3.12 --from git+https://github.com/Taxuspt/garmin_mcp garmin-mcp-auth
 
 # Enter MFA code when prompted
 # Tokens will be saved automatically
@@ -1086,7 +1087,7 @@ If using Docker, follow the [Handling MFA with Docker](#handling-mfa-with-docker
 
 #### Troubleshooting MFA
 
-**Error: "MFA authentication required but no interactive terminal available"**
+**Error: "MFA required; run 'garmin-mcp-auth' before starting the server."**
 
 Solution:
 1. Open terminal
