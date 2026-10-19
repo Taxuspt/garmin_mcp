@@ -792,6 +792,21 @@ def main():
             status_code, body = _readiness(pending_client)
             return JSONResponse(body, status_code=status_code)
 
+        # Optional shared secret (#339). Without it the endpoint is open, which
+        # is fine on loopback and dangerous anywhere else.
+        from garmin_mcp import http_auth
+
+        http_token = http_auth.resolve_http_token()
+        if http_token:
+            http_auth.install_http_bearer_auth(fastmcp, http_token)
+            print(
+                "HTTP requests must send 'Authorization: Bearer <GARMIN_MCP_HTTP_TOKEN>'; "
+                "/healthz and /readyz stay open.",
+                file=sys.stderr,
+            )
+        elif not http_auth.is_loopback(http_host):
+            print(http_auth.exposure_warning(http_host, http_port), file=sys.stderr)
+
         mode = " (stateless)" if stateless_http and transport == "streamable-http" else ""
         print(
             f"Serving MCP over {transport}{mode} on {http_host}:{http_port}",
