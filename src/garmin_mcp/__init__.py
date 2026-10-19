@@ -73,30 +73,42 @@ def _normalize_optional_user_config(value: str | None, key: str) -> str | None:
     return None if value == unresolved_placeholder else value
 
 
-# Get credentials from environment
-email = os.environ.get("GARMIN_EMAIL")
-email_file = os.environ.get("GARMIN_EMAIL_FILE")
-if email and email_file:
-    raise ValueError(
-        "Must only provide one of GARMIN_EMAIL and GARMIN_EMAIL_FILE, got both"
-    )
-elif email_file:
-    with open(email_file, "r") as email_file:
-        email = email_file.read().rstrip()
+# --- Credentials and token locations ----------------------------------------
+# Read when main() or init_api() runs, not at import time, so importing the
+# package (tests, garmin-mcp-auth, the DXT tool generator) has no side effects
+# and a bad environment fails with a message instead of an import traceback.
+#   GARMIN_EMAIL / GARMIN_EMAIL_FILE       - one of the two, never both
+#   GARMIN_PASSWORD / GARMIN_PASSWORD_FILE - one of the two, never both
+#   GARMINTOKENS / GARMINTOKENS_BASE64     - token locations (see token_utils)
+#   GARMIN_IS_CN                           - true/1/yes for garmin.cn
+def _read_secret_env(name: str) -> str | None:
+    """Return $NAME, or the contents of the file named by $NAME_FILE."""
+    value = os.environ.get(name)
+    file_path = os.environ.get(f"{name}_FILE")
+    if value and file_path:
+        raise ValueError(f"Must only provide one of {name} and {name}_FILE, got both")
+    if file_path:
+        try:
+            with open(file_path, "r") as fh:
+                return fh.read().rstrip()
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot read {name}_FILE '{file_path}': {exc.strerror or exc}"
+            ) from exc
+    return value
 
-password = os.environ.get("GARMIN_PASSWORD")
-password_file = os.environ.get("GARMIN_PASSWORD_FILE")
-if password and password_file:
-    raise ValueError(
-        "Must only provide one of GARMIN_PASSWORD and GARMIN_PASSWORD_FILE, got both"
-    )
-elif password_file:
-    with open(password_file, "r") as password_file:
-        password = password_file.read().rstrip()
 
-tokenstore = token_utils.get_token_path()
-tokenstore_base64 = token_utils.get_token_base64_path()
-is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
+def load_credentials() -> tuple[str | None, str | None]:
+    """Read the Garmin email and password from the environment.
+
+    Raises ValueError when a variable and its _FILE twin are both set, or
+    when a referenced file cannot be read.
+    """
+    return _read_secret_env("GARMIN_EMAIL"), _read_secret_env("GARMIN_PASSWORD")
+
+
+def _resolve_is_cn() -> bool:
+    return os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
 
 # --- Tool filtering ---------------------------------------------------------
@@ -517,8 +529,18 @@ class _ToolFilter:
 # ---------------------------------------------------------------------------
 
 
-def init_api(email, password):
-    """Initialize Garmin API with your credentials."""
+def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=None):
+    """Initialize Garmin API with your credentials.
+
+    tokenstore, tokenstore_base64 and is_cn default to the environment
+    (GARMINTOKENS, GARMINTOKENS_BASE64, GARMIN_IS_CN), read when this runs.
+    """
+    if tokenstore is None:
+        tokenstore = token_utils.get_token_path()
+    if tokenstore_base64 is None:
+        tokenstore_base64 = token_utils.get_token_base64_path()
+    if is_cn is None:
+        is_cn = _resolve_is_cn()
 
     # Claude Desktop may leave blank optional user_config values as literal
     # placeholders. Do not mistake those strings for credentials and trigger a
@@ -689,6 +711,7 @@ def main():
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     #   GARMIN_MCP_STATELESS_HTTP - true to run streamable-http without sessions
     try:
+        email, password = load_credentials()
         enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
         stateless_http = _resolve_stateless_http()
