@@ -372,22 +372,24 @@ def _curate_training_effect(
     summary = _as_dict(activity.get("summaryDTO"))
     aerobic = _first_present(
         summary, "trainingEffect", "aerobicTrainingEffect"
-    ) or _first_present(activity, "aerobicTrainingEffect", "trainingEffect")
-    anaerobic = _first_present(summary, "anaerobicTrainingEffect") or _first_present(
-        activity, "anaerobicTrainingEffect"
     )
-    label = _first_present(summary, "trainingEffectLabel") or _first_present(
-        activity, "trainingEffectLabel", "aerobicTrainingEffectMessage"
-    )
-    recovery = _first_present(summary, "recoveryTime") or _first_present(
-        activity, "recoveryTime"
-    )
-    load = _first_present(summary, "activityTrainingLoad") or _first_present(
-        activity, "activityTrainingLoad"
-    )
-    performance = _first_present(summary, "performanceCondition") or _first_present(
-        activity, "performanceCondition"
-    )
+    if aerobic is None:
+        aerobic = _first_present(activity, "aerobicTrainingEffect", "trainingEffect")
+    anaerobic = _first_present(summary, "anaerobicTrainingEffect")
+    if anaerobic is None:
+        anaerobic = _first_present(activity, "anaerobicTrainingEffect")
+    label = _first_present(summary, "trainingEffectLabel")
+    if label is None:
+        label = _first_present(activity, "trainingEffectLabel", "aerobicTrainingEffectMessage")
+    recovery = _first_present(summary, "recoveryTime")
+    if recovery is None:
+        recovery = _first_present(activity, "recoveryTime")
+    load = _first_present(summary, "activityTrainingLoad")
+    if load is None:
+        load = _first_present(activity, "activityTrainingLoad")
+    performance = _first_present(summary, "performanceCondition")
+    if performance is None:
+        performance = _first_present(activity, "performanceCondition")
     curated = {
         "activity_id": activity_id,
         "source": source,
@@ -455,7 +457,7 @@ def _get_activity_type_mapping() -> Dict[int, str]:
             if at.get("typeId") is not None
         }
     except Exception:
-        _activity_type_cache = {}
+        return {}
 
     return _activity_type_cache
 
@@ -581,9 +583,15 @@ def register_tools(app):
                 next(iter(period_avg_score.values())) if period_avg_score else None
             )
 
-            # Get the most recent daily score (first in list)
-            daily_scores = hill_score_data.get("hillScoreDTOList", [])
-            latest_score = daily_scores[0] if daily_scores else {}
+            # Select the most recent score independently of upstream ordering.
+            daily_scores = [
+                score for score in (hill_score_data.get("hillScoreDTOList") or [])
+                if isinstance(score, dict)
+            ]
+            latest_score = max(
+                daily_scores, key=lambda score: str(score.get("calendarDate") or ""),
+                default={},
+            )
 
             # Curate to essential fields only
             curated = {
@@ -820,7 +828,10 @@ def register_tools(app):
 
             # Optionally include the detailed HRV readings timeseries
             if return_timeseries:
-                readings = hrv_data.get("hrvReadings", [])
+                readings = [
+                    reading for reading in (hrv_data.get("hrvReadings") or [])
+                    if isinstance(reading, dict)
+                ]
                 curated["hrv_readings"] = [
                     {
                         "time": r.get("readingTimeLocal"),
@@ -1046,6 +1057,8 @@ def register_tools(app):
         """
         try:
             ftp_data = garmin_client.get_cycling_ftp()
+            if isinstance(ftp_data, list):
+                ftp_data = next((item for item in ftp_data if isinstance(item, dict)), None)
 
             if not ftp_data:
                 return "No cycling FTP data found"

@@ -1759,3 +1759,72 @@ async def test_get_training_status_handles_null_cycling_vo2(app_with_training, m
     data = json.loads(result[0][0].text)
     assert data["vo2_max"] == 52.5
     assert "cycling_vo2_max" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("summary", [None, {"lastNightAvg": 54}])
+async def test_hrv_timeseries_preserves_summary_with_null_readings(
+    app_with_training, mock_garmin_client, summary
+):
+    """Unmeasured readings do not discard the available HRV summary."""
+    mock_garmin_client.get_hrv_data.return_value = {
+        "hrvSummary": summary,
+        "hrvReadings": None,
+    }
+    result = await app_with_training.call_tool(
+        "get_hrv_data", {"date": "2024-01-15", "return_timeseries": True}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["date"] == "2024-01-15"
+    assert data["hrv_readings"] == []
+    assert data["readings_count"] == 0
+    if summary:
+        assert data["last_night_avg_hrv_ms"] == 54
+
+
+@pytest.mark.asyncio
+async def test_cycling_ftp_accepts_list_payload(app_with_training, mock_garmin_client):
+    """garminconnect 0.3.2 declares the latest FTP endpoint may return a list."""
+    mock_garmin_client.get_cycling_ftp.return_value = [MOCK_CYCLING_FTP]
+    result = await app_with_training.call_tool("get_cycling_ftp", {})
+    data = json.loads(result[0][0].text)
+    assert data["functional_threshold_power_watts"] == MOCK_CYCLING_FTP["functionalThresholdPower"]
+    assert data["sport"] == MOCK_CYCLING_FTP["sport"]
+
+
+@pytest.mark.asyncio
+async def test_hill_score_preserves_metrics_with_null_daily_scores(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_hill_score.return_value = {
+        "hillScoreDTOList": None, "periodAvgScore": None, "maxScore": 74,
+    }
+    result = await app_with_training.call_tool(
+        "get_hill_score", {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["max_score"] == 74
+    assert data["daily_scores"] == []
+    assert "latest_date" not in data
+
+
+@pytest.mark.asyncio
+async def test_hill_score_selects_latest_calendar_date(
+    app_with_training, mock_garmin_client
+):
+    """The latest score must not depend on upstream list order."""
+    mock_garmin_client.get_hill_score.return_value = {
+        "hillScoreDTOList": [
+            {"calendarDate": "2024-01-08", "overallScore": 40},
+            {"calendarDate": "2024-01-15", "overallScore": 55, "strengthScore": 60},
+            {"calendarDate": "2024-01-10", "overallScore": 45},
+        ]
+    }
+    result = await app_with_training.call_tool(
+        "get_hill_score", {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["latest_date"] == "2024-01-15"
+    assert data["latest_overall_score"] == 55
+    assert data["latest_strength_score"] == 60
+    assert len(data["daily_scores"]) == 3
