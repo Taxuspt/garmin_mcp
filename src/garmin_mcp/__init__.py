@@ -2,13 +2,17 @@
 Modular MCP Server for Garmin Connect Data
 """
 
+import asyncio
 import copy
+import functools
+import inspect
 import os
 import sys
 import base64
 import contextlib
 import threading
 
+import anyio
 import requests
 from mcp.server.fastmcp import FastMCP
 
@@ -454,6 +458,29 @@ def _resolve_stateless_http() -> bool:
     )
 
 
+def _off_event_loop(fn):
+    """Run a tool body on a worker thread so it cannot block the event loop.
+
+    Every tool is ``async def`` but awaits nothing: each calls the synchronous
+    garminconnect client through _GarminProxy, which joins a worker thread for
+    up to GARMIN_MCP_CALL_TIMEOUT. FastMCP awaits the tool coroutine on its
+    own event loop, so that join stalled every other request, including the
+    MCP ping, for the length of the Garmin call (#338). The coroutine is
+    driven to completion on a worker thread instead. The proxy's timeout is
+    unchanged, and tools keep their signature and docstring for the schema.
+    """
+    if not inspect.iscoroutinefunction(fn):
+        return fn
+
+    @functools.wraps(fn)
+    async def run_off_loop(*args, **kwargs):
+        return await anyio.to_thread.run_sync(
+            lambda: asyncio.run(fn(*args, **kwargs))
+        )
+
+    return run_off_loop
+
+
 class _ToolFilter:
     """Wraps a FastMCP app to conditionally register tools by function name.
 
@@ -498,7 +525,8 @@ class _ToolFilter:
                 else:
                     kwargs.setdefault("annotations", annotations)
                 decorator = self._app.tool(*args, **kwargs)
-                return decorator(fn)
+                decorator(_off_event_loop(fn))
+                return fn
             return fn  # skip registration; tool never reaches the LLM
 
         return wrapper
