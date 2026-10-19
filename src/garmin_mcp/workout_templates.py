@@ -146,7 +146,7 @@ TEMPO_RUN_TEMPLATE = {
 
 STRENGTH_CIRCUIT_TEMPLATE = {
     "workoutName": "Strength Circuit",
-    "description": "Strength training circuit: warmup, 3x circuit (work + rest), cooldown",
+    "description": "Warmup, 3 sets of bench press (10 reps) and pull-ups (8 reps) with 2 min rest, cooldown",
     "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
     "workoutSegments": [{
         "segmentOrder": 1,
@@ -276,7 +276,7 @@ WORKOUT_STRUCTURE_REFERENCE = {
         "1": {"sportTypeKey": "running"},
         "2": {"sportTypeKey": "cycling"},
         "3": {"sportTypeKey": "other"},
-        "4": {"sportTypeKey": "lap_swimming"},
+        "4": {"sportTypeKey": "swimming"},
         "5": {"sportTypeKey": "strength_training"},
         "6": {"sportTypeKey": "cardio_training"},
         "7": {"sportTypeKey": "yoga"},
@@ -330,8 +330,8 @@ def register_resources(app):
     async def get_strength_template() -> str:
         """Strength training circuit template
 
-        Circuit-style strength workout with repeat groups.
-        3 rounds of 10min work + 2min rest.
+        Warmup, 3 sets of bench press (10 reps) and 3 sets of pull-ups (8 reps),
+        with 2 min rest after each set, then cooldown.
         """
         return json.dumps(STRENGTH_CIRCUIT_TEMPLATE, indent=2)
 

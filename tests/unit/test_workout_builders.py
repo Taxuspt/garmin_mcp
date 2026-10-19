@@ -246,6 +246,7 @@ def test_build_run_interval_json_zero_recovery_omits_step():
     assert group["workoutSteps"][0]["stepType"]["stepTypeKey"] == "interval"
     # Cooldown numbering shifts up when there is no recovery child.
     assert cooldown["stepOrder"] == 4
+    assert "jog" not in result["description"]
 
 
 def test_build_run_interval_json_rejects_bad_inputs():
