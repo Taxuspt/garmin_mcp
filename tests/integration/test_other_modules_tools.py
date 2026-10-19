@@ -13,11 +13,16 @@ Total: 27 tools
 """
 import json
 import logging
+import requests
 
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
-from garminconnect import GarminConnectConnectionError
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 from garmin_mcp import (
     devices,
@@ -935,3 +940,63 @@ async def test_get_menstrual_calendar_data_chunking(app_with_womens_health, mock
 
     data = json.loads(result[0][0].text)
     assert data == [MOCK_MENSTRUAL_DATA, second_chunk]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("readback", [
+    GarminConnectTooManyRequestsError("rate limited"),
+    ValueError("Garmin returned an unexpected heart-rate-zone response"),
+    [],
+])
+async def test_heart_rate_zone_update_reports_committed_when_confirmation_fails(
+    app_with_user_profile, mock_garmin_client, readback
+):
+    mock_garmin_client.connectapi.side_effect = [HEART_RATE_ZONES, readback]
+    mock_garmin_client.client.request.return_value = Mock(status_code=204)
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "success"
+    assert data["write_committed"] is True
+    assert data["confirmation_error"]
+    assert data["submitted_configuration"]["sport"] == "CYCLING"
+    assert data["submitted_configuration"]["maxHeartRateUsed"] == 204
+    mock_garmin_client.client.request.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error, committed", [
+    (GarminConnectConnectionError("API Error 503 - gateway failed"), "unknown"),
+    (requests.exceptions.ReadTimeout("response timed out"), "unknown"),
+    (GarminConnectConnectionError("API Error 400 - invalid profile"), False),
+])
+async def test_heart_rate_zone_update_tracks_failed_write(
+    app_with_user_profile, mock_garmin_client, error, committed
+):
+    mock_garmin_client.connectapi.return_value = HEART_RATE_ZONES
+    mock_garmin_client.client.request.side_effect = error
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] == committed
+    assert data["stage"] == "garmin_request"
+    assert data["error_type"] == type(error).__name__
+    assert str(error) in data["message"]
+    assert data["correlation_id"]
+    mock_garmin_client.connectapi.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_heart_rate_zone_update_lookup_failure_reports_no_write(
+    app_with_user_profile, mock_garmin_client
+):
+    mock_garmin_client.connectapi.side_effect = GarminConnectAuthenticationError("expired token")
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert data["stage"] == "auth_refresh"
+    mock_garmin_client.client.request.assert_not_called()
