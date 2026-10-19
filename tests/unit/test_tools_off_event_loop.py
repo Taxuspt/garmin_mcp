@@ -47,7 +47,12 @@ async def test_blocking_tool_does_not_stall_other_tools(app):
     )
 
     assert [block[0].text for block in results] == ["slow", "fast"]
-    assert order == ["slow started", "fast ran", "slow finished"]
+    # Both bodies run on worker threads, so which one *starts* first is up to
+    # the scheduler. What must hold: fast_tool ran at all, and slow_tool only
+    # finished after it (the event is the only thing that releases it).
+    assert sorted(order) == ["fast ran", "slow finished", "slow started"]
+    assert order.index("fast ran") < order.index("slow finished")
+    assert order[-1] == "slow finished"
 
 
 async def test_tool_keeps_signature_docstring_and_return_value(app):
