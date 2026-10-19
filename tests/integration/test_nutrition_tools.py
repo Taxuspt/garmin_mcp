@@ -480,9 +480,10 @@ async def test_create_custom_food_forbidden_is_an_error(
         "create_custom_food",
         {"food_name": "Test", "calories": 100},
     )
-    assert result[0][0].text == (
-        "Error creating custom food: localized or non-English message | Response: "
-    )
+    data = json.loads(result[0][0].text)
+    assert data["message"] == "Error creating custom food: localized or non-English message"
+    assert data["write_committed"] is False
+    assert data["status"] == "error"
 
 
 @pytest.mark.asyncio
@@ -497,7 +498,10 @@ async def test_create_custom_food_forbidden_falls_back_to_status_in_message(
         "create_custom_food",
         {"food_name": "Test", "calories": 100},
     )
-    assert result[0][0].text == "Error creating custom food: API Error 403 - acceso denegado | Response: "
+    data = json.loads(result[0][0].text)
+    assert data["message"] == "Error creating custom food: API Error 403 - acceso denegado"
+    assert data["upstream_status"] == 403
+    assert data["write_committed"] is False
 
 
 # update_custom_food tests
@@ -637,9 +641,10 @@ async def test_update_custom_food_forbidden_is_an_error(
             "calories": 100,
         },
     )
-    assert result[0][0].text == (
-        "Error updating custom food: localized or non-English message | Response: "
-    )
+    data = json.loads(result[0][0].text)
+    assert data["message"] == "Error updating custom food: localized or non-English message"
+    assert data["write_committed"] is False
+    assert data["status"] == "error"
 
 
 @pytest.mark.asyncio
@@ -2195,3 +2200,38 @@ async def test_upsert_and_log_skips_null_search_metadata(app_with_nutrition, moc
     item = mock_garmin_client.client.put.call_args[1]["json"]["foodLogItems"][0]
     assert item["foodId"] == "food001"
     assert item["servingId"] == "srv001"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool, arguments", [
+    ("set_nutrition_daily_settings", {"date": "2024-01-15", "calorie_goal": 1800}),
+    ("create_custom_food", {"food_name": "Oats", "calories": 100}),
+    ("update_custom_food", {"food_id": "food001", "serving_id": "srv001", "food_name": "Greek Yogurt", "calories": 100}),
+    ("delete_custom_food", {"food_id": "food001"}),
+])
+@pytest.mark.parametrize("error_kind", ["gateway", "read_timeout", "rejection", "parse"])
+async def test_nutrition_library_writes_report_commit_status(
+    app_with_nutrition, mock_garmin_client, tool, arguments, error_kind
+):
+    import requests
+
+    errors = {
+        "gateway": GarminConnectConnectionError("API Error 504 - Gateway Time-out"),
+        "read_timeout": requests.exceptions.ReadTimeout("read timed out"),
+        "rejection": GarminConnectConnectionError("API Error 400 - rejected"),
+        "parse": requests.exceptions.JSONDecodeError("invalid JSON", "bad", 0),
+    }
+    mock_garmin_client.connectapi.return_value = (
+        deepcopy(_CURRENT_SETTINGS) if tool == "set_nutrition_daily_settings" else MOCK_CUSTOM_FOODS
+    )
+    write = mock_garmin_client.client.delete if tool == "delete_custom_food" else mock_garmin_client.client.put
+    write.side_effect = errors[error_kind]
+    result = await app_with_nutrition.call_tool(tool, arguments)
+    data = json.loads(result[0][0].text)
+    assert data["tool"] == tool
+    expected = True if error_kind == "parse" else False if error_kind == "rejection" else "unknown"
+    assert data["write_committed"] == expected
+    assert data["stage"] == ("response_parse" if error_kind == "parse" else "garmin_request")
+    write.assert_called_once()
+    if expected == "unknown":
+        assert "before retrying" in data["hint"]
