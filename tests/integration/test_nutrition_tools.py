@@ -1296,7 +1296,7 @@ async def test_delete_custom_food(app_with_nutrition, mock_garmin_client):
     food_id = "08b27145e29d41479e36d8d3788fcccf"
     result = await app_with_nutrition.call_tool(
         "delete_custom_food",
-        {"food_id": food_id},
+        {"confirm": True, "food_id": food_id},
     )
     assert "success" in result[0][0].text
     assert food_id in result[0][0].text
@@ -1311,7 +1311,7 @@ async def test_delete_custom_food_error(app_with_nutrition, mock_garmin_client):
     mock_garmin_client.client.delete.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool(
         "delete_custom_food",
-        {"food_id": "08b27145e29d41479e36d8d3788fcccf"},
+        {"confirm": True, "food_id": "08b27145e29d41479e36d8d3788fcccf"},
     )
     assert "Error deleting custom food" in result[0][0].text
 
@@ -1324,7 +1324,7 @@ async def test_delete_food_log(app_with_nutrition, mock_garmin_client):
     mock_garmin_client.client.delete.return_value = {}
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": "581f7dc8797f421f8d7eea83e5d2c939", "meal_date": "2024-01-15"}
+        {"confirm": True, "log_id": "581f7dc8797f421f8d7eea83e5d2c939", "meal_date": "2024-01-15"}
     )
     assert "success" in result[0][0].text
     assert "581f7dc8797f421f8d7eea83e5d2c939" in result[0][0].text
@@ -1340,7 +1340,7 @@ async def test_delete_food_log_error(app_with_nutrition, mock_garmin_client):
     mock_garmin_client.client.delete.side_effect = Exception("API error")
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": "99001", "meal_date": "2024-01-15"}
+        {"confirm": True, "log_id": "99001", "meal_date": "2024-01-15"}
     )
     assert "Error deleting food log" in result[0][0].text
 
@@ -1353,7 +1353,7 @@ async def test_delete_food_log_not_found(app_with_nutrition, mock_garmin_client)
     )
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": "-1", "meal_date": "2024-01-15"},
+        {"confirm": True, "log_id": "-1", "meal_date": "2024-01-15"},
     )
 
     data = json.loads(result[0][0].text)
@@ -1374,7 +1374,7 @@ async def test_delete_food_log_not_found_falls_back_to_status_in_message(
     )
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": "-1", "meal_date": "2024-01-15"},
+        {"confirm": True, "log_id": "-1", "meal_date": "2024-01-15"},
     )
 
     data = json.loads(result[0][0].text)
@@ -1635,7 +1635,7 @@ async def test_delete_food_log_accepts_hex_uuid(app_with_nutrition, mock_garmin_
     mock_garmin_client.client.delete.return_value = {}
     result = await app_with_nutrition.call_tool(
         "delete_food_log",
-        {"log_id": hex_log_id, "meal_date": "2024-01-15"}
+        {"confirm": True, "log_id": hex_log_id, "meal_date": "2024-01-15"}
     )
     assert "success" in result[0][0].text
     assert hex_log_id in result[0][0].text
@@ -2080,7 +2080,7 @@ async def test_delete_food_log_error_is_structured(app_with_nutrition, mock_garm
 
     mock_garmin_client.client.delete.side_effect = requests.exceptions.ConnectTimeout("no route")
     result = await app_with_nutrition.call_tool(
-        "delete_food_log", {"log_id": "581f7dc8797f421f8d7eea83e5d2c939", "meal_date": "2024-01-15"}
+        "delete_food_log", {"confirm": True, "log_id": "581f7dc8797f421f8d7eea83e5d2c939", "meal_date": "2024-01-15"}
     )
     data = json.loads(result[0][0].text)
     assert data["tool"] == "delete_food_log"
@@ -2195,3 +2195,50 @@ async def test_upsert_and_log_skips_null_search_metadata(app_with_nutrition, moc
     item = mock_garmin_client.client.put.call_args[1]["json"]["foodLogItems"][0]
     assert item["foodId"] == "food001"
     assert item["servingId"] == "srv001"
+
+
+@pytest.mark.asyncio
+async def test_delete_custom_food_previews_without_deleting(app_with_nutrition, mock_garmin_client):
+    mock_garmin_client.connectapi.return_value = MOCK_CUSTOM_FOODS
+    result = await app_with_nutrition.call_tool("delete_custom_food", {"food_id": "food001"})
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "needs_confirmation"
+    assert data["food"]["foodMetaData"]["foodName"] == "Greek Yogurt"
+    mock_garmin_client.client.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_food_log_previews_matching_nested_entry(app_with_nutrition, mock_garmin_client):
+    item = {"logId": "target", "foodName": "Oats", "calories": 100}
+    mock_garmin_client.connectapi.return_value = {
+        "mealDetails": [{"loggedFoods": [{"logId": "other", "foodName": "Rice"}, item]}],
+    }
+    result = await app_with_nutrition.call_tool("delete_food_log", {"log_id": "target", "meal_date": "2024-01-15"})
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "needs_confirmation"
+    assert data["entry"] == item
+    mock_garmin_client.client.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool, args", [
+    ("delete_custom_food", {"food_id": "missing"}),
+    ("delete_food_log", {"log_id": "missing", "meal_date": "2024-01-15"}),
+])
+async def test_food_delete_preview_not_found_never_deletes(app_with_nutrition, mock_garmin_client, tool, args):
+    mock_garmin_client.connectapi.return_value = {}
+    result = await app_with_nutrition.call_tool(tool, args)
+    assert json.loads(result[0][0].text)["status"] == "not_found"
+    mock_garmin_client.client.delete.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool, args", [
+    ("delete_custom_food", {"food_id": "food001"}),
+    ("delete_food_log", {"log_id": "target", "meal_date": "2024-01-15"}),
+])
+async def test_food_delete_preview_error_never_deletes(app_with_nutrition, mock_garmin_client, tool, args):
+    mock_garmin_client.connectapi.side_effect = GarminConnectConnectionError("API Error 401 - expired")
+    result = await app_with_nutrition.call_tool(tool, args)
+    assert "Error deleting" in result[0][0].text
+    mock_garmin_client.client.delete.assert_not_called()
