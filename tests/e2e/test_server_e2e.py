@@ -15,6 +15,7 @@ Or skip with: pytest -m "not e2e"
 
 import os
 import sys
+import json
 import pytest
 import asyncio
 from datetime import datetime
@@ -89,8 +90,8 @@ async def test_mcp_server_connection():
 @pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.timeout(30)
-async def test_list_activities_tool():
-    """Test the list_activities MCP tool with real API"""
+async def test_get_activities_tool():
+    """Test the get_activities MCP tool with real API"""
     server_params = _build_server_params()
 
     try:
@@ -99,18 +100,22 @@ async def test_list_activities_tool():
                 async with ClientSession(read, write) as session:
                     await session.initialize()
 
-                    # Test list_activities
+                    # Test the registered recent-activities tool.
                     result = await session.call_tool(
-                        "list_activities",
-                        arguments={"limit": 2}
+                        "get_activities",
+                        arguments={"start": 0, "limit": 2}
                     )
 
                     # Verify result
                     assert result is not None
+                    assert not result.isError, result.content
                     assert len(result.content) > 0
+                    text = result.content[0].text
+                    if text != "No activities found.":
+                        assert "activities" in json.loads(text)
 
                     # Print result for debugging
-                    print(f"\nlist_activities result preview:")
+                    print(f"\nget_activities result preview:")
                     print(result.content[0].text[:500] + "...")
     except asyncio.TimeoutError:
         pytest.fail("Tool execution timed out - check your Garmin credentials and network")
@@ -165,20 +170,18 @@ async def test_multiple_tools():
 
                     # Test multiple tools
                     tools_to_test = [
-                        ("list_activities", {"limit": 1}),
+                        ("get_activities", {"start": 0, "limit": 1}),
                         ("get_steps_data", {"date": today}),
                         ("get_user_profile", {}),
                     ]
 
                     for tool_name, args in tools_to_test:
-                        try:
-                            result = await session.call_tool(tool_name, arguments=args)
-                            assert result is not None
-                            print(f"\n✓ {tool_name} succeeded")
-                        except Exception as e:
-                            print(f"\n✗ {tool_name} failed: {str(e)}")
-                            # Don't fail the test for individual tool failures
-                            # Some tools may not have data available
+                        result = await session.call_tool(tool_name, arguments=args)
+                        assert result is not None
+                        assert not result.isError, result.content
+                        assert result.content
+                        assert not result.content[0].text.startswith("Error"), result.content
+                        print(f"\n✓ {tool_name} succeeded")
     except asyncio.TimeoutError:
         pytest.fail("Multiple tools test timed out - check your Garmin credentials and network")
 
