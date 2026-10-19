@@ -11,8 +11,20 @@ garmin_client = None
 MENSTRUAL_CALENDAR_MAX_DAYS = 92
 
 
+def _unique_items(items: List[Any]) -> List[Any]:
+    """Keep identical JSON records once, preserving their first occurrence."""
+    seen = set()
+    unique = []
+    for item in items:
+        key = json.dumps(item, sort_keys=True)
+        if key not in seen:
+            unique.append(item)
+            seen.add(key)
+    return unique
+
+
 def _stitch_menstrual_chunks(chunks: List[Any]) -> Any:
-    """Combine chunked menstrual calendar responses without changing shape."""
+    """Combine list-shaped responses; retain other payloads grouped by chunk."""
     if len(chunks) == 1:
         return chunks[0]
 
@@ -20,7 +32,7 @@ def _stitch_menstrual_chunks(chunks: List[Any]) -> Any:
         stitched = []
         for chunk in chunks:
             stitched.extend(chunk)
-        return stitched
+        return _unique_items(stitched)
 
     if all(isinstance(chunk, dict) for chunk in chunks) and all(
         isinstance(value, list)
@@ -31,7 +43,7 @@ def _stitch_menstrual_chunks(chunks: List[Any]) -> Any:
         for chunk in chunks:
             for key, value in chunk.items():
                 stitched.setdefault(key, []).extend(value)
-        return stitched
+        return {key: _unique_items(items) for key, items in stitched.items()}
 
     return chunks
 
@@ -77,6 +89,8 @@ def register_tools(app):
 
         Automatically chunks requests longer than 92 days, Garmin's
         server-side limit, and stitches the responses together.
+        Identical records spanning a chunk boundary are returned once for list
+        and dict-of-list responses. Other payload shapes are returned per chunk.
         
         Args:
             start_date: Start date in YYYY-MM-DD format
