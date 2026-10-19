@@ -208,6 +208,22 @@ def _find_custom_food(food_id: str, food_name: str) -> Optional[dict]:
     return None
 
 
+def _validate_meal_datetime(meal_date: str, meal_time: str) -> None:
+    """Validate the local clock fields before matching string meal windows."""
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", meal_date):
+        raise ValueError("meal_date must be a valid date in YYYY-MM-DD format")
+    try:
+        datetime.date.fromisoformat(meal_date)
+    except ValueError:
+        raise ValueError("meal_date must be a valid date in YYYY-MM-DD format") from None
+    if not re.fullmatch(r"[0-9]{2}:[0-9]{2}:[0-9]{2}", meal_time):
+        raise ValueError("meal_time must be a valid time in HH:MM:SS format")
+    try:
+        datetime.time.fromisoformat(meal_time)
+    except ValueError:
+        raise ValueError("meal_time must be a valid time in HH:MM:SS format") from None
+
+
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
@@ -461,14 +477,20 @@ def register_tools(app):
             if not data:
                 return "No foods found."
 
-            raw_results = data.get("results", []) if isinstance(data, dict) else []
+            raw_results = (data.get("results") or []) if isinstance(data, dict) else []
             has_more = bool(data.get("moreDataAvailable", False)) if isinstance(data, dict) else False
 
             results = []
             for item in raw_results:
-                meta = item.get("foodMetaData", {})
+                if not isinstance(item, dict):
+                    continue
+                meta = item.get("foodMetaData")
+                if not isinstance(meta, dict):
+                    continue
                 servings = []
-                for s in item.get("nutritionContents", []):
+                for s in (item.get("nutritionContents") or []):
+                    if not isinstance(s, dict):
+                        continue
                     serving: dict = {
                         "serving_id": s.get("servingId"),
                         "serving_unit": s.get("servingUnit"),
@@ -905,6 +927,8 @@ def register_tools(app):
         try:
             from datetime import datetime, timezone
 
+            _validate_meal_datetime(meal_date, meal_time)
+
             meals_url = f"/nutrition-service/meals/{meal_date}"
             meals_data = garmin_client.connectapi(meals_url)
             meals = (meals_data or {}).get("meals", [])
@@ -985,6 +1009,8 @@ def register_tools(app):
         tracker = WriteTracker("log_food", "Error logging food")
         try:
             from datetime import datetime, timezone
+
+            _validate_meal_datetime(meal_date, meal_time)
 
             meals_url = f"/nutrition-service/meals/{meal_date}"
             meals_data = garmin_client.connectapi(meals_url)
@@ -1120,6 +1146,8 @@ def register_tools(app):
         tracker = WriteTracker("upsert_and_log", "Error in upsert_and_log")
         try:
             from datetime import datetime, timezone
+
+            _validate_meal_datetime(meal_date, meal_time)
 
             # 1. Search for existing custom food
             search_data = garmin_client.connectapi(
