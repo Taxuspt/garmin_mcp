@@ -83,8 +83,13 @@ _TARGET_FIELD_LAYOUTS = {
 
 def _iter_step_tree(step: dict, path: str):
     """Yield a workout step and every nested step with its request path."""
+    if not isinstance(step, dict):
+        raise ValueError(f"{path} must be an object")
     yield step, path
-    for index, nested in enumerate(step.get('workoutSteps', [])):
+    nested_steps = step.get('workoutSteps', [])
+    if not isinstance(nested_steps, list):
+        raise ValueError(f"{path}.workoutSteps must be a list")
+    for index, nested in enumerate(nested_steps):
         yield from _iter_step_tree(
             nested,
             f"{path}.workoutSteps[{index}]",
@@ -93,10 +98,17 @@ def _iter_step_tree(step: dict, path: str):
 
 def _iter_workout_steps(workout_data: dict):
     """Yield every workout step with a stable request path."""
-    for segment_index, segment in enumerate(
-        workout_data.get('workoutSegments', [])
-    ):
-        for step_index, step in enumerate(segment.get('workoutSteps', [])):
+    segments = workout_data.get('workoutSegments', [])
+    if not isinstance(segments, list):
+        raise ValueError("workoutSegments must be a list")
+    for segment_index, segment in enumerate(segments):
+        segment_path = f"workoutSegments[{segment_index}]"
+        if not isinstance(segment, dict):
+            raise ValueError(f"{segment_path} must be an object")
+        steps = segment.get('workoutSteps', [])
+        if not isinstance(steps, list):
+            raise ValueError(f"{segment_path}.workoutSteps must be a list")
+        for step_index, step in enumerate(steps):
             path = (
                 f"workoutSegments[{segment_index}]"
                 f".workoutSteps[{step_index}]"
@@ -183,9 +195,13 @@ def _fix_hr_zone_step(step: dict) -> None:
         else ''
     )
 
-    if target_key == 'heart.rate.zone' and 'zoneNumber' not in step:
+    if target_key == 'heart.rate.zone' and step.get('zoneNumber') is None:
         zone = step.get('targetValueOne')
-        if zone is not None and 1 <= zone <= 5:
+        try:
+            zone = float(zone)
+        except (TypeError, ValueError):
+            zone = None
+        if zone is not None and zone.is_integer() and 1 <= zone <= 5:
             step['zoneNumber'] = int(zone)
             step.pop('targetValueOne', None)
             step.pop('targetValueTwo', None)
@@ -221,7 +237,7 @@ def _fix_repeat_group_step(step: dict) -> None:
         ):
             end_condition['conditionTypeId'] = 7
 
-    if 'numberOfIterations' not in step:
+    if step.get('numberOfIterations') is None:
         value = step.get('endConditionValue')
         if value is not None:
             step['numberOfIterations'] = int(value)
@@ -254,6 +270,13 @@ def _validate_end_condition_step(step: dict, path: str) -> None:
     if isinstance(end_condition, dict):
         condition_key = end_condition.get('conditionTypeKey')
         condition_id = end_condition.get('conditionTypeId')
+
+        if isinstance(condition_id, str):
+            try:
+                condition_id = int(condition_id)
+            except (TypeError, ValueError):
+                raise ValueError(f"{path}.endCondition.conditionTypeId must be numeric")
+            end_condition['conditionTypeId'] = condition_id
 
         expected_id = END_CONDITION_TYPE_IDS.get(condition_key)
         expected_key = END_CONDITION_TYPE_KEYS.get(condition_id)
@@ -301,6 +324,7 @@ def _validate_target_type_block(step: dict, path: str, target_field: str) -> Non
                 target_id = int(target_id)
             except (TypeError, ValueError):
                 raise ValueError(f"{path}.{target_field}.workoutTargetTypeId must be numeric")
+            target_type['workoutTargetTypeId'] = target_id
 
         valid_keys = KNOWN_TARGET_TYPE_IDS.get(target_id)
         if valid_keys is not None and target_key is not None and target_key not in valid_keys:
@@ -359,11 +383,17 @@ def _curate_workout_summary(workout: dict) -> dict:
     if workout.get('description'):
         summary['description'] = workout.get('description')
 
-    if workout.get('estimatedDuration'):
-        summary['estimated_duration_seconds'] = workout.get('estimatedDuration')
+    duration = workout.get('estimatedDurationInSecs')
+    if duration is None:
+        duration = workout.get('estimatedDuration')
+    if duration is not None:
+        summary['estimated_duration_seconds'] = duration
 
-    if workout.get('estimatedDistance'):
-        summary['estimated_distance_meters'] = workout.get('estimatedDistance')
+    distance = workout.get('estimatedDistanceInMeters')
+    if distance is None:
+        distance = workout.get('estimatedDistance')
+    if distance is not None:
+        summary['estimated_distance_meters'] = distance
 
     # Remove None values
     return {k: v for k, v in summary.items() if v is not None}
@@ -481,6 +511,10 @@ def _curate_step_target(
     unit = step.get(unit_field)
     if isinstance(unit, dict) and unit.get('unitKey'):
         curated[f'{prefix}target_value_unit'] = unit.get('unitKey')
+    elif target_key == 'pace.zone' and (
+        step.get(value_one_field) is not None or step.get(value_two_field) is not None
+    ):
+        curated[f'{prefix}target_value_unit'] = 'meters_per_second'
 
 
 def _curate_workout_step(step: dict) -> dict:
@@ -852,6 +886,10 @@ def register_tools(app):
 
         Rest-day UUIDs can resolve to a minimal record without a workout name
         or segments.
+
+        Pace target values are speeds in meters per second. target_value_low
+        and target_value_high preserve Garmin's targetValueOne/targetValueTwo
+        order; they are not sorted by magnitude.
 
         Args:
             workout_id: Workout ID (numeric) or UUID (for training plan workouts)
@@ -1369,7 +1407,7 @@ def register_tools(app):
             url = f"workout-service/schedule/{workout_id}"
             response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
 
-            if response.status_code == 200:
+            if 200 <= response.status_code < 300:
                 return json.dumps({
                     "status": "success",
                     "workout_id": workout_id,
@@ -1490,7 +1528,7 @@ def register_tools(app):
                 url = f"workout-service/schedule/{workout_id}"
                 response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
 
-                if response.status_code == 200:
+                if 200 <= response.status_code < 300:
                     entry = {
                         "status": "success",
                         "workout_id": workout_id,
