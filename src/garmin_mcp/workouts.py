@@ -921,6 +921,9 @@ def register_tools(app):
           Always include endCondition with conditionTypeId 7 and conditionTypeKey
           "iterations"; omitting conditionTypeId causes the API to silently corrupt
           the repeat count.
+        - stepOrder is one depth-first counter over the whole workout: a repeat
+          group takes the next number and its nested steps continue from there
+          (group 2, children 3 and 4, cooldown 5). Do not restart at 1 inside a group.
 
         IMPORTANT: Heart rate targets come in two forms:
         - Named zone (e.g. Zone 2): set targetType to "heart.rate.zone" and use "zoneNumber" (1-5).
@@ -1067,6 +1070,9 @@ def register_tools(app):
           Always include endCondition with conditionTypeId 7 and conditionTypeKey
           "iterations"; omitting conditionTypeId causes the API to silently corrupt
           the repeat count.
+        - stepOrder is one depth-first counter over the whole workout: a repeat
+          group takes the next number and its nested steps continue from there
+          (group 2, children 3 and 4, cooldown 5). Do not restart at 1 inside a group.
 
         IMPORTANT: For named heart rate zone targets, use "zoneNumber" (1-5), NOT targetValueOne/targetValueTwo.
         For custom heart-rate ranges, use targetType {"workoutTargetTypeId": 4,

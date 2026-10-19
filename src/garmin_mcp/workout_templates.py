@@ -69,11 +69,15 @@ INTERVAL_RUNNING_TEMPLATE = {
             {
                 "type": "RepeatGroupDTO",
                 "stepOrder": 2,
+                "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
                 "numberOfIterations": 6,
+                "smartRepeat": False,
+                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                "endConditionValue": 6.0,
                 "workoutSteps": [
                     {
                         "type": "ExecutableStepDTO",
-                        "stepOrder": 1,
+                        "stepOrder": 3,
                         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                         "description": "Fast 400m",
                         "endCondition": {"conditionTypeId": 3, "conditionTypeKey": "distance"},
@@ -82,7 +86,7 @@ INTERVAL_RUNNING_TEMPLATE = {
                     },
                     {
                         "type": "ExecutableStepDTO",
-                        "stepOrder": 2,
+                        "stepOrder": 4,
                         "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
                         "description": "Recovery 2 min",
                         "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -93,7 +97,7 @@ INTERVAL_RUNNING_TEMPLATE = {
             },
             {
                 "type": "ExecutableStepDTO",
-                "stepOrder": 3,
+                "stepOrder": 5,
                 "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
                 "description": "Cooldown 10 min",
                 "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -166,11 +170,15 @@ STRENGTH_CIRCUIT_TEMPLATE = {
             {
                 "type": "RepeatGroupDTO",
                 "stepOrder": 2,
+                "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
                 "numberOfIterations": 3,
+                "smartRepeat": False,
+                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                "endConditionValue": 3.0,
                 "workoutSteps": [
                     {
                         "type": "ExecutableStepDTO",
-                        "stepOrder": 1,
+                        "stepOrder": 3,
                         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                         "description": "Bench Press 10 reps",
                         "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
@@ -181,7 +189,7 @@ STRENGTH_CIRCUIT_TEMPLATE = {
                     },
                     {
                         "type": "ExecutableStepDTO",
-                        "stepOrder": 2,
+                        "stepOrder": 4,
                         "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
                         "description": "Rest 2 min",
                         "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -192,12 +200,16 @@ STRENGTH_CIRCUIT_TEMPLATE = {
             },
             {
                 "type": "RepeatGroupDTO",
-                "stepOrder": 3,
+                "stepOrder": 5,
+                "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
                 "numberOfIterations": 3,
+                "smartRepeat": False,
+                "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                "endConditionValue": 3.0,
                 "workoutSteps": [
                     {
                         "type": "ExecutableStepDTO",
-                        "stepOrder": 1,
+                        "stepOrder": 6,
                         "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                         "description": "Pull-ups 8 reps",
                         "endCondition": {"conditionTypeId": 10, "conditionTypeKey": "reps"},
@@ -208,7 +220,7 @@ STRENGTH_CIRCUIT_TEMPLATE = {
                     },
                     {
                         "type": "ExecutableStepDTO",
-                        "stepOrder": 2,
+                        "stepOrder": 7,
                         "stepType": {"stepTypeId": 5, "stepTypeKey": "rest"},
                         "description": "Rest 2 min",
                         "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -219,7 +231,7 @@ STRENGTH_CIRCUIT_TEMPLATE = {
             },
             {
                 "type": "ExecutableStepDTO",
-                "stepOrder": 4,
+                "stepOrder": 8,
                 "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
                 "description": "Cooldown stretch 5 min",
                 "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -235,8 +247,18 @@ WORKOUT_STRUCTURE_REFERENCE = {
     "description": "Reference guide for Garmin workout JSON structure",
     "step_types": {
         "ExecutableStepDTO": "Regular workout step (warmup, interval, cooldown, recovery, rest)",
-        "RepeatGroupDTO": "Repeat group containing nested steps with numberOfIterations"
+        "RepeatGroupDTO": (
+            "Repeat group containing nested steps with numberOfIterations. Give it "
+            "stepType 6 (repeat) and endCondition 7 (iterations) with "
+            "endConditionValue equal to numberOfIterations."
+        )
     },
+    "stepOrder": (
+        "One depth-first counter over the whole workout (1, 2, 3, ...). A "
+        "RepeatGroupDTO takes the next number and its nested steps continue the "
+        "count from there (group 2, children 3 and 4, next top-level step 5). "
+        "Never restart at 1 inside a group."
+    ),
     "stepType_values": {
         "1": {"stepTypeKey": "warmup", "description": "Warmup phase"},
         "2": {"stepTypeKey": "cooldown", "description": "Cooldown phase"},

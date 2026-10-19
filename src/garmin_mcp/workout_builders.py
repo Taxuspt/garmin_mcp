@@ -306,6 +306,13 @@ def build_walk_run_json(
     """Build the Garmin Connect JSON for a walk/run interval workout.
 
     Parameters match create_walk_run_workout exactly.
+
+    stepOrder is one depth-first counter over the whole workout, the way
+    Garmin Connect numbers its own workouts: the repeat group takes 2, its
+    children continue at 3 and 4, and the cooldown is 5. Restarting at 1
+    inside the group uploads cleanly but leaves duplicate step orders. The
+    group also carries the explicit repeat stepType and iterations
+    endCondition, as build_run_interval_json does.
     """
     zone = _zone_number(hr_zone)
     return {
@@ -331,11 +338,15 @@ def build_walk_run_json(
                 {
                     "type": "RepeatGroupDTO",
                     "stepOrder": 2,
+                    "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
                     "numberOfIterations": repeats,
+                    "smartRepeat": False,
+                    "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                    "endConditionValue": float(repeats),
                     "workoutSteps": [
                         {
                             "type": "ExecutableStepDTO",
-                            "stepOrder": 1,
+                            "stepOrder": 3,
                             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                             "description": f"Run {run_seconds}s Z{zone}",
                             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -345,7 +356,7 @@ def build_walk_run_json(
                         },
                         {
                             "type": "ExecutableStepDTO",
-                            "stepOrder": 2,
+                            "stepOrder": 4,
                             "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
                             "description": f"Walk {walk_seconds}s Z{zone}",
                             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -357,7 +368,7 @@ def build_walk_run_json(
                 },
                 {
                     "type": "ExecutableStepDTO",
-                    "stepOrder": 3,
+                    "stepOrder": 5,
                     "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
                     "description": f"Cooldown {cooldown_min} min",
                     "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -476,11 +487,14 @@ def build_strength_json(
             # what _sanitize_repeat_group enforces on the upload path: the Garmin
             # API silently corrupts a RepeatGroupDTO without a valid iterations
             # endCondition.
-            group_steps = [{**step, "stepOrder": 1}]
+            # Children continue the workout-wide stepOrder count after the
+            # group, as Garmin numbers its own workouts. Restarting at 1 in
+            # every group gave each multi-set exercise the same 1/2 orders.
+            group_steps = [{**step, "stepOrder": step_order + 1}]
             if rest_seconds > 0:
                 group_steps.append({
                     "type": "ExecutableStepDTO",
-                    "stepOrder": 2,
+                    "stepOrder": step_order + 2,
                     "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
                     "description": f"Rest {rest_seconds}s",
                     "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -494,9 +508,10 @@ def build_strength_json(
                 "numberOfIterations": sets,
                 "smartRepeat": False,
                 "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+                "endConditionValue": float(sets),
                 "workoutSteps": group_steps,
             })
-            step_order += 1
+            step_order += 1 + len(group_steps)
             # The in-group rest after the final set already separates this exercise
             # from the next one — no extra inter-exercise rest step.
             continue
