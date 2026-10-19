@@ -174,15 +174,25 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         _secure_token_dir(token_path)
         print(f"\n✓ OAuth tokens saved to: {token_path}")
 
-        # Save tokens as base64
-        token_json_path = os.path.join(token_path, "garmin_tokens.json")
-        with open(token_json_path, "r") as f:
-            token_data = f.read()
-        token_base64 = base64.b64encode(token_data.encode()).decode()
-        with open(token_base64_path, "w") as token_file:
-            token_file.write(token_base64)
-        os.chmod(token_base64_path, 0o600)
-        print(f"✓ OAuth tokens (base64) saved to: {token_base64_path}")
+        # The directory is the login source. An optional base64 export failure
+        # must not skip verification or invalidate the saved directory tokens.
+        try:
+            token_json_path = os.path.join(token_path, "garmin_tokens.json")
+            with open(token_json_path, "r") as f:
+                token_data = f.read()
+            token_base64 = base64.b64encode(token_data.encode()).decode()
+            with open(token_base64_path, "w") as token_file:
+                # A permission failure must occur before secrets are written.
+                os.chmod(token_base64_path, 0o600)
+                token_file.write(token_base64)
+        except OSError as e:
+            print(
+                f"WARNING: OAuth tokens were saved to '{token_path}', but the optional "
+                f"base64 export to '{token_base64_path}' failed: {e}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"✓ OAuth tokens (base64) saved to: {token_base64_path}")
 
         # Verify tokens work with an independent token-based login. The login
         # above runs with return_on_mfa=True, which skips profile loading, so a
@@ -191,9 +201,13 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         # printing "Logged in as: None" and exiting 0.
         is_valid, name_or_err = _verify_saved_tokens(token_path, is_cn)
         if not is_valid:
-            print(f"\n✗ Authentication failed: saved tokens do not authenticate", file=sys.stderr)
+            print(
+                f"\n✗ OAuth tokens were saved to '{token_path}', but loading the "
+                "profile/settings from the saved tokens failed.",
+                file=sys.stderr,
+            )
             print(f"  {name_or_err}", file=sys.stderr)
-            print("  Garmin may be rate-limiting your IP — wait a few minutes and retry.", file=sys.stderr)
+            print("  Token files were retained. Resolve the reported error and retry loading them.", file=sys.stderr)
             return False
 
         print(f"✓ Authentication successful!")

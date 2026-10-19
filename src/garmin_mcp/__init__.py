@@ -598,24 +598,43 @@ def init_api(email, password):
                 f"Oauth tokens stored in '{tokenstore}' directory for future use. (first method)\n",
                 file=sys.stderr,
             )
-            # Encode Oauth1 and Oauth2 tokens to base64 string and save to file for next login (alternative way)
-            token_json_path = os.path.join(tokenstore, "garmin_tokens.json")
-            with open(token_json_path, "r") as f:
-                token_data = f.read()
-            token_base64 = base64.b64encode(token_data.encode()).decode()
-            with open(tokenstore_base64, "w") as token_file:
-                token_file.write(token_base64)
-            os.chmod(tokenstore_base64, 0o600)
-            print(
-                f"Oauth tokens encoded as base64 string and saved to '{tokenstore_base64}' file for future use. (second method)\n",
-                file=sys.stderr,
-            )
+            # The directory above is the login source; base64 is only an
+            # optional export and must not prevent loading the saved tokens.
+            try:
+                token_json_path = os.path.join(tokenstore, "garmin_tokens.json")
+                with open(token_json_path, "r") as f:
+                    token_data = f.read()
+                token_base64 = base64.b64encode(token_data.encode()).decode()
+                with open(tokenstore_base64, "w") as token_file:
+                    # Secure the optional file before writing bearer tokens.
+                    os.chmod(tokenstore_base64, 0o600)
+                    token_file.write(token_base64)
+            except OSError as err:
+                print(
+                    f"WARNING: OAuth tokens were saved to '{tokenstore}', but the optional "
+                    f"base64 export to '{tokenstore_base64}' failed: {err}",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"Oauth tokens encoded as base64 string and saved to '{tokenstore_base64}' file for future use. (second method)\n",
+                    file=sys.stderr,
+                )
             # The early-return login above does not load the profile or unit
             # settings (display_name stays None, so tools that build URLs from
             # it fail). Log in again from the saved tokens to load them, which
             # also points token refreshes at the token directory.
-            garmin = Garmin(is_cn=is_cn)
-            garmin.login(tokenstore)
+            try:
+                garmin = Garmin(is_cn=is_cn)
+                garmin.login(tokenstore)
+            except Exception as err:
+                print(
+                    f"ERROR: OAuth tokens were saved to '{tokenstore}', but loading the "
+                    f"profile/settings from the saved tokens failed: {err}\n"
+                    "The token files were retained; the server has no initialized client.",
+                    file=sys.stderr,
+                )
+                return None
         except (
             FileNotFoundError,
             GarminConnectConnectionError,
