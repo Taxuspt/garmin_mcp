@@ -2,7 +2,7 @@
 
 ## Overview
 
-This is a Model Context Protocol (MCP) server that connects to Garmin Connect and exposes fitness and health data to Claude and other MCP-compatible clients. The server provides 122 tools organized into 15 functional modules.
+This is a Model Context Protocol (MCP) server that connects to Garmin Connect and exposes fitness and health data to Claude and other MCP-compatible clients. The server provides 157 tools organized into 16 functional modules. `scripts/generate_dxt_tools.py` registers the modules with a mocked client to produce the tool list in `dxt/manifest.json`.
 
 ## Critical: Garmin API Integration
 
@@ -10,12 +10,14 @@ This is a Model Context Protocol (MCP) server that connects to Garmin Connect an
 
 ### When Debugging or Implementing New Tools
 
-**ALWAYS reference the python-garminconnect repository and these two files:**
+**Read the installed version of python-garminconnect in `.venv/lib/python*/site-packages/garminconnect/` first.** Its `__init__.py`, `client.py`, and `fit.py` are the source of truth for available methods, signatures, request payloads, and response handling. Upstream examples can describe a newer version than this project uses.
+
+For supplementary examples, consult the python-garminconnect repository:
 
 1. **[example.py](https://github.com/cyberjunky/python-garminconnect/blob/master/example.py)** - Contains examples for many available API endpoints
 2. **[demo.py](https://github.com/cyberjunky/python-garminconnect/blob/master/demo.py)** - Comprehensive demo with 100+ API methods organized by category
 
-These files are your source of truth for:
+Check these against the installed library when looking for:
 - **Available API endpoints** - Check if a method actually exists in the library
 - **Correct method signatures** - Verify parameter names and types
 - **Expected output formats** - See what data structure each endpoint returns
@@ -28,9 +30,9 @@ Currently using: `garminconnect==0.3.2` (see [pyproject.toml](pyproject.toml))
 ### Important Note
 
 Not all Garmin Connect API endpoints have corresponding methods in python-garminconnect. Before implementing a new tool:
-1. Check [example.py](https://github.com/cyberjunky/python-garminconnect/blob/master/example.py)
-2. Check [demo.py](https://github.com/cyberjunky/python-garminconnect/blob/master/demo.py)
-3. Search the [library source code](https://github.com/cyberjunky/python-garminconnect/blob/master/garminconnect/__init__.py)
+1. Search the installed library source for the method and read its implementation.
+2. Check [example.py](https://github.com/cyberjunky/python-garminconnect/blob/master/example.py) and [demo.py](https://github.com/cyberjunky/python-garminconnect/blob/master/demo.py) for supplementary examples.
+3. Verify that any examples apply to the pinned version.
 
 If a method doesn't exist in python-garminconnect, you'll need to either:
 - Use an alternative method that provides similar data
@@ -46,13 +48,17 @@ src/garmin_mcp/
 ├── activity_analysis.py        # Activity analysis and FIT file parsing
 ├── activity_management.py      # Activity CRUD operations
 ├── auth_cli.py                 # Pre-authentication CLI (garmin-mcp-auth)
+├── calendar_events.py          # Calendar events and scheduled activities
 ├── challenges.py               # Challenges and badges
 ├── courses.py                  # Course management
 ├── data_management.py          # Data upload/download operations
 ├── devices.py                  # Device information
 ├── gear_management.py          # Gear tracking
 ├── health_wellness.py          # Health metrics (steps, HR, sleep, etc.)
+├── http_auth.py                # Bearer authentication for HTTP transports
 ├── nutrition.py                # Nutrition and food logging
+├── tool_annotations.py         # MCP tool behavior annotations
+├── tool_profiles.py            # Named subsets of registered tools
 ├── token_utils.py              # OAuth token management utilities
 ├── training.py                 # Training and performance metrics
 ├── user_profile.py             # User account information
@@ -60,21 +66,31 @@ src/garmin_mcp/
 ├── womens_health.py            # Women's health tracking
 ├── workout_builders.py         # Programmatic workout creation
 ├── workout_templates.py        # Workout template helpers
-└── workouts.py                 # Workout management
+├── workouts.py                 # Workout management
+└── write_errors.py             # Write outcome tracking and retry guidance
 
 tests/
-├── integration/                # 224 tests with mocked Garmin API
+├── unit/                       # Helpers, server configuration, auth, packaging
+├── fixtures/                   # Shared mock API responses and captured payloads
+├── integration/                # Tool calls with mocked Garmin API
 │   ├── test_activity_analysis_tools.py
 │   ├── test_activity_management_tools.py
+│   ├── test_calendar_events_tools.py
 │   ├── test_challenges_tools.py
+│   ├── test_courses_tools.py
 │   ├── test_health_wellness_tools.py
 │   ├── test_nutrition_tools.py
 │   ├── test_other_modules_tools.py
 │   ├── test_training_tools.py
 │   ├── test_workout_builders_tools.py
 │   └── test_workouts_tools.py
-└── e2e/                        # 9 end-to-end tests (require real credentials)
-    └── test_server_e2e.py
+└── e2e/                        # Live tests; require real credentials and may write
+    ├── test_brand_and_micros_live.py
+    ├── test_delete_custom_food_live.py
+    ├── test_delete_food_log_live.py
+    ├── test_nested_workout_target_values_live.py
+    ├── test_server_e2e.py
+    └── test_upsert_dedup_and_update_merge_live.py
 ```
 
 ## Architecture
@@ -135,7 +151,7 @@ This saves OAuth tokens to `~/.garminconnect` so the MCP server can start withou
 
 ### Adding a New Tool
 
-1. **Check python-garminconnect first**: Verify the method exists in [example.py](https://github.com/cyberjunky/python-garminconnect/blob/master/example.py) or [demo.py](https://github.com/cyberjunky/python-garminconnect/blob/master/demo.py)
+1. **Check python-garminconnect first**: Read the method in the installed, pinned library and verify its signature and payload handling.
 
 2. **Choose the correct module**: Add the tool to the appropriate module based on functionality
 
@@ -168,19 +184,17 @@ All tools should:
 
 ## Testing
 
-The project has comprehensive test coverage:
-
-**224 integration tests** - Test all MCP tools with mocked Garmin API
+Unit and integration tests run offline with mocked Garmin clients. Obtain the current test count with `uv run pytest tests/unit tests/integration --collect-only -q`.
 
 ```bash
-# Run all integration tests
-uv run pytest tests/integration/ -v
+# Run the offline suite
+uv run pytest tests/unit tests/integration -q -p no:cacheprovider
 
 # Run specific module tests
 uv run pytest tests/integration/test_health_wellness_tools.py -v
 ```
 
-**9 end-to-end tests** - Test with real MCP server and Garmin API (requires credentials)
+**End-to-end tests** use the real MCP server and Garmin API. They are deselected by default, require credentials, and can create or delete foods, food logs, and workouts. Run them only when explicitly requested:
 
 ```bash
 uv run pytest tests/e2e/ -m e2e -v
@@ -267,13 +281,11 @@ All tools return `str` (MCP requirement). Complex objects are returned as JSON s
 
 ### Method doesn't exist in garminconnect
 
-**Always check [example.py](https://github.com/cyberjunky/python-garminconnect/blob/master/example.py) and [demo.py](https://github.com/cyberjunky/python-garminconnect/blob/master/demo.py) first!**
-
-If the method you're trying to use isn't documented there, it likely doesn't exist in the library.
+Search the installed library source first. Examples in the upstream repository may target a different version and do not list every method.
 
 ### Unexpected output format
 
-Check the example files to see what the actual API returns. The Garmin API can return different structures than expected.
+Read the installed method's response handling and check captured fixtures. The Garmin API can return different structures than expected; a mocked reproduction verifies local handling without contacting Garmin.
 
 ### Authentication issues
 
@@ -286,7 +298,7 @@ Check logs at:
 ## Key Dependencies
 
 - `garminconnect==0.3.2` - Garmin Connect API wrapper
-- `mcp>=1.23.0` - Model Context Protocol SDK
+- `mcp>=1.28.1,<2` - Model Context Protocol SDK
 - `fitparse>=1.2.0` - FIT file parsing for activity analysis
 - `python-dotenv==1.2.2` - Environment variable management
 - `requests==2.33.0` - HTTP client
