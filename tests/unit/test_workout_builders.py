@@ -15,7 +15,13 @@ SNAPSHOT_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "captur
 
 
 def test_build_walk_run_json_matches_poc_snapshot():
-    """The walk/run builder must produce the exact JSON that Garmin accepted in the POC."""
+    """The walk/run builder must produce exactly the snapshot JSON.
+
+    The snapshot is the POC payload Garmin accepted, updated for #420 so the
+    repeat group has Garmin's own shape: workout-wide depth-first stepOrder
+    (children 3 and 4, cooldown 5) plus the explicit repeat stepType and
+    iterations endCondition.
+    """
     result = build_walk_run_json(
         name="POC Walk/Run 7x1m/3m Z3",
         run_seconds=60,
@@ -402,3 +408,146 @@ def test_strength_rejects_empty_category():
                 name="Bad",
                 exercises=[{"name": "Back Squat", "sets": 1, "reps": 1, "category": bad}],
             )
+
+
+# ---------------------------------------------------------------------------
+# stepOrder numbering (#420)
+#
+# Garmin numbers steps with one depth-first counter over the whole workout: a
+# RepeatGroupDTO takes the next number and its children continue from there.
+# Restarting at 1 inside a group uploads cleanly but leaves the workout with
+# duplicate step orders, and every group needs the explicit repeat stepType
+# and iterations endCondition that the upload path's sanitizer expects.
+# ---------------------------------------------------------------------------
+
+from garmin_mcp.workout_templates import (  # noqa: E402
+    INTERVAL_RUNNING_TEMPLATE,
+    SIMPLE_RUN_TEMPLATE,
+    STRENGTH_CIRCUIT_TEMPLATE,
+    TEMPO_RUN_TEMPLATE,
+)
+
+
+def _walk_steps(steps):
+    for step in steps:
+        yield step
+        yield from _walk_steps(step.get("workoutSteps", []))
+
+
+def _all_steps(workout):
+    return [
+        step
+        for segment in workout["workoutSegments"]
+        for step in _walk_steps(segment["workoutSteps"])
+    ]
+
+
+def _step_orders(workout):
+    return [step["stepOrder"] for step in _all_steps(workout)]
+
+
+def _assert_depth_first_numbering(workout):
+    orders = _step_orders(workout)
+    assert orders == list(range(1, len(orders) + 1)), orders
+    for group in _all_steps(workout):
+        if group["type"] != "RepeatGroupDTO":
+            continue
+        assert group["stepType"] == {"stepTypeId": 6, "stepTypeKey": "repeat"}
+        assert group["endCondition"] == {
+            "conditionTypeId": 7,
+            "conditionTypeKey": "iterations",
+        }
+        assert group["endConditionValue"] == float(group["numberOfIterations"])
+
+
+def test_build_walk_run_json_repeat_group_shape():
+    result = build_walk_run_json(
+        name="2:2 x5",
+        run_seconds=120,
+        walk_seconds=120,
+        repeats=5,
+        warmup_min=10,
+        cooldown_min=8,
+    )
+    warmup, group, cooldown = result["workoutSegments"][0]["workoutSteps"]
+    run, walk = group["workoutSteps"]
+    assert (warmup["stepOrder"], group["stepOrder"]) == (1, 2)
+    # Children continue after the group; the cooldown follows the children.
+    assert (run["stepOrder"], walk["stepOrder"], cooldown["stepOrder"]) == (3, 4, 5)
+    assert group["numberOfIterations"] == 5
+    assert group["endConditionValue"] == 5.0
+    assert group["smartRepeat"] is False
+    _assert_depth_first_numbering(result)
+
+
+def test_build_strength_json_numbers_steps_depth_first():
+    result = build_strength_json(
+        name="Mixed",
+        exercises=[
+            {"name": "Squat", "sets": 3, "reps": 5, "rest_seconds": 90},
+            {"name": "Plank", "sets": 1, "reps": 1, "rest_seconds": 60},
+            {"name": "Push Up", "sets": 2, "reps": 12, "rest_seconds": 0},
+        ],
+    )
+    steps = result["workoutSegments"][0]["workoutSteps"]
+    # group 1 (squat 2, rest 3), plank 4, rest 5, group 6 (push-up 7)
+    assert [s["type"] for s in steps] == [
+        "RepeatGroupDTO",
+        "ExecutableStepDTO",
+        "ExecutableStepDTO",
+        "RepeatGroupDTO",
+    ]
+    assert _step_orders(result) == [1, 2, 3, 4, 5, 6, 7]
+    assert steps[0]["endConditionValue"] == 3.0
+    assert steps[3]["endConditionValue"] == 2.0
+    _assert_depth_first_numbering(result)
+
+
+def test_build_strength_json_two_multi_set_exercises_have_distinct_orders():
+    result = build_strength_json(
+        name="Two groups",
+        exercises=[
+            {"name": "A", "sets": 3, "reps": 10, "rest_seconds": 60},
+            {"name": "B", "sets": 3, "reps": 10, "rest_seconds": 60},
+        ],
+    )
+    # Previously [1, 1, 2, 2, 1, 2]: both groups' children restarted at 1.
+    assert _step_orders(result) == [1, 2, 3, 4, 5, 6]
+
+
+@pytest.mark.parametrize(
+    "workout",
+    [
+        build_walk_run_json("w", run_seconds=60, walk_seconds=60, repeats=5, warmup_min=5, cooldown_min=5),
+        build_z2_walk_json("z", duration_min=30, hr_min=110, hr_max=130),
+        build_run_json("r", run_seconds=1800, warmup_min=5, cooldown_min=5),
+        build_run_interval_json("i", repeats=5, rep_seconds=180, recovery_seconds=120, warmup_min=10, cooldown_min=8),
+        build_run_interval_json("strides", repeats=6, rep_seconds=20, recovery_seconds=0, warmup_min=10, cooldown_min=5),
+        build_strength_json(
+            "s",
+            [
+                {"name": "A", "sets": 3, "reps": 10, "rest_seconds": 60},
+                {"name": "B", "sets": 1, "reps": 10, "rest_seconds": 60},
+                {"name": "C", "sets": 2, "reps": 10, "rest_seconds": 0},
+            ],
+        ),
+        SIMPLE_RUN_TEMPLATE,
+        INTERVAL_RUNNING_TEMPLATE,
+        TEMPO_RUN_TEMPLATE,
+        STRENGTH_CIRCUIT_TEMPLATE,
+    ],
+    ids=[
+        "walk_run",
+        "z2_walk",
+        "run",
+        "run_interval",
+        "run_interval_no_recovery",
+        "strength",
+        "simple_run_template",
+        "interval_running_template",
+        "tempo_run_template",
+        "strength_circuit_template",
+    ],
+)
+def test_every_builder_and_template_numbers_steps_depth_first(workout):
+    _assert_depth_first_numbering(workout)
