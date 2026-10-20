@@ -52,25 +52,10 @@ def is_interactive_terminal() -> bool:
 
 
 def get_mfa() -> str:
-    """Get MFA code from user input.
-
-    Raises:
-        RuntimeError: If running in non-interactive environment
-    """
-    if not is_interactive_terminal():
-        print(
-            "\nERROR: MFA code required but no interactive terminal available.\n"
-            "Please run 'garmin-mcp-auth' in your terminal first.\n"
-            "See: https://github.com/Taxuspt/garmin_mcp#mfa-setup\n",
-            file=sys.stderr,
-        )
-        raise RuntimeError("MFA required but non-interactive environment")
-
-    print(
-        "\nGarmin Connect MFA required. Please check your email/phone for the code.",
-        file=sys.stderr,
-    )
-    return input("Enter MFA code: ")
+    """Direct server MFA to the auth CLI so stdin belongs to the MCP transport."""
+    message = "MFA required; run 'garmin-mcp-auth' before starting the server."
+    print(f"\nERROR: {message}\n", file=sys.stderr)
+    raise RuntimeError(message)
 
 
 def _normalize_optional_user_config(value: str | None, key: str) -> str | None:
@@ -648,10 +633,10 @@ def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=Non
         # message hid all of that (#335).
         token_problem = token_utils.describe_token_failure(tokenstore, token_error)
 
-        # Check if we're in a non-interactive environment without credentials
-        if not is_interactive_terminal() and (not email or not password):
+        # The server never prompts for credentials; a TTY does not supply them.
+        if not email or not password:
             print(
-                "ERROR: Garmin login from saved tokens failed and no interactive terminal is available.\n"
+                "ERROR: Garmin login from saved tokens failed and no credentials were provided.\n"
                 f"  {token_problem}\n"
                 "To fix it:\n"
                 "  1. Run: garmin-mcp-auth  (add --force-reauth if tokens exist but were rejected)\n"
@@ -732,18 +717,9 @@ def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=Non
                     "Too many requests. Please wait and try again.", file=sys.stderr
                 )
             elif isinstance(err, GarminConnectConnectionError):
-                if "401" in error_msg or "Unauthorized" in error_msg:
-                    print(
-                        "Invalid credentials. Please check your email and password.",
-                        file=sys.stderr,
-                    )
-                elif "500" in error_msg or "503" in error_msg:
-                    print(
-                        "Garmin Connect service issue. Please try again later.",
-                        file=sys.stderr,
-                    )
-                else:
-                    print(f"Error: {error_msg.split(':')[0]}", file=sys.stderr)
+                # Credential rejection has its own library exception type.
+                # Keep the failed strategy/status for HTML or transport failures.
+                print(f"Garmin login request failed: {error_msg}", file=sys.stderr)
             elif isinstance(err, requests.exceptions.HTTPError):
                 print("Network error. Please check your connection.", file=sys.stderr)
             else:
