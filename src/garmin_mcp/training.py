@@ -996,7 +996,11 @@ def register_tools(app):
             load_device_id: Optional[str] = None
             # Load-balance is also device-keyed. Never attach the first
             # available record to a different reporting device.
-            if reporting_id is not None:
+            if reporting_id is None:
+                # A day can have Load Focus without a training-status snapshot.
+                # Select its own device and retain that ID as provenance.
+                load_data, load_device_id, _, _ = _select_training_device(load_map, devices)
+            else:
                 for key, data in load_map.items():
                     if not isinstance(data, dict) or not data:
                         continue
@@ -1834,7 +1838,7 @@ def register_tools(app):
             return f"Error retrieving running tolerance data: {str(e)}"
 
         if not data:
-            return "Your device does not support this metric."
+            return f"No running tolerance data found for {date}."
 
         entry = data[0]
         tolerance = entry.get("acuteTolerance")
@@ -1906,7 +1910,7 @@ def register_tools(app):
             return f"Error retrieving running tolerance trend: {str(e)}"
 
         if not data:
-            return "Your device does not support this metric."
+            return f"No running tolerance data found between {start_date} and {end_date}."
 
         trend = []
         for entry in data:

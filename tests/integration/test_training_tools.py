@@ -1335,7 +1335,7 @@ async def test_get_running_tolerance_tool(app_with_training, mock_garmin_client)
 
 
 @pytest.mark.asyncio
-async def test_get_running_tolerance_unsupported_device(app_with_training, mock_garmin_client):
+async def test_get_running_tolerance_empty_result_is_not_a_device_verdict(app_with_training, mock_garmin_client):
     """Test get_running_tolerance tool when the account/device has no Running Tolerance data"""
     mock_garmin_client.get_running_tolerance.return_value = []
 
@@ -1345,7 +1345,8 @@ async def test_get_running_tolerance_unsupported_device(app_with_training, mock_
     )
 
     assert result is not None
-    assert result[0][0].text == "Your device does not support this metric."
+    assert result[0][0].text.startswith("No running tolerance data found")
+    assert "does not support" not in result[0][0].text
 
 
 @pytest.mark.asyncio
@@ -1416,7 +1417,7 @@ async def test_get_running_tolerance_trend_weekly_default(app_with_training, moc
 
 
 @pytest.mark.asyncio
-async def test_get_running_tolerance_trend_unsupported_device(app_with_training, mock_garmin_client):
+async def test_get_running_tolerance_trend_empty_result_is_not_a_device_verdict(app_with_training, mock_garmin_client):
     """Test get_running_tolerance_trend when the account/device has no data"""
     mock_garmin_client.get_running_tolerance.return_value = []
 
@@ -1426,7 +1427,8 @@ async def test_get_running_tolerance_trend_unsupported_device(app_with_training,
     )
 
     assert result is not None
-    assert result[0][0].text == "Your device does not support this metric."
+    assert result[0][0].text.startswith("No running tolerance data found")
+    assert "does not support" not in result[0][0].text
 
 
 @pytest.mark.asyncio
@@ -1759,6 +1761,38 @@ async def test_get_training_status_handles_null_cycling_vo2(app_with_training, m
     data = json.loads(result[0][0].text)
     assert data["vo2_max"] == 52.5
     assert "cycling_vo2_max" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_map", [{}, None])
+async def test_training_status_retains_monthly_load_without_status_snapshot(
+    app_with_training, mock_garmin_client, status_map
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "primaryDevice": True}, {"deviceId": 200},
+    ]
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentTrainingStatus": {"latestTrainingStatusData": status_map},
+        "mostRecentTrainingLoadBalance": {"metricsTrainingLoadBalanceDTOMap": {
+            "200": {"deviceId": 200, "monthlyLoadAerobicLow": 999},
+            "100": {
+                "deviceId": 100,
+                "monthlyLoadAerobicLow": 400,
+                "monthlyLoadAerobicHigh": 700,
+                "monthlyLoadAnaerobic": 250,
+                "trainingBalanceFeedbackPhrase": "BALANCED",
+            },
+        }},
+    }
+    result = await app_with_training.call_tool("get_training_status", {"date": "2024-01-15"})
+    data = json.loads(result[0][0].text)
+    assert data["load_device_id"] == 100
+    assert data["monthly_load_aerobic_low"] == 400
+    assert data["monthly_load_aerobic_high"] == 700
+    assert data["monthly_load_anaerobic"] == 250
+    assert data["training_balance_feedback"] == "BALANCED"
+    assert "reporting_device_id" not in data
+    assert "load_unavailable_reason" not in data
 
 
 @pytest.mark.asyncio
