@@ -88,6 +88,8 @@ def register_tools(app):
         and default activity associations. The notes field is null when unavailable.
         defaults maps each activity type (Garmin typeKey, e.g. "running") to the
         names of its default gear.
+        A gear item's stats_error reports a failed usage-statistics request;
+        a null total_distance_km means Garmin did not provide a distance.
         No parameters required - user profile is fetched automatically.
 
         Args:
@@ -181,15 +183,17 @@ def register_tools(app):
                 if include_stats:
                     try:
                         stats = garmin_client.get_gear_stats(uuid)
+                    except Exception as exc:
+                        gear_item["stats_error"] = str(exc)
+                    else:
                         if stats:
+                            distance = stats.get("totalDistance")
                             gear_item["stats"] = {
                                 "total_activities": stats.get("totalActivities"),
                                 "total_distance_km": round(
-                                    stats.get("totalDistance", 0) / 1000, 1
-                                ),
+                                    distance / 1000, 1
+                                ) if distance is not None else None,
                             }
-                    except Exception:
-                        pass  # Stats unavailable for this gear
 
                 curated_gear.append(gear_item)
 
