@@ -97,7 +97,9 @@ async def test_get_activities_by_date_with_type(app_with_activity_management, mo
 async def test_get_activities_fordate_tool(app_with_activity_management, mock_garmin_client):
     """Test get_activities_fordate tool returns activities for specific date"""
     # Setup mock
-    mock_garmin_client.get_activities_fordate.return_value = [MOCK_ACTIVITIES[0]]
+    mock_garmin_client.get_activities_fordate.return_value = {
+        "ActivitiesForDay": {"payload": [MOCK_ACTIVITIES[0]]},
+    }
 
     # Call tool
     result = await app_with_activity_management.call_tool(
@@ -106,7 +108,10 @@ async def test_get_activities_fordate_tool(app_with_activity_management, mock_ga
     )
 
     # Verify
-    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data["count"] == 1
+    assert data["activities"][0]["id"] == 12345678901
+    assert data["activities"][0]["event_type"] == "race"
     mock_garmin_client.get_activities_fordate.assert_called_once_with("2024-01-15")
 
 
@@ -124,7 +129,13 @@ async def test_get_activity_tool(app_with_activity_management, mock_garmin_clien
     )
 
     # Verify
-    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data["distance_meters"] == 5000.0
+    assert data["duration_seconds"] == 1800.0
+    assert data["calories"] == 350
+    assert data["avg_hr_bpm"] == 145
+    assert data["elevation_gain_meters"] == 50.5
+    assert data["lap_count"] == 2
     mock_garmin_client.get_activity.assert_called_once_with(activity_id)
 
 
@@ -457,6 +468,8 @@ async def test_get_activity_splits_includes_swim_lengths(app_with_activity_manag
     data = json.loads(result[0][0].text)
     assert data["activity_id"] == 22526515067
     assert data["lap_count"] == 1
+    assert data["laps"][0]["start_time_gmt"] == "2026-04-14T17:19:08.0"
+    assert "start_time" not in data["laps"][0]
     assert data["laps"][0]["avg_swim_cadence"] == 22.0
     assert data["laps"][0]["active_length_count"] == 92
     assert data["laps"][0]["total_strokes"] == 1104
@@ -470,6 +483,8 @@ async def test_get_activity_splits_includes_swim_lengths(app_with_activity_manag
     assert data["laps"][0]["workout_step_index"] == 0
     assert len(data["laps"][0]["lengths"]) == 2
     assert data["laps"][0]["lengths"][0]["length_number"] == 1
+    assert data["laps"][0]["lengths"][0]["start_time_gmt"] == "2026-04-14T17:19:08.0"
+    assert "start_time" not in data["laps"][0]["lengths"][0]
     assert data["laps"][0]["lengths"][0]["distance_meters"] == 22.0
     assert data["laps"][0]["lengths"][0]["duration_seconds"] == 31.0
     assert data["laps"][0]["lengths"][0]["stroke"] == "FREESTYLE"
@@ -1247,6 +1262,94 @@ async def test_create_manual_activity_exception(app_with_activity_management, mo
     )
     assert "Error" in result[0][0].text
     assert "Garmin API error" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_strips_type_before_payload_and_default_name(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 999}
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": " yoga ", "date": "2024-03-01", "duration_minutes": 30},
+    )
+
+    assert json.loads(result[0][0].text)["success"] is True
+    kwargs = mock_garmin_client.create_manual_activity.call_args.kwargs
+    assert kwargs["type_key"] == "yoga"
+    assert kwargs["activity_name"] == "Yoga"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [
+    {"date": "2024-02-30"},
+    {"date": "03/01/2024"},
+    {"date": "2024-3-1"},
+    {"start_time": "09:00:00"},
+    {"start_time": "9:00"},
+    {"start_time": "24:00"},
+    {"distance_km": -1},
+])
+async def test_create_manual_activity_rejects_invalid_timestamp_or_distance(
+    app_with_activity_management, mock_garmin_client, invalid
+):
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 999}
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 30, **invalid},
+    )
+
+    assert "Error" in result[0][0].text
+    assert next(iter(invalid)) in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,expected_committed", [
+    ("read_timeout", "unknown"),
+    ("server_error", "unknown"),
+    ("rejected", False),
+    ("connect_timeout", False),
+])
+async def test_create_manual_activity_reports_write_commit_uncertainty(
+    app_with_activity_management, mock_garmin_client, failure, expected_committed
+):
+    import requests
+    from garminconnect import GarminConnectConnectionError
+
+    errors = {
+        "read_timeout": requests.exceptions.ReadTimeout("read timed out"),
+        "server_error": GarminConnectConnectionError("HTTP error: API Error 503 - gateway"),
+        "rejected": GarminConnectConnectionError("HTTP error: API Error 400 - invalid request"),
+        "connect_timeout": requests.exceptions.ConnectTimeout("connection timed out"),
+    }
+    mock_garmin_client.create_manual_activity.side_effect = errors[failure]
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 30},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "error"
+    assert data["write_committed"] == expected_committed
+    if expected_committed == "unknown":
+        assert "before retrying" in data["hint"]
+    mock_garmin_client.create_manual_activity.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_reports_committed_write_if_response_cannot_serialize(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.create_manual_activity.return_value = object()
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 30},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is True
+    assert data["stage"] == "response_parse"
 
 
 @pytest.mark.asyncio

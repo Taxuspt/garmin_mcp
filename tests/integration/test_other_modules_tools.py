@@ -2,7 +2,7 @@
 Integration tests for remaining module MCP tools
 
 Tests tools from:
-- devices (6 tools)
+- devices (7 tools)
 - weight_management (5 tools)
 - user_profile (6 tools)
 - data_management (3 tools)
@@ -13,11 +13,16 @@ Total: 27 tools
 """
 import json
 import logging
+import requests
 
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
-from garminconnect import GarminConnectConnectionError
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 from garmin_mcp import (
     devices,
@@ -201,6 +206,87 @@ async def test_get_device_alarms_tool(app_with_devices, mock_garmin_client):
     mock_garmin_client.get_device_alarms.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_push_workout_to_device_explicit_device(app_with_devices, mock_garmin_client):
+    """The workout is queued as a FIT message for the given device"""
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 123456, "workoutName": "Upper Body A"
+    }
+    mock_garmin_client.client.post.return_value = Mock(status_code=200)
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456, "device_id": 3456789012}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "success"
+    assert data["device_id"] == 3456789012
+    assert data["workout_name"] == "Upper Body A"
+    mock_garmin_client.get_device_last_used.assert_not_called()
+    args, kwargs = mock_garmin_client.client.post.call_args
+    assert args == ("connectapi", "device-service/devicemessage/messages")
+    assert kwargs["json"] == [{
+        "deviceId": 3456789012,
+        "messageUrl": "workout-service/workout/FIT/123456",
+        "messageType": "workouts",
+        "groupName": None,
+        "messageName": "Upper Body A",
+        "priority": 1,
+        "fileType": "FIT",
+        "metaDataId": 123456,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_push_workout_to_device_defaults_to_last_used(app_with_devices, mock_garmin_client):
+    """Without device_id, the most recently used device is the target"""
+    mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutName": "Easy Run"}
+    mock_garmin_client.client.post.return_value = Mock(status_code=200)
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "success"
+    assert data["device_id"] == MOCK_DEVICE_LAST_USED["userDeviceId"]
+    payload = mock_garmin_client.client.post.call_args.kwargs["json"]
+    assert payload[0]["deviceId"] == MOCK_DEVICE_LAST_USED["userDeviceId"]
+
+
+@pytest.mark.asyncio
+async def test_push_workout_to_device_no_default_device(app_with_devices, mock_garmin_client):
+    """Nothing is sent when there is no device to default to"""
+    mock_garmin_client.get_device_last_used.return_value = None
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "failed"
+    assert "No default device" in data["message"]
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_push_workout_to_device_error(app_with_devices, mock_garmin_client):
+    """A failed request is reported, not raised"""
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutName": "Easy Run"}
+    mock_garmin_client.client.post.side_effect = GarminConnectConnectionError(
+        "API Error 404"
+    )
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456, "device_id": 3456789012}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "failed"
+    assert "404" in data["message"]
+
+
 # Weight Management module tests
 @pytest.fixture
 def app_with_weight(mock_garmin_client):
@@ -262,7 +348,7 @@ async def test_delete_weigh_ins_tool(app_with_weight, mock_garmin_client):
     mock_garmin_client.delete_weigh_ins.return_value = 1
     result = await app_with_weight.call_tool(
         "delete_weigh_ins",
-        {"date": "2024-01-15", "delete_all": True}
+        {"date": "2024-01-15", "delete_all": True, "confirm": True}
     )
     assert result is not None
     mock_garmin_client.delete_weigh_ins.assert_called_once_with("2024-01-15", delete_all=True)
@@ -275,7 +361,7 @@ async def test_delete_weigh_ins_nothing_found(app_with_weight, mock_garmin_clien
     mock_garmin_client.delete_weigh_ins.return_value = None
     result = await app_with_weight.call_tool(
         "delete_weigh_ins",
-        {"date": "2024-01-15"}
+        {"date": "2024-01-15", "confirm": True}
     )
     data = json.loads(result[0][0].text)
     assert data["status"] == "nothing_deleted"
@@ -290,13 +376,85 @@ async def test_delete_weigh_ins_several_without_delete_all(app_with_weight, mock
     mock_garmin_client.delete_weigh_ins.return_value = None
     result = await app_with_weight.call_tool(
         "delete_weigh_ins",
-        {"date": "2024-01-15", "delete_all": False}
+        {"date": "2024-01-15", "delete_all": False, "confirm": True}
     )
     data = json.loads(result[0][0].text)
     assert data["status"] == "nothing_deleted"
     assert data["deleted_count"] == 0
     assert "delete_all=true" in data["message"]
     mock_garmin_client.delete_weigh_ins.assert_called_once_with("2024-01-15", delete_all=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count", [1, 2])
+async def test_delete_weigh_ins_previews_before_deleting(app_with_weight, mock_garmin_client, count):
+    mock_garmin_client.get_daily_weigh_ins.return_value = {"dateWeightList": [
+        {"samplePk": i, "weight": 70000 + i * 100, "sourceType": "MANUAL", "timestampGMT": 1705316400000 + i}
+        for i in range(count)
+    ]}
+    mock_garmin_client.delete_weigh_ins.return_value = count
+
+    result = await app_with_weight.call_tool("delete_weigh_ins", {"date": "2024-01-15"})
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "needs_confirmation"
+    assert data["measurement_count"] == count
+    assert data["measurements"][0]["weight_kg"] == 70
+    assert data["measurements"][0]["source_type"] == "MANUAL"
+    assert "confirm=true" in data["message"]
+    mock_garmin_client.delete_weigh_ins.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("weight_list", [None, []])
+async def test_delete_weigh_ins_preview_empty_day_does_not_delete(app_with_weight, mock_garmin_client, weight_list):
+    mock_garmin_client.get_daily_weigh_ins.return_value = {"dateWeightList": weight_list}
+    mock_garmin_client.delete_weigh_ins.return_value = None
+
+    result = await app_with_weight.call_tool("delete_weigh_ins", {"date": "2024-01-15"})
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "nothing_deleted"
+    mock_garmin_client.get_daily_weigh_ins.assert_called_once_with("2024-01-15")
+    mock_garmin_client.delete_weigh_ins.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_weigh_ins_preview_respects_delete_all_false(app_with_weight, mock_garmin_client):
+    mock_garmin_client.get_daily_weigh_ins.return_value = {"dateWeightList": [{"weight": 70000}, {"weight": 70100}]}
+    mock_garmin_client.delete_weigh_ins.return_value = None
+
+    result = await app_with_weight.call_tool("delete_weigh_ins", {"date": "2024-01-15", "delete_all": False})
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "nothing_deleted"
+    assert "delete_all=true" in data["message"]
+    mock_garmin_client.delete_weigh_ins.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_weigh_ins_preview_failure_never_deletes(app_with_weight, mock_garmin_client):
+    mock_garmin_client.get_daily_weigh_ins.side_effect = GarminConnectConnectionError("API Error 401")
+
+    result = await app_with_weight.call_tool("delete_weigh_ins", {"date": "2024-01-15"})
+
+    assert "API Error 401" in result[0][0].text
+    mock_garmin_client.delete_weigh_ins.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["add_weigh_in", "add_weigh_in_with_timestamps"])
+async def test_add_weigh_in_accepts_documented_lb_alias(app_with_weight, mock_garmin_client, tool_name):
+    method = getattr(mock_garmin_client, tool_name)
+    method.return_value = {}
+    arguments = {"weight": 155, "unit_key": "lb"}
+    if tool_name.endswith("timestamps"):
+        arguments.update(date_timestamp="2024-01-15T07:30:00", gmt_timestamp="2024-01-15T15:30:00")
+
+    result = await app_with_weight.call_tool(tool_name, arguments)
+
+    assert json.loads(result[0][0].text)["unit"] == "lbs"
+    assert method.call_args.kwargs["unitKey"] == "lbs"
 
 
 @pytest.mark.asyncio
@@ -635,6 +793,35 @@ async def test_add_body_composition_tool(app_with_data_management, mock_garmin_c
         visceral_fat_rating=None,
         bmi=None
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["weight", "visceral_fat_mass", "bone_mass", "muscle_mass"])
+@pytest.mark.parametrize("value", [700, 655.35, -1, float("inf")])
+async def test_body_composition_rejects_unencodable_mass_in_kg(
+    app_with_data_management, mock_garmin_client, field, value
+):
+    mock_garmin_client.add_body_composition.return_value = {}
+
+    result = await app_with_data_management.call_tool("add_body_composition", {
+        "date": "2024-01-15", "weight": 70, field: value,
+    })
+
+    assert field in result[0][0].text
+    assert "kg" in result[0][0].text
+    assert "FIT" in result[0][0].text
+    mock_garmin_client.add_body_composition.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_body_composition_documents_mass_and_energy_units(app_with_data_management):
+    tool = next(t for t in await app_with_data_management.list_tools() if t.name == "add_body_composition")
+    for field in ["visceral_fat_mass", "bone_mass", "muscle_mass"]:
+        line = next(line for line in tool.description.splitlines() if f"{field}:" in line)
+        assert "kg" in line
+    for field in ["basal_met", "active_met"]:
+        line = next(line for line in tool.description.splitlines() if f"{field}:" in line)
+        assert "kcal/day" in line
 
 
 @pytest.mark.asyncio
@@ -978,3 +1165,84 @@ async def test_get_menstrual_calendar_data_chunking(app_with_womens_health, mock
 
     data = json.loads(result[0][0].text)
     assert data == [MOCK_MENSTRUAL_DATA, second_chunk]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("readback", [
+    GarminConnectTooManyRequestsError("rate limited"),
+    ValueError("Garmin returned an unexpected heart-rate-zone response"),
+    [],
+])
+async def test_heart_rate_zone_update_reports_committed_when_confirmation_fails(
+    app_with_user_profile, mock_garmin_client, readback
+):
+    mock_garmin_client.connectapi.side_effect = [HEART_RATE_ZONES, readback]
+    mock_garmin_client.client.request.return_value = Mock(status_code=204)
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "success"
+    assert data["write_committed"] is True
+    assert data["confirmation_error"]
+    assert data["submitted_configuration"]["sport"] == "CYCLING"
+    assert data["submitted_configuration"]["maxHeartRateUsed"] == 204
+    mock_garmin_client.client.request.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error, committed", [
+    (GarminConnectConnectionError("API Error 503 - gateway failed"), "unknown"),
+    (requests.exceptions.ReadTimeout("response timed out"), "unknown"),
+    (GarminConnectConnectionError("API Error 400 - invalid profile"), False),
+])
+async def test_heart_rate_zone_update_tracks_failed_write(
+    app_with_user_profile, mock_garmin_client, error, committed
+):
+    mock_garmin_client.connectapi.return_value = HEART_RATE_ZONES
+    mock_garmin_client.client.request.side_effect = error
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] == committed
+    assert data["stage"] == "garmin_request"
+    assert data["error_type"] == type(error).__name__
+    assert str(error) in data["message"]
+    assert data["correlation_id"]
+    mock_garmin_client.connectapi.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_heart_rate_zone_update_lookup_failure_reports_no_write(
+    app_with_user_profile, mock_garmin_client
+):
+    mock_garmin_client.connectapi.side_effect = GarminConnectAuthenticationError("expired token")
+    result = await app_with_user_profile.call_tool(
+        "set_heart_rate_zones", {"sport": "cycling", "max_hr": 204}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert data["stage"] == "auth_refresh"
+    mock_garmin_client.client.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dict_shape", [False, True])
+async def test_menstrual_calendar_deduplicates_cycles_crossing_chunk_seam(
+    app_with_womens_health, mock_garmin_client, dict_shape
+):
+    before = {"cycleId": 1, "startDate": "2026-02-20"}
+    spanning = {"cycleId": 2, "startDate": "2026-03-20", "endDate": "2026-04-16"}
+    after = {"cycleId": 3, "startDate": "2026-04-17"}
+    wrap = (lambda items: {"cycleSummaries": items}) if dict_shape else (lambda items: items)
+    mock_garmin_client.get_menstrual_calendar_data.side_effect = [
+        wrap([before, spanning]), wrap([dict(reversed(list(spanning.items()))), after])
+    ]
+
+    result = await app_with_womens_health.call_tool("get_menstrual_calendar_data", {
+        "start_date": "2026-01-01", "end_date": "2026-06-30"
+    })
+
+    assert json.loads(result[0][0].text) == wrap([before, spanning, after])
+    assert mock_garmin_client.get_menstrual_calendar_data.call_count == 2

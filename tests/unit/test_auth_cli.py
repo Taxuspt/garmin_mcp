@@ -587,3 +587,115 @@ class TestSecureTokenDir:
         with tempfile.TemporaryDirectory() as tmpdir:
             _secure_token_dir(tmpdir)
             assert oct(os.stat(tmpdir).st_mode)[-3:] == "700"
+
+
+class TestDiagnoseTokens:
+    """--diagnose prints the resolved paths and the state of the store."""
+
+    @staticmethod
+    def _write_tokens(store):
+        store.mkdir(parents=True, exist_ok=True)
+        (store / "garmin_tokens.json").write_text(
+            '{"di_token": "a", "di_refresh_token": "b", "di_client_id": "c"}'
+        )
+
+    def test_missing_directory_fails_without_network(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        missing = tmp_path / "nope"
+        monkeypatch.setenv("GARMINTOKENS", str(missing))
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch("garmin_mcp.auth_cli.validate_tokens") as mock_validate:
+            result = diagnose_tokens(None, is_cn=False)
+
+        out = capsys.readouterr().out
+        assert result is False
+        mock_validate.assert_not_called()
+        assert f"GARMINTOKENS         : {missing}" in out
+        assert f"Token directory      : {missing}" in out
+        assert "state              : MISSING" in out
+        assert "garmin_tokens.json   : MISSING" in out
+        assert "the server does not read it" in out
+
+    def test_valid_tokens_report_success(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        store = tmp_path / "tokens"
+        self._write_tokens(store)
+        monkeypatch.delenv("GARMINTOKENS", raising=False)
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch("garmin_mcp.auth_cli.validate_tokens", return_value=(True, "")) as mock_validate:
+            result = diagnose_tokens(str(store), is_cn=True)
+
+        out = capsys.readouterr().out
+        assert result is True
+        mock_validate.assert_called_once_with(str(store), is_cn=True)
+        assert "garmin_tokens.json   : present" in out
+        assert "Region               : garmin.cn" in out
+        assert "✓ Tokens authenticate" in out
+
+    def test_rejected_tokens_report_reauth(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        store = tmp_path / "tokens"
+        self._write_tokens(store)
+        monkeypatch.setenv("GARMINTOKENS", str(tmp_path / "elsewhere"))
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch(
+            "garmin_mcp.auth_cli.validate_tokens",
+            return_value=(False, "Tokens expired or invalid"),
+        ):
+            result = diagnose_tokens(str(store), is_cn=False)
+
+        out = capsys.readouterr().out
+        assert result is False
+        assert "points elsewhere" in out
+        assert "do not authenticate: Tokens expired or invalid" in out
+        assert "--force-reauth" in out
+
+    def test_corrupt_token_file_is_reported(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "garmin_tokens.json").write_text("{nope")
+        (store / "oauth2_token.json").write_text("{}")
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch("garmin_mcp.auth_cli.validate_tokens") as mock_validate:
+            result = diagnose_tokens(str(store), is_cn=False)
+
+        out = capsys.readouterr().out
+        assert result is False
+        mock_validate.assert_not_called()
+        assert "garmin_tokens.json   : present, but unreadable or not JSON" in out
+        assert "Other files          : oauth2_token.json" in out
+
+    @patch("sys.argv", ["garmin-mcp-auth", "--diagnose"])
+    @patch("garmin_mcp.auth_cli.diagnose_tokens", return_value=True)
+    @patch("garmin_mcp.auth_cli.verify_tokens")
+    @patch("garmin_mcp.auth_cli.authenticate")
+    def test_main_diagnose_mode(self, mock_authenticate, mock_verify, mock_diagnose):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 0
+        mock_diagnose.assert_called_once_with(None, False)
+        mock_verify.assert_not_called()
+        mock_authenticate.assert_not_called()
+
+    @patch("sys.argv", ["garmin-mcp-auth", "--diagnose", "--token-path", "/custom/path", "--is-cn"])
+    @patch("garmin_mcp.auth_cli.diagnose_tokens", return_value=False)
+    def test_main_diagnose_failure_exit_code(self, mock_diagnose):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 1
+        mock_diagnose.assert_called_once_with("/custom/path", True)
+
+    @patch("sys.argv", ["garmin-mcp-auth", "--verify", "--is-cn"])
+    @patch("garmin_mcp.auth_cli.verify_tokens", return_value=True)
+    def test_main_verify_passes_region(self, mock_verify):
+        with pytest.raises(SystemExit):
+            main()
+
+        assert mock_verify.call_args[0][1] is True
