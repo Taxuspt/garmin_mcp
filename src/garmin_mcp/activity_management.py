@@ -6,6 +6,8 @@ import datetime
 import sys
 from typing import Any, Dict, List, Optional, Union
 
+from garmin_mcp.write_errors import WriteTracker
+
 # FIT stores lap distance as uint32 centimetres. A device that writes a small
 # negative distance (seen on zero-length laps at a lap/stop boundary) wraps it
 # to just under 2**32 / 100 m, e.g. -4 cm -> 42,949,672.92 m. Garmin's own
@@ -337,8 +339,7 @@ def register_tools(app):
         Returns a comprehensive summary including timing, distance, heart rate,
         elevation, training effect, and an event_type field. Common event_type
         values: "race", "training", "uncategorized" (no event type set by the
-        user). The field is omitted for very old activities that pre-date event
-        type support in the Garmin API.
+        user). The field is omitted when Garmin returns no eventTypeDTO.
 
         Args:
             activity_id: ID of the activity to retrieve
@@ -665,6 +666,8 @@ def register_tools(app):
     async def get_activity_splits(activity_id: Union[int, str]) -> str:
         """Get splits for an activity
 
+        Lap and nested length start_time_gmt timestamps are GMT (UTC).
+
         Args:
             activity_id: ID of the activity to retrieve splits for
         """
@@ -686,7 +689,7 @@ def register_tools(app):
             for lap in laps:
                 lap_data = {
                     "lap_number": lap.get('lapIndex'),
-                    "start_time": lap.get('startTimeGMT'),
+                    "start_time_gmt": lap.get('startTimeGMT'),
                     "distance_meters": lap.get('distance'),
                     "duration_seconds": lap.get('duration'),
                     "moving_duration_seconds": lap.get('movingDuration'),
@@ -721,7 +724,7 @@ def register_tools(app):
                     for length in length_dtos:
                         length_data = {
                             "length_number": length.get('lengthIndex'),
-                            "start_time": length.get('startTimeGMT'),
+                            "start_time_gmt": length.get('startTimeGMT'),
                             "distance_meters": length.get('distance'),
                             "duration_seconds": length.get('duration'),
                             "avg_speed_mps": length.get('averageSpeed'),
@@ -1132,16 +1135,37 @@ def register_tools(app):
             activity_name: Optional title; defaults to the type_key if not provided
             distance_km: Distance in kilometres (default 0.0 for non-distance activities)
             time_zone: IANA time zone for the activity (default UTC)
+
+        If a write fails with write_committed="unknown", check whether the
+        activity exists before retrying to avoid creating a duplicate.
         """
+        tracker = WriteTracker("create_manual_activity", "Error creating manual activity")
         try:
-            if not type_key.strip():
+            type_key = type_key.strip()
+            if not type_key:
                 return "Error: type_key is required"
             if duration_minutes <= 0:
                 return "Error: duration_minutes must be greater than 0"
+            if distance_km < 0:
+                return "Error: distance_km must be non-negative"
+
+            try:
+                parsed_date = datetime.date.fromisoformat(date)
+                if parsed_date.isoformat() != date:
+                    raise ValueError
+            except ValueError:
+                return "Error: date must be a valid date in YYYY-MM-DD format"
+            try:
+                parsed_time = datetime.datetime.strptime(start_time, "%H:%M")
+                if parsed_time.strftime("%H:%M") != start_time:
+                    raise ValueError
+            except ValueError:
+                return "Error: start_time must be in HH:MM (24-hour) format"
 
             name = activity_name.strip() or type_key.replace("_", " ").title()
             start_datetime = f"{date}T{start_time}:00.000"
 
+            tracker.sending()
             result = garmin_client.create_manual_activity(
                 start_datetime=start_datetime,
                 time_zone=time_zone,
@@ -1150,13 +1174,14 @@ def register_tools(app):
                 duration_min=duration_minutes,
                 activity_name=name,
             )
+            tracker.committed()
 
             return json.dumps({
                 "success": True,
                 "activity": result,
             }, indent=2)
         except Exception as e:
-            return f"Error creating manual activity: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def delete_activity(

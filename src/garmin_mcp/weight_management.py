@@ -133,14 +133,52 @@ def register_tools(app):
             return f"Error retrieving daily weight measurements: {str(e)}"
 
     @app.tool()
-    async def delete_weigh_ins(date: str, delete_all: bool = True) -> str:
+    async def delete_weigh_ins(date: str, delete_all: bool = True, confirm: bool = False) -> str:
         """Delete weight measurements for a specific date
+
+        Permanently removes the selected day's weigh-ins. This cannot be undone.
+        Call once with confirm=false (the default) to preview the measurements,
+        then call again with confirm=true to delete them.
 
         Args:
             date: Date in YYYY-MM-DD format
             delete_all: Whether to delete all measurements for the day
+            confirm: Set true after reviewing the preview to perform the deletion
         """
         try:
+            if not confirm:
+                data = garmin_client.get_daily_weigh_ins(date)
+                measurements = (data or {}).get("dateWeightList") or []
+                if not measurements or (len(measurements) > 1 and not delete_all):
+                    message = (
+                        f"No weight measurements found for {date}; nothing was deleted"
+                        if not measurements else
+                        f"Nothing was deleted for {date}: deleting multiple measurements requires delete_all=true"
+                    )
+                    return json.dumps({
+                        "status": "nothing_deleted", "date": date,
+                        "deleted_count": 0, "message": message,
+                    }, indent=2)
+                preview = []
+                for measurement in measurements:
+                    weight = measurement.get("weight")
+                    item = {
+                        "id": measurement.get("samplePk"),
+                        "weight_kg": round(weight / 1000, 2) if weight is not None else None,
+                        "source_type": measurement.get("sourceType"),
+                        "timestamp_gmt": measurement.get("timestampGMT"),
+                    }
+                    preview.append({key: value for key, value in item.items() if value is not None})
+                return json.dumps({
+                    "status": "needs_confirmation", "date": date,
+                    "delete_all": delete_all, "measurement_count": len(preview),
+                    "measurements": preview,
+                    "message": (
+                        "This permanently deletes the listed weight measurements and cannot be undone. "
+                        "Call again with confirm=true to proceed."
+                    ),
+                }, indent=2)
+
             # API returns count of deleted entries
             deleted_count = garmin_client.delete_weigh_ins(date, delete_all=delete_all)
             # ...or None, having deleted nothing, when the day has no weigh-ins
@@ -175,9 +213,12 @@ def register_tools(app):
 
         Args:
             weight: Weight value
-            unit_key: Unit of weight ('kg' or 'lb')
+            unit_key: Unit of weight ('kg' or 'lbs'; 'lb' is accepted as an alias)
         """
         try:
+            unit_key = unit_key.strip().lower()
+            if unit_key == "lb":
+                unit_key = "lbs"
             result = garmin_client.add_weigh_in(weight=weight, unitKey=unit_key)
             # Return structured response
             return json.dumps({
@@ -193,8 +234,8 @@ def register_tools(app):
     async def add_weigh_in_with_timestamps(
         weight: float,
         unit_key: str = "kg",
-        date_timestamp: str = None,
-        gmt_timestamp: str = None
+        date_timestamp: Optional[str] = None,
+        gmt_timestamp: Optional[str] = None
     ) -> str:
         """Add a new weight measurement with specific timestamps
 
@@ -203,13 +244,16 @@ def register_tools(app):
 
         Args:
             weight: Weight value
-            unit_key: Unit of weight ('kg' or 'lb')
+            unit_key: Unit of weight ('kg' or 'lbs'; 'lb' is accepted as an alias)
             date_timestamp: Local timestamp in format YYYY-MM-DDThh:mm:ss
                 (required if gmt_timestamp is given -- it sets the day the
                 weigh-in is recorded on)
             gmt_timestamp: GMT timestamp in format YYYY-MM-DDThh:mm:ss
         """
         try:
+            unit_key = unit_key.strip().lower()
+            if unit_key == "lb":
+                unit_key = "lbs"
             if not date_timestamp and not gmt_timestamp:
                 # Generate timestamps if not provided
                 now = datetime.datetime.now()
