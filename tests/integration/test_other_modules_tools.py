@@ -8,8 +8,7 @@ Tests tools from:
 - data_management (3 tools)
 - gear_management (3 tools)
 - womens_health (3 tools)
-- __init__ / main (1 tool - list_activities)
-Total: 27 tools
+Total: 26 tools. Recent activity listing is tested with activity_management.
 """
 import json
 import logging
