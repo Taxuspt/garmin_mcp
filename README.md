@@ -31,7 +31,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Health & Wellness (34 tools) - includes custom lightweight summary tools
 - ✅ Training & Performance (13 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
 - ✅ Workouts (8 tools)
-- ✅ Devices (7 tools)
+- ✅ Devices (8 tools) - includes sending a workout to a device
 - ✅ Gear Management (5 tools)
 - ✅ Weight Tracking (5 tools)
 - ✅ Challenges & Badges (10 tools)
