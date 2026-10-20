@@ -262,6 +262,23 @@ def _validate_meal_datetime(meal_date: str, meal_time: str) -> None:
         raise ValueError("meal_time must be a valid time in HH:MM:SS format") from None
 
 
+def _find_food_log_entry(data, log_id):
+    """Find a logId in the daily log's nested JSON without assuming a meal layout."""
+    if isinstance(data, dict):
+        if data.get("logId") is not None and str(data["logId"]) == log_id:
+            return data
+        values = data.values()
+    elif isinstance(data, list):
+        values = data
+    else:
+        return None
+    for value in values:
+        entry = _find_food_log_entry(value, log_id)
+        if entry is not None:
+            return entry
+    return None
+
+
 def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
@@ -893,12 +910,13 @@ def register_tools(app):
             return tracker.error(e)
 
     @app.tool()
-    async def delete_custom_food(food_id: str) -> str:
+    async def delete_custom_food(food_id: str, confirm: bool = False) -> str:
         """Delete a custom food from the user's Garmin nutrition library
 
         Permanently removes a custom food entry — this cannot be undone and
         the deleted food's name/brand/nutrition data cannot be recovered from
-        the API afterward. Confirm the foodId is correct before calling.
+        the API afterward. The default call previews the food without deleting
+        it. Review that preview, then call again with confirm=true.
 
         Deleting a food does NOT require it to be unreferenced: existing food
         log entries that already reference this food are NOT blocked or
@@ -913,9 +931,18 @@ def register_tools(app):
         Args:
             food_id: ID of the custom food to delete — a 32-char hex string
                 (from get_custom_foods or create_custom_food)
+            confirm: Set true to delete after reviewing the default preview
         """
         tracker = WriteTracker("delete_custom_food", "Error deleting custom food")
         try:
+            if not confirm:
+                food = _find_custom_food(food_id, "")
+                if food is None:
+                    return json.dumps({"status": "not_found", "food_id": food_id})
+                return json.dumps({
+                    "status": "needs_confirmation", "food_id": food_id, "food": food,
+                    "message": "Review this food, then call again with confirm=true to permanently delete it.",
+                }, indent=2)
             url = f"/nutrition-service/customFood/{food_id}"
             tracker.sending()
             garmin_client.client.delete("connectapi", url, api=True)
@@ -1103,21 +1130,32 @@ def register_tools(app):
             return tracker.error(e)
 
     @app.tool()
-    async def delete_food_log(log_id: str, meal_date: str) -> str:
+    async def delete_food_log(log_id: str, meal_date: str, confirm: bool = False) -> str:
         """Delete a food log entry
 
         Permanently removes a logged food item from the nutrition log.
         Works for both QUICK_ADD and REGULAR_LOG entry types.
-        Use get_nutrition_daily_food_log to find the logId and date.
+        Use get_nutrition_daily_food_log to find the logId and date. The default
+        call previews the matching entry; call again with confirm=true to delete.
 
         Args:
             log_id: Log entry ID to delete — a 32-char hex UUID
                 (from get_nutrition_daily_food_log)
             meal_date: Date of the log entry in YYYY-MM-DD format
+            confirm: Set true to delete after reviewing the default preview
         """
         tracker = WriteTracker("delete_food_log", "Error deleting food log")
         try:
             url = f"/nutrition-service/food/logs/{meal_date}"
+            if not confirm:
+                entry = _find_food_log_entry(garmin_client.connectapi(url), log_id)
+                if entry is None:
+                    return json.dumps({"status": "not_found", "log_id": log_id, "meal_date": meal_date})
+                return json.dumps({
+                    "status": "needs_confirmation", "log_id": log_id,
+                    "meal_date": meal_date, "entry": entry,
+                    "message": "Review this entry, then call again with confirm=true to permanently delete it.",
+                }, indent=2)
             tracker.sending()
             garmin_client.client.delete("connectapi", url, json={"logIds": [log_id]}, api=True)
             tracker.committed()
