@@ -2,13 +2,17 @@
 Modular MCP Server for Garmin Connect Data
 """
 
+import asyncio
 import copy
+import functools
+import inspect
 import os
 import sys
 import base64
 import contextlib
 import threading
 
+import anyio
 import requests
 from mcp.server.fastmcp import FastMCP
 
@@ -74,30 +78,42 @@ def _normalize_optional_user_config(value: str | None, key: str) -> str | None:
     return None if value == unresolved_placeholder else value
 
 
-# Get credentials from environment
-email = os.environ.get("GARMIN_EMAIL")
-email_file = os.environ.get("GARMIN_EMAIL_FILE")
-if email and email_file:
-    raise ValueError(
-        "Must only provide one of GARMIN_EMAIL and GARMIN_EMAIL_FILE, got both"
-    )
-elif email_file:
-    with open(email_file, "r") as email_file:
-        email = email_file.read().rstrip()
+# --- Credentials and token locations ----------------------------------------
+# Read when main() or init_api() runs, not at import time, so importing the
+# package (tests, garmin-mcp-auth, the DXT tool generator) has no side effects
+# and a bad environment fails with a message instead of an import traceback.
+#   GARMIN_EMAIL / GARMIN_EMAIL_FILE       - one of the two, never both
+#   GARMIN_PASSWORD / GARMIN_PASSWORD_FILE - one of the two, never both
+#   GARMINTOKENS / GARMINTOKENS_BASE64     - token locations (see token_utils)
+#   GARMIN_IS_CN                           - true/1/yes for garmin.cn
+def _read_secret_env(name: str) -> str | None:
+    """Return $NAME, or the contents of the file named by $NAME_FILE."""
+    value = os.environ.get(name)
+    file_path = os.environ.get(f"{name}_FILE")
+    if value and file_path:
+        raise ValueError(f"Must only provide one of {name} and {name}_FILE, got both")
+    if file_path:
+        try:
+            with open(file_path, "r") as fh:
+                return fh.read().rstrip()
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot read {name}_FILE '{file_path}': {exc.strerror or exc}"
+            ) from exc
+    return value
 
-password = os.environ.get("GARMIN_PASSWORD")
-password_file = os.environ.get("GARMIN_PASSWORD_FILE")
-if password and password_file:
-    raise ValueError(
-        "Must only provide one of GARMIN_PASSWORD and GARMIN_PASSWORD_FILE, got both"
-    )
-elif password_file:
-    with open(password_file, "r") as password_file:
-        password = password_file.read().rstrip()
 
-tokenstore = token_utils.get_token_path()
-tokenstore_base64 = token_utils.get_token_base64_path()
-is_cn = os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
+def load_credentials() -> tuple[str | None, str | None]:
+    """Read the Garmin email and password from the environment.
+
+    Raises ValueError when a variable and its _FILE twin are both set, or
+    when a referenced file cannot be read.
+    """
+    return _read_secret_env("GARMIN_EMAIL"), _read_secret_env("GARMIN_PASSWORD")
+
+
+def _resolve_is_cn() -> bool:
+    return os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
 
 
 # --- Tool filtering ---------------------------------------------------------
@@ -464,6 +480,29 @@ def _resolve_stateless_http() -> bool:
     )
 
 
+def _off_event_loop(fn):
+    """Run a tool body on a worker thread so it cannot block the event loop.
+
+    Every tool is ``async def`` but awaits nothing: each calls the synchronous
+    garminconnect client through _GarminProxy, which joins a worker thread for
+    up to GARMIN_MCP_CALL_TIMEOUT. FastMCP awaits the tool coroutine on its
+    own event loop, so that join stalled every other request, including the
+    MCP ping, for the length of the Garmin call (#338). The coroutine is
+    driven to completion on a worker thread instead. The proxy's timeout is
+    unchanged, and tools keep their signature and docstring for the schema.
+    """
+    if not inspect.iscoroutinefunction(fn):
+        return fn
+
+    @functools.wraps(fn)
+    async def run_off_loop(*args, **kwargs):
+        return await anyio.to_thread.run_sync(
+            lambda: asyncio.run(fn(*args, **kwargs))
+        )
+
+    return run_off_loop
+
+
 class _ToolFilter:
     """Wraps a FastMCP app to conditionally register tools by function name.
 
@@ -514,7 +553,8 @@ class _ToolFilter:
                 else:
                     kwargs.setdefault("annotations", annotations)
                 decorator = self._app.tool(*args, **kwargs)
-                return decorator(fn)
+                decorator(_off_event_loop(fn))
+                return fn
             return fn  # skip registration; tool never reaches the LLM
 
         return wrapper
@@ -536,8 +576,18 @@ class _ToolFilter:
 # ---------------------------------------------------------------------------
 
 
-def init_api(email, password):
-    """Initialize Garmin API with your credentials."""
+def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=None):
+    """Initialize Garmin API with your credentials.
+
+    tokenstore, tokenstore_base64 and is_cn default to the environment
+    (GARMINTOKENS, GARMINTOKENS_BASE64, GARMIN_IS_CN), read when this runs.
+    """
+    if tokenstore is None:
+        tokenstore = token_utils.get_token_path()
+    if tokenstore_base64 is None:
+        tokenstore_base64 = token_utils.get_token_base64_path()
+    if is_cn is None:
+        is_cn = _resolve_is_cn()
 
     # Claude Desktop may leave blank optional user_config values as literal
     # placeholders. Do not mistake those strings for credentials and trigger a
@@ -572,25 +622,32 @@ def init_api(email, password):
             garmin = Garmin(is_cn=is_cn)
             garmin.login(tokenstore)
 
-    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
-        # Session is expired. You'll need to log in again
+    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError) as token_error:
+        # Tokens are missing, unreadable, rejected, or Garmin was unreachable.
+        # Say which: the library raises the same "Username and password are
+        # required" error for a missing directory, a corrupt file and a path
+        # garmin-mcp-auth never wrote to, and the old "OAuth tokens not found"
+        # message hid all of that (#335).
+        token_problem = token_utils.describe_token_failure(tokenstore, token_error)
 
         # Check if we're in a non-interactive environment without credentials
         if not is_interactive_terminal() and (not email or not password):
             print(
-                "ERROR: OAuth tokens not found and no interactive terminal available.\n"
-                "Please authenticate first:\n"
-                "  1. Run: garmin-mcp-auth\n"
-                "  2. Enter your credentials and MFA code\n"
-                "  3. Restart your MCP client\n"
-                f"Tokens will be saved to: {tokenstore}\n",
+                "ERROR: Garmin login from saved tokens failed and no interactive terminal is available.\n"
+                f"  {token_problem}\n"
+                "To fix it:\n"
+                "  1. Run: garmin-mcp-auth  (add --force-reauth if tokens exist but were rejected)\n"
+                "  2. Start the MCP server with the same GARMINTOKENS (or none) that\n"
+                "     garmin-mcp-auth used; `garmin-mcp-auth --diagnose` prints the resolved paths\n"
+                "  3. Restart your MCP client\n",
                 file=sys.stderr,
             )
             return None
 
         print(
-            "Login tokens not present, login with your Garmin Connect credentials to generate them.\n"
-            f"They will be stored in '{tokenstore}' for future use.\n",
+            f"{token_problem}\n"
+            "Logging in with your Garmin Connect credentials to generate new tokens; "
+            f"they will be stored in '{tokenstore}' for future use.\n",
             file=sys.stderr,
         )
         try:
@@ -708,6 +765,7 @@ def main():
     #   GARMIN_MCP_PORT      - bind port for HTTP transports (default 8000)
     #   GARMIN_MCP_STATELESS_HTTP - true to run streamable-http without sessions
     try:
+        email, password = load_credentials()
         profile_tools = _resolve_tool_profile()
         enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()

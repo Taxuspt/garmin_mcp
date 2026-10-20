@@ -31,7 +31,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Health & Wellness (34 tools) - includes custom lightweight summary tools
 - ✅ Training & Performance (13 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
 - ✅ Workouts (8 tools)
-- ✅ Devices (7 tools)
+- ✅ Devices (8 tools) - includes sending a workout to a device
 - ✅ Gear Management (5 tools)
 - ✅ Weight Tracking (5 tools)
 - ✅ Challenges & Badges (10 tools)
@@ -1069,6 +1069,9 @@ GARMIN_EMAIL=you@example.com GARMIN_PASSWORD=secret garmin-mcp-auth
 # Verify existing tokens
 garmin-mcp-auth --verify
 
+# Show where tokens are looked up, what is on disk, and whether they work
+garmin-mcp-auth --diagnose
+
 # Force re-authentication (e.g., when tokens expire)
 garmin-mcp-auth --force-reauth
 
@@ -1139,6 +1142,21 @@ garmin-mcp-auth --force-reauth
 ```bash
 garmin-mcp-auth --verify
 ```
+
+**`garmin-mcp-auth` succeeded, but the server still cannot log in**
+
+The server loads tokens only from `garmin_tokens.json` inside the token
+directory (`$GARMINTOKENS`, default `~/.garminconnect`). Its startup error says
+what it found there: no directory, no token file, a file it cannot read, or
+tokens Garmin rejected. The usual cause is the MCP client starting the server
+with a different `GARMINTOKENS` or `HOME` than the shell that ran
+`garmin-mcp-auth` (common with Claude Desktop on Windows), so the two resolve
+to different directories. Compare them with:
+```bash
+garmin-mcp-auth --diagnose
+```
+The `~/.garminconnect_base64` file that `garmin-mcp-auth` also writes is a copy
+for other garminconnect-based tools; the server does not read it.
 
 ## Testing
 
