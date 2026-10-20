@@ -6,6 +6,8 @@ import datetime
 import re
 from typing import Any, Dict, List, Optional, Union
 
+from .write_errors import WriteTracker
+
 # The garmin_client will be set by the main file
 garmin_client = None
 
@@ -209,10 +211,14 @@ def register_tools(app):
         custom_bpm method. Garmin's API does not persist a separate CUSTOM enum:
         direct-BPM zones are sent and read back with trainingMethod=HR_MAX while
         the explicit zone floors remain authoritative.
+        Changing the method or reference heart rates preserves the existing
+        zone floors; this tool does not calculate new percentage-based floors.
 
         The tool performs a read-modify-write and then re-fetches the requested
         sport. Its result is the configuration Garmin actually saved, not the
-        request payload.
+        request payload. If verification fails after Garmin accepts the write,
+        it reports success with write_committed=true, a confirmation_error, and
+        the submitted_configuration. Re-read the profile before another update.
 
         Args:
             sport: Garmin sport key, e.g. default/generic, running, or cycling.
@@ -237,6 +243,7 @@ def register_tools(app):
                 "lactate_threshold_hr, calculation_method, or zone_boundaries."
             )
 
+        tracker = WriteTracker("set_heart_rate_zones", "Error updating heart-rate zones")
         try:
             sport_key = _normalize_hr_zone_sport(sport)
             zones = _get_heart_rate_zone_configs()
@@ -286,8 +293,9 @@ def register_tools(app):
             _validate_heart_rate_zone_config(current)
 
             # Garmin's endpoint accepts an array of changed sport profiles and
-            # responds with 204 No Content. Client.request is used rather than
-            # put(..., api=True), which would try to JSON-decode that empty body.
+            # responds with 204 No Content. Track acceptance before attempting
+            # the separate read-back of the saved configuration.
+            tracker.sending()
             garmin_client.client.request(
                 "PUT",
                 "connectapi",
@@ -295,21 +303,30 @@ def register_tools(app):
                 json=[current],
                 api=True,
             )
+            tracker.committed()
 
-            confirmed_zones = _get_heart_rate_zone_configs()
-            confirmed = next(
-                (zone for zone in confirmed_zones if zone.get("sport") == sport_key),
-                None,
-            )
-            if confirmed is None:
-                return (
-                    f"Garmin accepted the update request, but no {sport_key} heart-rate "
-                    "zone profile was present on read-back."
+            try:
+                confirmed_zones = _get_heart_rate_zone_configs()
+                confirmed = next(
+                    (zone for zone in confirmed_zones if zone.get("sport") == sport_key),
+                    None,
                 )
+                if confirmed is None:
+                    raise ValueError(f"No {sport_key} heart-rate zone profile was present on read-back")
+            except Exception as e:
+                return json.dumps({
+                    "status": "success",
+                    "write_committed": True,
+                    "message": "Garmin accepted the update, but the saved profile could not be confirmed. Re-read the profile before another update.",
+                    "confirmation_error": str(e),
+                    "submitted_configuration": current,
+                }, indent=2)
             return json.dumps(confirmed, indent=2)
         except ValueError as e:
+            if tracker.sent:
+                return tracker.error(e)
             return f"Invalid heart-rate zone settings: {str(e)}"
         except Exception as e:
-            return f"Error updating heart-rate zones: {str(e)}"
+            return tracker.error(e)
 
     return app
