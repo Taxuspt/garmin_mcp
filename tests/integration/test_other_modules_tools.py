@@ -2,7 +2,7 @@
 Integration tests for remaining module MCP tools
 
 Tests tools from:
-- devices (6 tools)
+- devices (7 tools)
 - weight_management (5 tools)
 - user_profile (6 tools)
 - data_management (3 tools)
@@ -199,6 +199,87 @@ async def test_get_device_alarms_tool(app_with_devices, mock_garmin_client):
     )
     assert result is not None
     mock_garmin_client.get_device_alarms.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_push_workout_to_device_explicit_device(app_with_devices, mock_garmin_client):
+    """The workout is queued as a FIT message for the given device"""
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 123456, "workoutName": "Upper Body A"
+    }
+    mock_garmin_client.client.post.return_value = Mock(status_code=200)
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456, "device_id": 3456789012}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "success"
+    assert data["device_id"] == 3456789012
+    assert data["workout_name"] == "Upper Body A"
+    mock_garmin_client.get_device_last_used.assert_not_called()
+    args, kwargs = mock_garmin_client.client.post.call_args
+    assert args == ("connectapi", "device-service/devicemessage/messages")
+    assert kwargs["json"] == [{
+        "deviceId": 3456789012,
+        "messageUrl": "workout-service/workout/FIT/123456",
+        "messageType": "workouts",
+        "groupName": None,
+        "messageName": "Upper Body A",
+        "priority": 1,
+        "fileType": "FIT",
+        "metaDataId": 123456,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_push_workout_to_device_defaults_to_last_used(app_with_devices, mock_garmin_client):
+    """Without device_id, the most recently used device is the target"""
+    mock_garmin_client.get_device_last_used.return_value = MOCK_DEVICE_LAST_USED
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutName": "Easy Run"}
+    mock_garmin_client.client.post.return_value = Mock(status_code=200)
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "success"
+    assert data["device_id"] == MOCK_DEVICE_LAST_USED["userDeviceId"]
+    payload = mock_garmin_client.client.post.call_args.kwargs["json"]
+    assert payload[0]["deviceId"] == MOCK_DEVICE_LAST_USED["userDeviceId"]
+
+
+@pytest.mark.asyncio
+async def test_push_workout_to_device_no_default_device(app_with_devices, mock_garmin_client):
+    """Nothing is sent when there is no device to default to"""
+    mock_garmin_client.get_device_last_used.return_value = None
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "failed"
+    assert "No default device" in data["message"]
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_push_workout_to_device_error(app_with_devices, mock_garmin_client):
+    """A failed request is reported, not raised"""
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutName": "Easy Run"}
+    mock_garmin_client.client.post.side_effect = GarminConnectConnectionError(
+        "API Error 404"
+    )
+
+    result = await app_with_devices.call_tool(
+        "push_workout_to_device", {"workout_id": 123456, "device_id": 3456789012}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "failed"
+    assert "404" in data["message"]
 
 
 # Weight Management module tests

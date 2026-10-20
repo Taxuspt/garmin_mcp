@@ -134,3 +134,41 @@ class TestResolveCallTimeout:
     def test_invalid_falls_back_to_default(self, monkeypatch):
         monkeypatch.setenv("GARMIN_MCP_CALL_TIMEOUT", "bogus")
         assert _resolve_call_timeout() == _DEFAULT_CALL_TIMEOUT
+
+
+@pytest.mark.parametrize("status, hint", [
+    (401, "Re-run 'garmin-mcp-auth'"),
+    (429, "Wait a few minutes"),
+    (400, "Check the request arguments"),
+    (403, "Check the request arguments"),
+    (404, "Check the request arguments"),
+    (500, "server error"),
+])
+def test_proxy_classifies_real_library_http_error_shape(status, hint):
+    """Run the real Garmin.connectapi wrapper with its HTTP client mocked."""
+    from garminconnect import Garmin
+
+    garmin = Garmin.__new__(Garmin)
+    garmin.client = Mock()
+    garmin.client.connectapi.side_effect = GarminConnectConnectionError(
+        f"API Error {status} - rejected"
+    )
+    proxy = _GarminProxy(garmin, timeout=0)
+    with pytest.raises(GarminConnectConnectionError) as caught:
+        proxy.connectapi("/test")
+    assert hint in str(caught.value)
+    assert "check your network" not in str(caught.value)
+    assert f"API Error {status}" in str(caught.value)
+
+
+def test_proxy_translates_direct_http_client_writes():
+    """A raw Client attribute is non-callable and used directly by write tools."""
+    from types import SimpleNamespace
+
+    http_client = SimpleNamespace(put=Mock(side_effect=GarminConnectConnectionError(
+        "API Error 401 - expired"
+    )))
+    proxy = _GarminProxy(SimpleNamespace(client=http_client), timeout=0)
+    with pytest.raises(GarminConnectConnectionError, match="Re-run 'garmin-mcp-auth'"):
+        proxy.client.put("connectapi", "/test", json={"x": 1}, api=True)
+    http_client.put.assert_called_once_with("connectapi", "/test", json={"x": 1}, api=True)
