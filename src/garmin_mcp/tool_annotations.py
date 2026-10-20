@@ -70,6 +70,7 @@ DESTRUCTIVE_TOOLS = frozenset(
         "unschedule_workout",
         "unschedule_workouts",
         "update_custom_food",
+        "update_workout",
     }
 )
 

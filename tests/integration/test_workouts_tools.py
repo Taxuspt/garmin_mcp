@@ -516,6 +516,108 @@ async def test_upload_workout_tool(app_with_workouts, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_update_workout_success(app_with_workouts, mock_garmin_client):
+    """The workout is PUT in place with its id and Garmin's ownership fields"""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = {
+        "workoutId": 123456,
+        "workoutName": "Old Name",
+        "ownerId": 80653452,
+        "author": {"userProfilePk": 80653452},
+    }
+    mock_garmin_client.client.put.return_value = Mock(status_code=204)
+
+    workout_data = _running_workout_with_steps(
+        [_timed_interval_step({"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"})],
+        name="New Name",
+    )
+    result = await app_with_workouts.call_tool(
+        "update_workout", {"workout_id": 123456, "workout_data": workout_data}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["name"] == "New Name"
+    args, kwargs = mock_garmin_client.client.put.call_args
+    assert args == ("connectapi", "workout-service/workout/123456")
+    body = kwargs["json"]
+    assert body["workoutId"] == 123456
+    assert body["workoutName"] == "New Name"
+    assert body["ownerId"] == 80653452
+    assert body["author"] == {"userProfilePk": 80653452}
+    assert body["workoutSegments"] == workout_data["workoutSegments"]
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_workout_overrides_mismatched_body_id(app_with_workouts, mock_garmin_client):
+    """A workoutId copied from another workout can't redirect the write"""
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutId": 123456}
+    mock_garmin_client.client.put.return_value = Mock(status_code=200)
+
+    workout_data = {"workoutId": 999, "workoutName": "Copied", "workoutSegments": []}
+    await app_with_workouts.call_tool(
+        "update_workout", {"workout_id": 123456, "workout_data": workout_data}
+    )
+
+    assert mock_garmin_client.client.put.call_args.kwargs["json"]["workoutId"] == 123456
+
+
+@pytest.mark.asyncio
+async def test_update_workout_rejects_invalid_end_condition(app_with_workouts, mock_garmin_client):
+    """The same validation as upload_workout runs before anything is sent"""
+    import json as json_module
+
+    step = _timed_interval_step({"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"})
+    step["endCondition"] = {"conditionTypeId": 4, "conditionTypeKey": "heart.rate"}
+    result = await app_with_workouts.call_tool(
+        "update_workout",
+        {"workout_id": 123456, "workout_data": _running_workout_with_steps([step])},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_workout_not_found(app_with_workouts, mock_garmin_client):
+    """Nothing is sent when the workout doesn't exist"""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = None
+
+    result = await app_with_workouts.call_tool(
+        "update_workout",
+        {"workout_id": 999, "workout_data": {"workoutName": "X", "workoutSegments": []}},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert "not found" in result_data["message"]
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_workout_error(app_with_workouts, mock_garmin_client):
+    """A failed PUT is reported, not raised"""
+    import json as json_module
+
+    mock_garmin_client.get_workout_by_id.return_value = {"workoutId": 123456}
+    mock_garmin_client.client.put.side_effect = Exception("API Error 400")
+
+    result = await app_with_workouts.call_tool(
+        "update_workout",
+        {"workout_id": 123456, "workout_data": {"workoutName": "X", "workoutSegments": []}},
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert "400" in result_data["message"]
+
+
+@pytest.mark.asyncio
 async def test_upload_workout_sport_type_ids_match_reference(app_with_workouts):
     """The sport type IDs upload_workout lists agree with the validated reference map."""
     import re

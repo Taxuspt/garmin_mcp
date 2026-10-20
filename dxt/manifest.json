@@ -672,6 +672,10 @@
       "description": "Update an existing custom food in the user's Garmin nutrition library"
     },
     {
+      "name": "update_workout",
+      "description": "Replace an existing workout's definition, keeping its id"
+    },
+    {
       "name": "upload_course",
       "description": "Upload a GPX file as a Garmin Connect Course."
     },
