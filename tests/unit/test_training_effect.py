@@ -133,3 +133,28 @@ def test_lookup_activity_in_list_scans_recent_page_when_filter_misses():
 def test_lookup_activity_in_list_returns_none_when_missing():
     client = _FakeClient(payload=[{"activityId": 1}])
     assert _lookup_activity_in_list(client, 99) is None
+
+
+def test_curate_training_effect_preserves_zero_summary_values():
+    """Measured zeros take precedence over conflicting list-shaped fallbacks."""
+    curated = _curate_training_effect(
+        {
+            "summaryDTO": {
+                "trainingEffect": 0.0,
+                "anaerobicTrainingEffect": 0.0,
+                "activityTrainingLoad": 0,
+                "performanceCondition": 0,
+            },
+            "aerobicTrainingEffect": 4.0,
+            "anaerobicTrainingEffect": 3.0,
+            "activityTrainingLoad": 200,
+            "performanceCondition": 7,
+        },
+        123,
+        "activity_details",
+    )
+    assert curated["aerobic_effect"] == 0.0
+    assert curated["training_effect"] == 0.0
+    assert curated["anaerobic_effect"] == 0.0
+    assert curated["training_load"] == 0
+    assert curated["performance_condition"] == 0

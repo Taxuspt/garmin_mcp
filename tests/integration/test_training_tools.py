@@ -1928,3 +1928,104 @@ async def test_vo2_trend_preserves_undated_sport_alongside_dated_sport(
     data = json.loads(result[0][0].text)
     assert data["sport"] == "running"
     assert [point["vo2_max"] for point in data["trend"]] == [48, 48.5]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("summary", [None, {"lastNightAvg": 54}])
+async def test_hrv_timeseries_preserves_summary_with_null_readings(
+    app_with_training, mock_garmin_client, summary
+):
+    """Unmeasured readings do not discard the available HRV summary."""
+    mock_garmin_client.get_hrv_data.return_value = {
+        "hrvSummary": summary,
+        "hrvReadings": None,
+    }
+    result = await app_with_training.call_tool(
+        "get_hrv_data", {"date": "2024-01-15", "return_timeseries": True}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["date"] == "2024-01-15"
+    assert data["hrv_readings"] == []
+    assert data["readings_count"] == 0
+    if summary:
+        assert data["last_night_avg_hrv_ms"] == 54
+
+
+@pytest.mark.asyncio
+async def test_cycling_ftp_accepts_list_payload(app_with_training, mock_garmin_client):
+    """garminconnect 0.3.2 declares the latest FTP endpoint may return a list."""
+    mock_garmin_client.get_cycling_ftp.return_value = [MOCK_CYCLING_FTP]
+    result = await app_with_training.call_tool("get_cycling_ftp", {})
+    data = json.loads(result[0][0].text)
+    assert data["functional_threshold_power_watts"] == MOCK_CYCLING_FTP["functionalThresholdPower"]
+    assert data["sport"] == MOCK_CYCLING_FTP["sport"]
+
+
+@pytest.mark.asyncio
+async def test_hill_score_preserves_metrics_with_null_daily_scores(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_hill_score.return_value = {
+        "hillScoreDTOList": None, "periodAvgScore": None, "maxScore": 74,
+    }
+    result = await app_with_training.call_tool(
+        "get_hill_score", {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["max_score"] == 74
+    assert data["daily_scores"] == []
+    assert "latest_date" not in data
+
+
+@pytest.mark.asyncio
+async def test_hill_score_selects_latest_calendar_date(
+    app_with_training, mock_garmin_client
+):
+    """The latest score must not depend on upstream list order."""
+    mock_garmin_client.get_hill_score.return_value = {
+        "hillScoreDTOList": [
+            {"calendarDate": "2024-01-08", "overallScore": 40},
+            {"calendarDate": "2024-01-15", "overallScore": 55, "strengthScore": 60},
+            {"calendarDate": "2024-01-10", "overallScore": 45},
+        ]
+    }
+    result = await app_with_training.call_tool(
+        "get_hill_score", {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["latest_date"] == "2024-01-15"
+    assert data["latest_overall_score"] == 55
+    assert data["latest_strength_score"] == 60
+    assert len(data["daily_scores"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_get_endurance_score_handles_null_score_dto(app_with_training, mock_garmin_client):
+    """A day without a score must not crash the tool.
+
+    For days before the device computed an endurance score (and for today,
+    until Garmin has computed it), Garmin answers with an explicit null
+    `enduranceScoreDTO` and null period stats. `.get("enduranceScoreDTO", {})`
+    returned None and the next `.get` raised "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_endurance_score.return_value = {
+        "userProfilePK": 1,
+        "startDate": "2022-09-01",
+        "endDate": "2022-09-01",
+        "avg": None,
+        "max": None,
+        "groupMap": {"2022-08-29": None},
+        "enduranceScoreDTO": None,
+    }
+    mock_garmin_client.get_activity_types.return_value = MOCK_ACTIVITY_TYPES
+    training._activity_type_cache = None
+
+    result = await app_with_training.call_tool(
+        "get_endurance_score",
+        {"start_date": "2022-09-01", "end_date": "2022-09-01"},
+    )
+    # The tool drops None fields, so a day without a score keeps only its dates.
+    data = json.loads(result[0][0].text)
+    assert "current_score" not in data
+    assert data["start_date"] == "2022-09-01"
+    assert data["weekly_breakdown"] == [{"week_start": "2022-08-29"}]
