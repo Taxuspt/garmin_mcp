@@ -39,6 +39,7 @@ from garmin_mcp import activity_analysis
 from garmin_mcp import calendar_events
 from garmin_mcp.tool_annotations import annotations_for
 from garmin_mcp.tool_profiles import resolve_tool_profile
+from garmin_mcp.write_errors import _upstream
 
 
 def is_interactive_terminal() -> bool:
@@ -222,6 +223,9 @@ class _GarminProxy:
 
     def __getattr__(self, name):
         attr = getattr(self._client, name)
+        if name == "client":
+            # Direct HTTP writes must share runtime hints and the call bound.
+            return _GarminProxy(attr, timeout=self._timeout)
         if not callable(attr):
             return attr
 
@@ -229,12 +233,26 @@ class _GarminProxy:
             try:
                 return attr(*args, **kwargs)
             except tuple(self._MESSAGES) as exc:
-                for exc_type, (prefix, hint) in self._MESSAGES.items():
+                for exc_type, messages in self._MESSAGES.items():
                     if isinstance(exc, exc_type):
-                        details = str(exc).strip().rstrip(".") or "unknown error"
-                        full_msg = f"{prefix}: {details}. {hint}"
-                        raise type(exc)(full_msg) from None
-                raise
+                        prefix, hint = messages
+                        break
+                # garminconnect 0.3.2 wraps every API HTTP failure as a
+                # ConnectionError, with status only in its message.
+                status, _ = _upstream(exc)
+                if status == 401:
+                    prefix, hint = self._MESSAGES[GarminConnectAuthenticationError]
+                elif status == 429:
+                    prefix, hint = self._MESSAGES[GarminConnectTooManyRequestsError]
+                elif status is not None and 400 <= status < 500:
+                    prefix = f"Garmin rejected the request (HTTP {status})"
+                    hint = "Check the request arguments and account permissions."
+                elif status is not None and status >= 500:
+                    prefix = "Garmin Connect server error"
+                    hint = "Garmin returned a server error; try again later."
+                details = str(exc).strip().rstrip(".") or "unknown error"
+                full_msg = f"{prefix}: {details}. {hint}"
+                raise type(exc)(full_msg) from exc
 
         def _call(*args, **kwargs):
             if not self._timeout:
