@@ -2201,6 +2201,51 @@ async def test_upsert_and_log_skips_null_search_metadata(app_with_nutrition, moc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_row", [None, {"foodMetaData": None}, {"foodMetaData": {"foodId": "incomplete"}, "nutritionContents": None}])
+async def test_search_foods_retains_good_rows_with_null_optional_data(
+    app_with_nutrition, mock_garmin_client, bad_row
+):
+    mock_garmin_client.connectapi.return_value = {
+        "results": [bad_row, *_SEARCH_RESPONSE["results"]], "moreDataAvailable": False,
+    }
+    result = await app_with_nutrition.call_tool("search_foods", {"query": "Cheerios"})
+    data = json.loads(result[0][0].text)
+    good = next(row for row in data["results"] if row.get("name") == "Cheerios")
+    assert good["servings"][0]["calories"] == 100
+
+
+@pytest.mark.asyncio
+async def test_search_foods_handles_null_results(app_with_nutrition, mock_garmin_client):
+    mock_garmin_client.connectapi.return_value = {"results": None}
+    result = await app_with_nutrition.call_tool("search_foods", {"query": "Cheerios"})
+    assert json.loads(result[0][0].text)["results"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool, extra", [
+    ("log_food", {"name": "Oats", "calories": 100, "carbs": 10, "protein": 5, "fat": 2}),
+    ("log_custom_food", {"food_id": "food001", "serving_id": "srv001"}),
+    ("upsert_and_log", {"food_name": "Oats", "calories": 100}),
+])
+@pytest.mark.parametrize("meal_date, meal_time", [
+    ("2024-01-15", "8:30:00"), ("2024-01-15", "noon"),
+    ("2024-01-15", "25:00:00"), ("2024-01-15", "12:30 PM"),
+    ("2024-01-15", "2024-01-15T08:30:00"), ("2024-02-30", "08:30:00"),
+])
+async def test_food_logging_rejects_invalid_meal_datetime_before_requests(
+    app_with_nutrition, mock_garmin_client, tool, extra, meal_date, meal_time
+):
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool(tool, {"meal_date": meal_date, "meal_time": meal_time, **extra})
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert "meal_date" in data["message"] or "meal_time" in data["message"]
+    mock_garmin_client.connectapi.assert_not_called()
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [
     GarminConnectConnectionError("HTTP error: API Error 500 - lookup failed"),
     GarminConnectConnectionError("HTTP error: API Error 401 - expired"),
