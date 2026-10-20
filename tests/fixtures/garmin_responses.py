@@ -49,13 +49,18 @@ MOCK_ACTIVITY_DETAILS = {
     "maxHR": 165,
     "calories": 350,
     "summaryDTO": {
-        "totalDistance": 5000.0,
-        "totalCalories": 350,
-        "avgHR": 145,
-        "maxHR": 165
+        "startTimeLocal": "2024-01-15 07:00:00",
+        "startTimeGMT": "2024-01-15 07:00:00",
+        "distance": 5000.0,
+        "duration": 1800.0,
+        "calories": 350,
+        "averageHR": 145,
+        "maxHR": 165,
+        "elevationGain": 50.5,
     },
     "metadataDTO": {
-        "deviceName": "Garmin Forerunner 945"
+        "deviceName": "Garmin Forerunner 945",
+        "lapCount": 2,
     }
 }
 
