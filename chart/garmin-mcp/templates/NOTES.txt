@@ -1,0 +1,30 @@
+{{ include "garmin-mcp.fullname" . }} is deployed (transport: {{ .Values.transport.mode }}).
+
+{{- if ne .Values.transport.mode "stdio" }}
+
+MCP endpoint (in-cluster):
+  http://{{ include "garmin-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/mcp
+
+Port-forward to test locally:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "garmin-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl http://localhost:{{ .Values.service.port }}/healthz
+
+{{- if .Values.ingress.enabled }}
+
+External URL:
+  http://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+  (auth is expected to be enforced by your ingress / Authelia, not the app)
+{{- end }}
+{{- end }}
+
+{{- if .Values.garmin.existingSecret }}
+
+Using existing credentials Secret: {{ .Values.garmin.existingSecret }}
+  It must contain either GARMINTOKENS (contents of garmin_tokens.json; works
+  with MFA) or GARMIN_EMAIL + GARMIN_PASSWORD (MFA-free accounts only).
+{{- end }}
+
+Reminder: if your Garmin account uses MFA, the first login cannot run inside a
+pod. Pre-authenticate locally with `garmin-mcp-auth`, then install with
+  --set-file garmin.tokens.json=$HOME/.garminconnect/garmin_tokens.json
+(or put that JSON under the GARMINTOKENS key of garmin.existingSecret).

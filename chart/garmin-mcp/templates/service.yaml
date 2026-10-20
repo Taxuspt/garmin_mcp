@@ -1,0 +1,16 @@
+{{- if ne .Values.transport.mode "stdio" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "garmin-mcp.fullname" . }}
+  labels:
+    {{- include "garmin-mcp.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "garmin-mcp.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+{{- end }}

@@ -1,0 +1,169 @@
+{{- if eq .Values.transport.mode "stdio" -}}
+{{- fail "transport.mode=stdio is not supported by this chart (a pod has no stdin to attach to); use streamable-http or sse" -}}
+{{- end -}}
+{{- if and (include "garmin-mcp.tokenMode" .) (not .Values.persistence.enabled) -}}
+{{- fail "garmin.tokens.* requires persistence.enabled=true: without a volume the token JSON would be passed inline via $GARMINTOKENS (logged at startup) and rotated refresh tokens would be lost on restart" -}}
+{{- end -}}
+{{- $http := ne .Values.transport.mode "stdio" -}}
+{{- /* PVC-backed token store (directory mode) whenever persistence is on. It is
+       seeded once from the Secret by the init container below, then the app
+       persists each rotated token back to it, so the rotating refresh-token
+       chain survives restarts and scale-to-zero. */}}
+{{- $usePvc := .Values.persistence.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "garmin-mcp.fullname" . }}
+  labels:
+    {{- include "garmin-mcp.labels" . | nindent 4 }}
+spec:
+  # Keep at 1: the Garmin session/tokens are per-pod and FastMCP HTTP sessions
+  # are stateful. Scaling >1 needs stateless HTTP plus shared token storage.
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # Single RWO volume: avoid two pods mounting it during rollouts.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "garmin-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "garmin-mcp.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $usePvc }}
+      initContainers:
+        # Seed the token volume from the Secret on FIRST boot only. If the PVC
+        # already holds garmin_tokens.json (a token the running app rotated), we
+        # keep it — that is what lets the rotating refresh token survive cold
+        # starts. In credentials mode there is no seed key, so this is a no-op and
+        # the app logs in and writes the volume itself.
+        - name: seed-tokens
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import os
+              d = os.environ["MOUNT"]
+              p = os.path.join(d, "garmin_tokens.json")
+              seed = os.environ.get("GARMINTOKENS_SEED")
+              if os.path.exists(p):
+                  print("token store present; keeping rotated token", flush=True)
+              elif seed:
+                  os.makedirs(d, exist_ok=True)
+                  # Owner-only: the app only hardens the dir on the fresh-credentials
+                  # path, so a seeded file keeps whatever mode it was created with.
+                  with open(os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+                      f.write(seed)
+                  print("seeded token store from Secret", flush=True)
+              else:
+                  print("no seed and no token on volume; interactive auth required", flush=True)
+          env:
+            - name: MOUNT
+              value: {{ .Values.persistence.mountPath | quote }}
+            - name: GARMINTOKENS_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "garmin-mcp.secretName" . }}
+                  key: GARMINTOKENS
+                  optional: true
+          volumeMounts:
+            - name: tokens
+              mountPath: {{ .Values.persistence.mountPath }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: GARMIN_MCP_TRANSPORT
+              value: {{ .Values.transport.mode | quote }}
+            {{- if $http }}
+            - name: GARMIN_MCP_HOST
+              value: {{ .Values.transport.host | quote }}
+            - name: GARMIN_MCP_PORT
+              value: {{ .Values.transport.port | quote }}
+            {{- end }}
+            {{- if .Values.garmin.isCn }}
+            - name: GARMIN_IS_CN
+              value: "true"
+            {{- end }}
+            {{- if $usePvc }}
+            - name: GARMINTOKENS
+              value: {{ .Values.persistence.mountPath | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "garmin-mcp.secretName" . }}
+          {{- if $http }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.transport.port }}
+          {{- if .Values.probes.enabled }}
+          # startupProbe polls every startupPeriodSeconds and gates
+          # readiness/liveness until it passes, so the pod goes Ready the instant
+          # the app is listening + logged in — no fixed readiness delay to sit
+          # through. Lower the interval where fast cold starts matter.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.probes.startupPeriodSeconds }}
+            failureThreshold: {{ .Values.probes.startupFailureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+          {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if $usePvc }}
+          volumeMounts:
+            - name: tokens
+              mountPath: {{ .Values.persistence.mountPath }}
+          {{- end }}
+      {{- if $usePvc }}
+      volumes:
+        - name: tokens
+          persistentVolumeClaim:
+            claimName: {{ include "garmin-mcp.pvcName" . }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
