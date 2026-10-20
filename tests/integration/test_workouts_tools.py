@@ -4,6 +4,7 @@ Integration tests for workouts module MCP tools
 Tests workout tools using FastMCP integration with mocked Garmin API responses.
 """
 import pytest
+import json
 from unittest.mock import Mock, call
 from mcp.server.fastmcp import FastMCP
 
@@ -73,6 +74,157 @@ def _distance_pace_step_with_nested_bounds():
             "targetValueTwo": 1.9607843,
         },
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["upload_workout", "upload_workouts", "schedule_workouts"])
+@pytest.mark.parametrize("zone_value,include_null_zone", [(3, True), ("3", True), ("3", False)])
+async def test_upload_repairs_null_hr_zone_and_numeric_strings(
+    app_with_workouts, mock_garmin_client, tool_name, zone_value, include_null_zone
+):
+    """All upload paths treat an explicit null zone as missing."""
+    step = _timed_interval_step({
+        "workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"
+    })
+    step.update(targetValueOne=zone_value, targetValueTwo=None)
+    if include_null_zone:
+        step["zoneNumber"] = None
+    payload = _running_workout_with_steps([step])
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 123}
+    mock_garmin_client.client.post.return_value = Mock(status_code=200)
+    arguments = {
+        "upload_workout": {"workout_data": payload},
+        "upload_workouts": {"workouts": [payload]},
+        "schedule_workouts": {"schedules": [{
+            "calendar_date": "2026-10-20", "workout_data": payload
+        }]},
+    }[tool_name]
+
+    result = await app_with_workouts.call_tool(tool_name, arguments)
+
+    data = json.loads(result[0][0].text)
+    assert data.get("status", data.get("results", [{}])[0].get("status")) == "success"
+    sent = mock_garmin_client.upload_workout.call_args.args[0]
+    sent_step = sent["workoutSegments"][0]["workoutSteps"][0]
+    assert sent_step["zoneNumber"] == 3
+    assert "targetValueOne" not in sent_step
+    assert "targetValueTwo" not in sent_step
+
+
+@pytest.mark.asyncio
+async def test_upload_backfills_explicit_null_repeat_count(app_with_workouts, mock_garmin_client):
+    group = {
+        "type": "RepeatGroupDTO", "numberOfIterations": None,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 4, "workoutSteps": [],
+    }
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 123}
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout", {"workout_data": _running_workout_with_steps([group])}
+    )
+
+    assert json.loads(result[0][0].text)["status"] == "success"
+    sent = mock_garmin_client.upload_workout.call_args.args[0]
+    assert sent["workoutSegments"][0]["workoutSteps"][0]["numberOfIterations"] == 4
+
+
+@pytest.mark.asyncio
+async def test_upload_normalizes_string_condition_and_target_ids(app_with_workouts, mock_garmin_client):
+    step = _timed_interval_step({
+        "workoutTargetTypeId": "1", "workoutTargetTypeKey": "no.target"
+    })
+    step["endCondition"]["conditionTypeId"] = "2"
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 123}
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout", {"workout_data": _running_workout_with_steps([step])}
+    )
+
+    assert json.loads(result[0][0].text)["status"] == "success"
+    sent = mock_garmin_client.upload_workout.call_args.args[0]
+    sent_step = sent["workoutSegments"][0]["workoutSteps"][0]
+    assert sent_step["endCondition"]["conditionTypeId"] == 2
+    assert sent_step["targetType"]["workoutTargetTypeId"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", ["segments", "steps", "nested_steps"])
+async def test_upload_null_step_lists_have_a_field_error(app_with_workouts, mock_garmin_client, shape):
+    payload = _running_workout_with_steps([])
+    expected_path = "workoutSegments"
+    if shape == "segments":
+        payload["workoutSegments"] = None
+    elif shape == "steps":
+        payload["workoutSegments"][0]["workoutSteps"] = None
+        expected_path += "[0].workoutSteps"
+    else:
+        payload["workoutSegments"][0]["workoutSteps"] = [{
+            "type": "RepeatGroupDTO", "workoutSteps": None
+        }]
+        expected_path += "[0].workoutSteps[0].workoutSteps"
+
+    result = await app_with_workouts.call_tool("upload_workout", {"workout_data": payload})
+
+    assert f"{expected_path} must be a list" in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_workouts_keeps_garmin_estimated_metrics(app_with_workouts, mock_garmin_client):
+    mock_garmin_client.get_workouts.return_value = [{
+        **MOCK_SWIM_WORKOUT_DETAILS, "estimatedDurationInSecs": 3600
+    }]
+
+    result = await app_with_workouts.call_tool("get_workouts", {})
+
+    summary = json.loads(result[0][0].text)["workouts"][0]
+    assert summary["estimated_duration_seconds"] == 3600
+    assert summary["estimated_distance_meters"] == 3000.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("secondary", [False, True])
+async def test_get_workout_pace_targets_include_mps_units(
+    app_with_workouts, mock_garmin_client, secondary
+):
+    prefix = "secondary" if secondary else ""
+    def target_field(name):
+        return prefix + name[0].upper() + name[1:] if prefix else name
+    step = {
+        target_field("targetType"): {
+            "workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone"
+        },
+        target_field("targetValueOne"): 2.777,
+        target_field("targetValueTwo"): 2.472,
+        target_field("targetValueUnit"): None,
+    }
+    mock_garmin_client.get_workout_by_id.return_value = _running_workout_with_steps([step])
+
+    result = await app_with_workouts.call_tool("get_workout_by_id", {"workout_id": 123})
+
+    curated = json.loads(result[0][0].text)["segments"][0]["steps"][0]
+    output_prefix = "secondary_" if secondary else ""
+    assert curated[output_prefix + "target_value_unit"] == "meters_per_second"
+    assert curated[output_prefix + "target_value_low"] == 2.777
+    assert curated[output_prefix + "target_value_high"] == 2.472
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["schedule_workout", "schedule_workouts"])
+@pytest.mark.parametrize("status_code", [201, 202, 204])
+async def test_schedule_workout_accepts_all_success_statuses(
+    app_with_workouts, mock_garmin_client, tool_name, status_code
+):
+    mock_garmin_client.client.post.return_value = Mock(status_code=status_code)
+    schedule = {"workout_id": 123, "calendar_date": "2026-10-20"}
+    arguments = schedule if tool_name == "schedule_workout" else {"schedules": [schedule]}
+
+    result = await app_with_workouts.call_tool(tool_name, arguments)
+
+    data = json.loads(result[0][0].text)
+    assert data.get("status", data.get("results", [{}])[0].get("status")) == "success"
+    mock_garmin_client.client.post.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -2419,13 +2571,14 @@ async def test_schedule_workouts_partial_failure(app_with_workouts, mock_garmin_
     """Test schedule_workouts when some workouts fail"""
     import json as json_module
     from unittest.mock import MagicMock
+    from garminconnect import GarminConnectConnectionError
 
     ok_response = MagicMock()
     ok_response.status_code = 200
-    err_response = MagicMock()
-    err_response.status_code = 404
-
-    mock_garmin_client.client.post.side_effect = [ok_response, err_response]
+    # garminconnect 0.3.2 raises for HTTP >= 400; it never returns a 404 Response.
+    mock_garmin_client.client.post.side_effect = [
+        ok_response, GarminConnectConnectionError("API Error 404 - Workout not found")
+    ]
 
     schedules = [
         {"workout_id": 111, "calendar_date": "2024-01-15"},
@@ -2442,8 +2595,8 @@ async def test_schedule_workouts_partial_failure(app_with_workouts, mock_garmin_
     assert result_data["succeeded"] == 1
     assert result_data["failed"] == 1
     assert result_data["results"][0]["status"] == "success"
-    assert result_data["results"][1]["status"] == "failed"
-    assert result_data["results"][1]["http_status"] == 404
+    assert result_data["results"][1]["status"] == "error"
+    assert "API Error 404 - Workout not found" in result_data["results"][1]["message"]
 
 
 @pytest.mark.asyncio
