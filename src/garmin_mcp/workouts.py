@@ -1120,6 +1120,69 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
+    async def update_workout(workout_id: int, workout_data: dict) -> str:
+        """Replace an existing workout's definition, keeping its id
+
+        Use this to change a workout (steps, targets, name) instead of
+        deleting and re-uploading it. The workout keeps its id, so calendar
+        entries that point at it stay in place and pick up the new definition.
+
+        Garmin replaces the whole workout, so workout_data must be the
+        complete workout, not just the changed fields. Start from
+        get_workout_by_id(workout_id, raw=True) (the default summary leaves
+        fields out and is not accepted here) or build it the same way as for
+        upload_workout; the same structure, target-value and end-condition
+        rules apply (see upload_workout). Pace targets are in m/s, not
+        min/km (5:00/km = 3.333 m/s).
+
+        Args:
+            workout_id: ID of the workout to replace (from get_workouts)
+            workout_data: The complete new workout structure, as for upload_workout
+        """
+        try:
+            _normalize_workout_steps(workout_data)
+            _validate_end_condition_steps(workout_data)
+            _validate_target_type_steps(workout_data)
+
+            current = garmin_client.get_workout_by_id(workout_id)
+            if not current:
+                return json.dumps({
+                    "status": "failed",
+                    "workout_id": workout_id,
+                    "message": f"Workout {workout_id} not found",
+                }, indent=2)
+
+            # Keep the ownership fields Garmin sent; the id in the body must
+            # match the one in the URL.
+            payload = {
+                **workout_data,
+                **{k: current[k] for k in ("ownerId", "author") if current.get(k) is not None},
+                "workoutId": workout_id,
+            }
+            url = f"workout-service/workout/{workout_id}"
+            response = garmin_client.client.put("connectapi", url, json=payload)
+
+            if response.status_code in (200, 204):
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "name": payload.get("workoutName") or current.get("workoutName"),
+                    "message": f"Workout {workout_id} updated",
+                }, indent=2)
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "http_status": response.status_code,
+                "message": f"Failed to update workout: HTTP {response.status_code}",
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "message": f"Failed to update workout: {str(e)}",
+            }, indent=2)
+
+    @app.tool()
     async def delete_workout(workout_id: int, confirm: bool = False) -> str:
         """Delete a workout from Garmin Connect
 
