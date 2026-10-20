@@ -575,25 +575,32 @@ def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=Non
             garmin = Garmin(is_cn=is_cn)
             garmin.login(tokenstore)
 
-    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError):
-        # Session is expired. You'll need to log in again
+    except (FileNotFoundError, GarminConnectConnectionError, GarminConnectTooManyRequestsError, GarminConnectAuthenticationError) as token_error:
+        # Tokens are missing, unreadable, rejected, or Garmin was unreachable.
+        # Say which: the library raises the same "Username and password are
+        # required" error for a missing directory, a corrupt file and a path
+        # garmin-mcp-auth never wrote to, and the old "OAuth tokens not found"
+        # message hid all of that (#335).
+        token_problem = token_utils.describe_token_failure(tokenstore, token_error)
 
         # Check if we're in a non-interactive environment without credentials
         if not is_interactive_terminal() and (not email or not password):
             print(
-                "ERROR: OAuth tokens not found and no interactive terminal available.\n"
-                "Please authenticate first:\n"
-                "  1. Run: garmin-mcp-auth\n"
-                "  2. Enter your credentials and MFA code\n"
-                "  3. Restart your MCP client\n"
-                f"Tokens will be saved to: {tokenstore}\n",
+                "ERROR: Garmin login from saved tokens failed and no interactive terminal is available.\n"
+                f"  {token_problem}\n"
+                "To fix it:\n"
+                "  1. Run: garmin-mcp-auth  (add --force-reauth if tokens exist but were rejected)\n"
+                "  2. Start the MCP server with the same GARMINTOKENS (or none) that\n"
+                "     garmin-mcp-auth used; `garmin-mcp-auth --diagnose` prints the resolved paths\n"
+                "  3. Restart your MCP client\n",
                 file=sys.stderr,
             )
             return None
 
         print(
-            "Login tokens not present, login with your Garmin Connect credentials to generate them.\n"
-            f"They will be stored in '{tokenstore}' for future use.\n",
+            f"{token_problem}\n"
+            "Logging in with your Garmin Connect credentials to generate new tokens; "
+            f"they will be stored in '{tokenstore}' for future use.\n",
             file=sys.stderr,
         )
         try:
