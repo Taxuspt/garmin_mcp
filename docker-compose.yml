@@ -10,6 +10,12 @@ services:
       - GARMIN_EMAIL=${GARMIN_EMAIL}
       - GARMIN_PASSWORD=${GARMIN_PASSWORD}
       # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
+      # Serve over HTTP instead of stdio, protected by a shared secret that the
+      # client must send as "Authorization: Bearer <token>" (generate one with
+      # `openssl rand -hex 32`). Also uncomment the `ports:` block below.
+      # - GARMIN_MCP_TRANSPORT=streamable-http
+      # - GARMIN_MCP_HOST=0.0.0.0
+      # - GARMIN_MCP_HTTP_TOKEN=${GARMIN_MCP_HTTP_TOKEN}
 
     # Option 2: Use file-based secrets (uncomment to use)
     # environment:
@@ -18,6 +24,10 @@ services:
     # secrets:
     #   - garmin_email
     #   - garmin_password
+
+    # Expose the HTTP transport (only with GARMIN_MCP_HTTP_TOKEN set above)
+    # ports:
+    #   - "8000:8000"
 
     # Mount volume to persist Garmin OAuth tokens
     volumes:

@@ -25,9 +25,8 @@ def test_server_tty_does_not_attempt_password_login_without_credentials(monkeypa
     garmin.login.side_effect = GarminConnectAuthenticationError("token file missing")
     garmin.client.login.side_effect = GarminConnectAuthenticationError("unexpected credential request")
     monkeypatch.setattr(garmin_mcp, "Garmin", Mock(return_value=garmin))
-    monkeypatch.setattr(garmin_mcp, "tokenstore", str(tmp_path / "tokens"))
     monkeypatch.setattr(garmin_mcp, "is_interactive_terminal", lambda: True)
-    assert garmin_mcp.init_api(email, password) is None
+    assert garmin_mcp.init_api(email, password, tokenstore=str(tmp_path / "tokens")) is None
     garmin.client.login.assert_not_called()
 
 
@@ -40,8 +39,9 @@ def test_server_preserves_login_strategy_failure_without_guessing_credentials(mo
     garmin.login.side_effect = GarminConnectAuthenticationError("token file missing")
     garmin.client.login.side_effect = GarminConnectConnectionError(message)
     monkeypatch.setattr(garmin_mcp, "Garmin", Mock(return_value=garmin))
-    monkeypatch.setattr(garmin_mcp, "tokenstore", str(tmp_path / "tokens"))
-    assert garmin_mcp.init_api("user@example.invalid", "unused-test-password") is None
+    assert garmin_mcp.init_api(
+        "user@example.invalid", "unused-test-password", tokenstore=str(tmp_path / "tokens")
+    ) is None
     err = capsys.readouterr().err
     assert message in err
     assert "Invalid credentials" not in err

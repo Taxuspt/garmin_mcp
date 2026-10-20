@@ -138,3 +138,61 @@ def test_structured_output_explicit_true_is_preserved():
     fn.__name__ = "get_a"
     filt.tool(structured_output=True)(fn)
     assert app.tool_kwargs == [{"structured_output": True}]
+
+
+# --- profiles compose with the allow/deny lists (#336) -----------------------
+
+
+def test_profile_registers_only_its_tools():
+    app = FakeApp()
+    filt = _ToolFilter(app, set(), set(), profile=frozenset({"get_a"}))
+    _register(filt, ["get_a", "get_b", "get_c"])
+    assert app.registered == ["get_a"]
+
+
+def test_profile_plus_allowlist_adds_tools():
+    app = FakeApp()
+    filt = _ToolFilter(app, {"get_c"}, set(), profile=frozenset({"get_a"}))
+    _register(filt, ["get_a", "get_b", "get_c"])
+    assert app.registered == ["get_a", "get_c"]
+
+
+def test_profile_plus_denylist_removes_tools():
+    app = FakeApp()
+    filt = _ToolFilter(app, set(), {"get_a"}, profile=frozenset({"get_a", "get_b"}))
+    _register(filt, ["get_a", "get_b", "get_c"])
+    assert app.registered == ["get_b"]
+
+
+def test_profile_applies_both_lists_together():
+    app = FakeApp()
+    filt = _ToolFilter(
+        app, {"get_c", "get_d"}, {"get_a", "get_d"}, profile=frozenset({"get_a", "get_b"})
+    )
+    _register(filt, ["get_a", "get_b", "get_c", "get_d"])
+    # profile {a, b} + allowlist {c, d} - denylist {a, d}
+    assert app.registered == ["get_b", "get_c"]
+
+
+def test_profile_matching_is_case_insensitive():
+    app = FakeApp()
+    filt = _ToolFilter(app, set(), set(), profile=frozenset({"get_a"}))
+    _register(filt, ["GET_A", "get_b"])
+    assert app.registered == ["GET_A"]
+
+
+def test_unknown_filter_names_with_profile_checks_both_lists():
+    app = FakeApp()
+    filt = _ToolFilter(app, {"get_a", "typo_one"}, {"typo_two"}, profile=frozenset({"get_b"}))
+    _register(filt, ["get_a", "get_b"])
+    assert filt.unknown_filter_names() == ["typo_one", "typo_two"]
+
+
+def test_resolve_tool_profile_reads_env(monkeypatch):
+    monkeypatch.setenv("GARMIN_TOOL_PROFILE", "minimal")
+    from garmin_mcp.tool_profiles import TOOL_PROFILES
+
+    assert garmin_mcp._resolve_tool_profile() == TOOL_PROFILES["minimal"]
+
+    monkeypatch.delenv("GARMIN_TOOL_PROFILE")
+    assert garmin_mcp._resolve_tool_profile() is None
