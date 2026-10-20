@@ -1828,3 +1828,35 @@ async def test_hill_score_selects_latest_calendar_date(
     assert data["latest_overall_score"] == 55
     assert data["latest_strength_score"] == 60
     assert len(data["daily_scores"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_get_endurance_score_handles_null_score_dto(app_with_training, mock_garmin_client):
+    """A day without a score must not crash the tool.
+
+    For days before the device computed an endurance score (and for today,
+    until Garmin has computed it), Garmin answers with an explicit null
+    `enduranceScoreDTO` and null period stats. `.get("enduranceScoreDTO", {})`
+    returned None and the next `.get` raised "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_endurance_score.return_value = {
+        "userProfilePK": 1,
+        "startDate": "2022-09-01",
+        "endDate": "2022-09-01",
+        "avg": None,
+        "max": None,
+        "groupMap": {"2022-08-29": None},
+        "enduranceScoreDTO": None,
+    }
+    mock_garmin_client.get_activity_types.return_value = MOCK_ACTIVITY_TYPES
+    training._activity_type_cache = None
+
+    result = await app_with_training.call_tool(
+        "get_endurance_score",
+        {"start_date": "2022-09-01", "end_date": "2022-09-01"},
+    )
+    # The tool drops None fields, so a day without a score keeps only its dates.
+    data = json.loads(result[0][0].text)
+    assert "current_score" not in data
+    assert data["start_date"] == "2022-09-01"
+    assert data["weekly_breakdown"] == [{"week_start": "2022-08-29"}]
