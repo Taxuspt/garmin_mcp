@@ -20,7 +20,7 @@ def _as_snapshot_list(payload: Any) -> List[Dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     if isinstance(payload, dict):
-        return [payload]
+        return [payload] if payload else []
     return []
 
 
@@ -273,7 +273,7 @@ def _extract_sleep_summary(sleep_data: Dict[str, Any]) -> Dict[str, Any]:
     summary: Dict[str, Any] = {}
 
     # Extract data from dailySleepDTO if available
-    daily_sleep = sleep_data.get('dailySleepDTO', {})
+    daily_sleep = sleep_data.get('dailySleepDTO') or {}
     if daily_sleep:
         # Sleep duration and timing
         summary['sleep_seconds'] = daily_sleep.get('sleepTimeSeconds')
@@ -297,17 +297,23 @@ def _extract_sleep_summary(sleep_data: Dict[str, Any]) -> Dict[str, Any]:
 
         # Sleep disruptions
         summary['awake_count'] = daily_sleep.get('awakeCount')
-        summary['restless_moments_count'] = daily_sleep.get('restlessMomentsCount')
 
         # Average physiological metrics
         summary['avg_sleep_stress'] = daily_sleep.get('avgSleepStress')
-        summary['resting_heart_rate_bpm'] = daily_sleep.get('restingHeartRate')
+
+    # Accept top-level physiological metrics while retaining the nested shape.
+    summary['restless_moments_count'] = sleep_data.get(
+        'restlessMomentsCount', daily_sleep.get('restlessMomentsCount')
+    )
+    summary['resting_heart_rate_bpm'] = sleep_data.get(
+        'restingHeartRate', daily_sleep.get('restingHeartRate')
+    )
 
     # Extract SpO2 summary if available
     spo2_summary = sleep_data.get('wellnessSpO2SleepSummaryDTO', {})
     if spo2_summary:
-        summary['avg_spo2_percent'] = spo2_summary.get('averageSpo2')
-        summary['lowest_spo2_percent'] = spo2_summary.get('lowestSpo2')
+        summary['avg_spo2_percent'] = spo2_summary.get('averageSPO2', spo2_summary.get('averageSpo2'))
+        summary['lowest_spo2_percent'] = spo2_summary.get('lowestSPO2', spo2_summary.get('lowestSpo2'))
 
     # Add HRV data if available at top level
     if 'avgOvernightHrv' in sleep_data:
@@ -510,8 +516,8 @@ def register_tools(app):
                 "total_steps": stats.get('totalSteps'),
                 "daily_step_goal": stats.get('dailyStepGoal'),
                 "distance_meters": stats.get('totalDistanceMeters'),
-                "floors_ascended": round(stats.get('floorsAscended', 0), 1) if stats.get('floorsAscended') else None,
-                "floors_descended": round(stats.get('floorsDescended', 0), 1) if stats.get('floorsDescended') else None,
+                "floors_ascended": round(stats['floorsAscended'], 1) if stats.get('floorsAscended') is not None else None,
+                "floors_descended": round(stats['floorsDescended'], 1) if stats.get('floorsDescended') is not None else None,
 
                 # Calories
                 "total_calories": stats.get('totalKilocalories'),
@@ -949,7 +955,7 @@ def register_tools(app):
             return f"Error retrieving user summary: {str(e)}"
 
     @app.tool()
-    async def get_body_composition(start_date: str, end_date: str = None) -> str:
+    async def get_body_composition(start_date: str, end_date: Optional[str] = None) -> str:
         """Get body composition data for a single date or date range
 
         Args:
@@ -1032,7 +1038,7 @@ def register_tools(app):
             date: Date in YYYY-MM-DD format
         """
         try:
-            readiness_list = garmin_client.get_training_readiness(date)
+            readiness_list = _as_snapshot_list(garmin_client.get_training_readiness(date))
             if not readiness_list:
                 return f"No training readiness data found for {date}"
 
@@ -1069,13 +1075,16 @@ def register_tools(app):
                 }
 
                 for event in (day.get('bodyBatteryActivityEvent') or []):
-                    entry["events"].append({
+                    curated_event = {
                         "type": event.get('eventType'),
                         "start_time": event.get('eventStartTimeGmt'),
-                        "duration_minutes": round(event.get('durationInMilliseconds', 0) / 60000, 1),
                         "body_battery_impact": event.get('bodyBatteryImpact'),
                         "feedback": event.get('shortFeedback'),
-                    })
+                    }
+                    duration = event.get('durationInMilliseconds')
+                    if duration is not None:
+                        curated_event['duration_minutes'] = round(duration / 60000, 1)
+                    entry["events"].append(curated_event)
 
                 # Add dynamic feedback if present
                 feedback = day.get('bodyBatteryDynamicFeedbackEvent', {})
@@ -1280,6 +1289,8 @@ def register_tools(app):
         Note: Garmin Connect does not expose a native range endpoint for sleep, so
         this makes one request per night internally. Recommended range: up to a
         few weeks for quick checks. Maximum: 90 nights per call.
+        Empty nights are skipped; a failed request stops the range and returns
+        an error identifying the failed date.
 
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -1309,8 +1320,8 @@ def register_tools(app):
                     entry.update(_extract_sleep_summary(sleep_data))
                     if len(entry) > 1:  # has more than just date
                         nights.append(entry)
-            except Exception:
-                pass  # skip nights with no data / transient errors
+            except Exception as e:
+                return f"Error retrieving sleep data for {date_str}: {str(e)}"
             current += datetime.timedelta(days=1)
 
         if not nights:
