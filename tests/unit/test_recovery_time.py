@@ -115,3 +115,71 @@ def test_collect_unavailable_when_no_sources():
     assert curated["state"] == "unavailable"
     assert curated["remaining_hours"] is None
     assert "message" in curated
+
+
+def test_readiness_recovery_explicitly_labels_snapshot_time():
+    curated = _recovery_from_readiness({
+        "calendarDate": "2026-09-12",
+        "timestampLocal": "2026-09-12T06:30:00",
+        "recoveryTime": 1728,
+    }, "training_readiness")
+    assert curated["value_type"] == "snapshot"
+    assert curated["remaining_hours_at_snapshot"] == 28.8
+    assert curated["as_of"] == "2026-09-12T06:30:00"
+    assert curated["remaining_hours"] == 28.8
+
+
+def test_collect_does_not_label_current_activity_estimate_as_past_date():
+    from unittest.mock import Mock
+
+    now = datetime(2026, 10, 19, 18, tzinfo=timezone.utc)
+    client = Mock()
+    client.get_training_readiness.return_value = []
+    client.get_morning_training_readiness.return_value = None
+    client.get_activities.return_value = [{
+        "activityId": 42,
+        "beginTimestamp": datetime(2026, 10, 19, 12, tzinfo=timezone.utc).timestamp() * 1000,
+        "duration": 3600,
+        "recoveryTime": 1440,
+    }]
+    curated = _collect_recovery_time(client, "2026-09-12", now=now)
+    assert curated["state"] == "unavailable"
+    assert "only available for today" in curated["message"]
+    assert "activity_id" not in curated
+    client.get_activities.assert_not_called()
+
+
+def test_collect_surfaces_errors_when_all_sources_fail():
+    from unittest.mock import Mock
+    import pytest
+
+    client = Mock()
+    client.get_training_readiness.side_effect = Exception("readiness unavailable")
+    client.get_morning_training_readiness.side_effect = Exception("morning unavailable")
+    client.get_activities.side_effect = Exception("activities unavailable")
+    with pytest.raises(RuntimeError, match="readiness unavailable"):
+        _collect_recovery_time(client, "2026-09-12", now=datetime(2026, 9, 12, 18, tzinfo=timezone.utc))
+
+
+def test_collect_keeps_source_errors_when_another_source_succeeds():
+    from unittest.mock import Mock
+
+    client = Mock()
+    client.get_training_readiness.side_effect = Exception("readiness unavailable")
+    client.get_morning_training_readiness.return_value = {"recoveryTime": 120}
+    curated = _collect_recovery_time(client, "2026-09-12")
+    assert curated["remaining_hours"] == 2
+    assert curated["source"] == "morning_training_readiness"
+    assert curated["source_errors"] == [{"source": "get_training_readiness", "error": "readiness unavailable"}]
+
+
+def test_collect_surfaces_activity_failure_after_empty_readiness():
+    from unittest.mock import Mock
+    import pytest
+
+    client = Mock()
+    client.get_training_readiness.return_value = []
+    client.get_morning_training_readiness.return_value = None
+    client.get_activities.side_effect = Exception("activity request failed")
+    with pytest.raises(RuntimeError, match="activity request failed"):
+        _collect_recovery_time(client, "2026-09-12", now=datetime(2026, 9, 12, 18, tzinfo=timezone.utc))

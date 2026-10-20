@@ -1552,6 +1552,22 @@ async def test_get_recovery_time_remaining_unavailable(
 
 
 @pytest.mark.asyncio
+async def test_recovery_time_surfaces_failed_requests_instead_of_empty_sources(
+    app_with_health_wellness, mock_garmin_client
+):
+    from garminconnect import GarminConnectConnectionError
+
+    error = GarminConnectConnectionError("HTTP error: API Error 401 - expired")
+    mock_garmin_client.get_training_readiness.side_effect = error
+    mock_garmin_client.get_morning_training_readiness.side_effect = error
+    mock_garmin_client.get_activities.side_effect = error
+    result = await app_with_health_wellness.call_tool("get_recovery_time_remaining", {})
+    assert result[0][0].text.startswith("Error retrieving recovery time remaining:")
+    assert "401 - expired" in result[0][0].text
+    assert "snapshots were empty" not in result[0][0].text
+
+
+@pytest.mark.asyncio
 async def test_get_stats_preserves_zero_floors(app_with_health_wellness, mock_garmin_client):
     """A measured zero is distinct from a missing floors measurement."""
     mock_garmin_client.get_stats.return_value = {

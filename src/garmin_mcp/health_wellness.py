@@ -70,6 +70,9 @@ def _recovery_from_readiness(payload: Any, source: str) -> Optional[Dict[str, An
         score = latest.get("readinessScore")
     curated = {
         "remaining_hours": hours,
+        "remaining_hours_at_snapshot": hours,
+        "value_type": "snapshot",
+        "as_of": latest.get("timestampLocal") or latest.get("timestamp"),
         "recovery_score": score,
         "state": _recovery_state(hours, phrase),
         "source": source,
@@ -142,7 +145,8 @@ def _activity_end_utc(activity: Dict[str, Any]) -> Optional[datetime.datetime]:
 
 
 def _recovery_from_recent_activities(
-    client: Any, now: datetime.datetime
+    client: Any, now: datetime.datetime,
+    source_errors: Optional[List[Dict[str, str]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Decay activity-assigned recoveryTime when Training Readiness is absent."""
     get_activities = getattr(client, "get_activities", None)
@@ -150,7 +154,9 @@ def _recovery_from_recent_activities(
         return None
     try:
         items = get_activities(0, 20)
-    except Exception:
+    except Exception as e:
+        if source_errors is not None:
+            source_errors.append({"source": "get_activities", "error": str(e)})
         return None
     if not isinstance(items, list):
         return None
@@ -175,6 +181,8 @@ def _recovery_from_recent_activities(
                 "recovery_score": None,
                 "state": _recovery_state(remaining_hours, None),
                 "source": "recent_activity",
+                "value_type": "estimate",
+                "as_of": now.isoformat(),
                 "activity_id": item.get("activityId"),
                 "activity_name": item.get("activityName"),
             }
@@ -183,10 +191,16 @@ def _recovery_from_recent_activities(
     return {key: value for key, value in best.items() if value is not None}
 
 
-def _safe_call(fn: Any, *args: Any) -> Any:
+def _safe_call(
+    fn: Any, *args: Any, source: str,
+    source_errors: List[Dict[str, str]],
+) -> Any:
+    if not callable(fn):
+        return None
     try:
         return fn(*args)
-    except Exception:
+    except Exception as e:
+        source_errors.append({"source": source, "error": str(e)})
         return None
 
 
@@ -194,26 +208,44 @@ def _collect_recovery_time(
     client: Any, date_str: str, now: Optional[datetime.datetime] = None
 ) -> Dict[str, Any]:
     """Resolve daily recovery-time remaining from readiness, then activities."""
-    readiness = _safe_call(getattr(client, "get_training_readiness", None), date_str)
+    source_errors: List[Dict[str, str]] = []
+    readiness = _safe_call(
+        getattr(client, "get_training_readiness", None), date_str,
+        source="get_training_readiness", source_errors=source_errors,
+    )
     curated = _recovery_from_readiness(readiness, "training_readiness")
     if curated:
         curated.setdefault("date", date_str)
         return curated
 
     morning = _safe_call(
-        getattr(client, "get_morning_training_readiness", None), date_str
+        getattr(client, "get_morning_training_readiness", None), date_str,
+        source="get_morning_training_readiness", source_errors=source_errors,
     )
     curated = _recovery_from_readiness(morning, "morning_training_readiness")
     if curated:
         curated.setdefault("date", date_str)
+        if source_errors:
+            curated["source_errors"] = source_errors
         return curated
 
     if now is None:
         now = datetime.datetime.now(datetime.timezone.utc)
-    curated = _recovery_from_recent_activities(client, now)
-    if curated:
-        curated.setdefault("date", date_str)
-        return curated
+    # The tool's default date is server-local today. A current estimate from
+    # recent activities cannot establish the recovery clock on another day.
+    is_today = date_str == now.astimezone().date().isoformat()
+    if is_today:
+        curated = _recovery_from_recent_activities(client, now, source_errors)
+        if curated:
+            curated.setdefault("date", date_str)
+            if source_errors:
+                curated["source_errors"] = source_errors
+            return curated
+
+    if source_errors:
+        raise RuntimeError("; ".join(
+            f"{error['source']}: {error['error']}" for error in source_errors
+        ))
 
     return {
         "remaining_hours": None,
@@ -221,6 +253,9 @@ def _collect_recovery_time(
         "state": "unavailable",
         "date": date_str,
         "message": (
+            "No Training Readiness recovery snapshot found for this date. "
+            "The activity-based recovery estimate is only available for today."
+        ) if not is_today else (
             "No recovery time remaining found for this date. Training Readiness "
             "snapshots were empty and recent activities did not include recoveryTime. "
             "Some devices (for example Forerunner 255) show recovery on-device without "
@@ -1677,9 +1712,14 @@ def register_tools(app):
 
         This is the Firstbeat recovery clock shown on-device, distinct from
         Training Readiness score (missing on some devices such as Forerunner 255)
-        and from Training Status ACWR. When Training Readiness snapshots exist
-        they are the current remaining value. Otherwise the tool decays
-        recoveryTime assigned on recent activities.
+        and from Training Status ACWR. Training Readiness values are snapshots:
+        remaining_hours and state describe the snapshot at as_of (Garmin's local
+        timestamp when available), not a live countdown. remaining_hours_at_snapshot
+        retains the same value explicitly. For today only, when snapshots are
+        absent, the tool estimates remaining recovery by decaying recent activity
+        assignments and reports the estimate's as_of time. Today uses the server's
+        local date. Request failures are reported as errors, or source_errors when
+        another source supplies usable data.
 
         Args:
             date: Date in YYYY-MM-DD format. Defaults to today.
