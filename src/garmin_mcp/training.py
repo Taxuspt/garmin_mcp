@@ -5,7 +5,13 @@ Training and performance functions for Garmin Connect MCP Server
 import json
 import datetime
 import math
+import re
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from garminconnect import (
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -244,10 +250,14 @@ def _extract_dated_vo2_measurements(data: Any) -> Dict[str, Dict[str, float]]:
 
         item = _as_dict(item)
         measurements = _extract_vo2_measurements(item)
+        sections = _as_dict(item.get("mostRecentVO2Max")) or item
         for sport, value in measurements.items():
             section_name = "generic" if sport == "running" else "cycling"
-            section = _as_dict(item.get(section_name))
-            calendar_date = section.get("calendarDate") or item.get("calendarDate")
+            section = _as_dict(sections.get(section_name))
+            calendar_date = (
+                section.get("calendarDate") or sections.get("calendarDate")
+                or item.get("calendarDate")
+            )
             if isinstance(calendar_date, str):
                 by_date.setdefault(calendar_date, {}).setdefault(sport, value)
 
@@ -265,6 +275,21 @@ def _get_max_metrics_range(
         return False, None
 
     return True, connectapi(f"{metrics_url}/{start_date}/{end_date}")
+
+
+def _is_fatal_trend_error(exc: Exception) -> bool:
+    """Stop endpoint fallbacks for authentication, rate limits, or outages.
+
+    garminconnect 0.3.2 wraps all HTTP statuses in connection errors, carrying
+    the status in the message rather than on a response object.
+    """
+    if isinstance(exc, (GarminConnectAuthenticationError, GarminConnectTooManyRequestsError)):
+        return True
+    match = re.search(r"\bAPI Error (\d{3})\b", str(exc))
+    status = int(match.group(1)) if match else None
+    if status is not None:
+        return status in (401, 429) or status >= 500
+    return isinstance(exc, GarminConnectConnectionError)
 
 
 def _is_forbidden_error(exc: Exception) -> bool:
@@ -1219,6 +1244,7 @@ def register_tools(app):
         load range) to judge whether load is building steadily or spiking.
 
         Recommended range: 4-8 weeks. Maximum: 90 days.
+        Empty days are skipped; a failed daily request returns an error.
 
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -1240,7 +1266,9 @@ def register_tools(app):
         trend = []
         try:
             devices = garmin_client.get_devices()
-        except Exception:
+        except Exception as e:
+            if _is_fatal_trend_error(e):
+                return f"Error retrieving training load device data: {e}"
             devices = None
         current = start
         while current <= end:
@@ -1277,8 +1305,11 @@ def register_tools(app):
                             atl, readiness_reason = _tracker_acute_load(
                                 readiness, date_str, _primary_device_id(devices)
                             )
-                        except Exception:
+                        except Exception as e:
+                            if _is_fatal_trend_error(e):
+                                raise
                             atl, readiness_reason = None, "readiness_unavailable"
+                            entry["readiness_error"] = str(e)
                         ctl = None
                         acwr = None
                         if atl is not None:
@@ -1322,8 +1353,8 @@ def register_tools(app):
                         entry["vo2_max"] = round(vo2, 1)
                     if len(entry) > 1:  # has more than just date
                         trend.append(entry)
-            except Exception:
-                pass  # skip days with no data
+            except Exception as e:
+                return f"Error retrieving training load data for {date_str}: {e}"
             current += datetime.timedelta(days=1)
 
         if not trend:
@@ -1453,6 +1484,7 @@ def register_tools(app):
         or recovery. A drop of >10ms from the 7-day baseline warrants reducing training load.
 
         Recommended range: 7-21 days. Maximum: 30 days.
+        Empty days are skipped; a failed daily request returns an error.
 
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -1478,7 +1510,7 @@ def register_tools(app):
             try:
                 data = garmin_client.get_hrv_data(date_str)
                 if data:
-                    hrv_summary = data.get("hrvSummary", {})
+                    hrv_summary = data.get("hrvSummary") or {}
                     entry: Dict[str, Any] = {"date": date_str}
                     last_night = hrv_summary.get("lastNightAvg")
                     weekly_avg = hrv_summary.get("weeklyAvg")
@@ -1497,8 +1529,8 @@ def register_tools(app):
                         entry["feedback"] = feedback
                     if len(entry) > 1:
                         trend.append(entry)
-            except Exception:
-                pass
+            except Exception as e:
+                return f"Error retrieving HRV data for {date_str}: {e}"
             current += datetime.timedelta(days=1)
 
         if not trend:
@@ -1532,9 +1564,14 @@ def register_tools(app):
         Garmin records a new VO2 max value only on days with a recompute (after an
         activity). Days in between carry the last known value forward and are marked
         with "carried_forward": true, matching the trend chart in Garmin Connect.
+        Dated status values retain their measurement date. data_points counts
+        displayed days, including carried-forward values.
 
         If historical values are unavailable, the current profile estimate is returned
         separately and is not represented as a historical trend point.
+        Endpoint-specific failures remain visible in request_errors when a
+        fallback succeeds. Authentication, rate-limit, and connection failures
+        stop the request.
 
         Recommended range: 4-12 weeks. Maximum: 90 days.
 
@@ -1559,6 +1596,17 @@ def register_tools(app):
             "running": [],
             "cycling": [],
         }
+        request_errors = []
+
+        def add_measurements(measurement_date, measurements, source):
+            for sport, vo2 in measurements.items():
+                if not any(entry["date"] == measurement_date for entry in histories[sport]):
+                    histories[sport].append({
+                        "date": measurement_date,
+                        "vo2_max": round(vo2, 1),
+                        "source": source,
+                    })
+
         range_measurements: Optional[Dict[str, Dict[str, float]]] = None
         try:
             range_supported, range_data = _get_max_metrics_range(
@@ -1566,7 +1614,10 @@ def register_tools(app):
             )
             if range_supported:
                 range_measurements = _extract_dated_vo2_measurements(range_data)
-        except Exception:
+        except Exception as e:
+            if _is_fatal_trend_error(e):
+                return f"Error retrieving VO2 max data: {e}"
+            request_errors.append({"source": "get_max_metrics", "error": str(e)})
             # The range endpoint exists but failed. Continue with training status
             # without retrying the same max-metrics endpoint once per day.
             range_measurements = {}
@@ -1590,22 +1641,34 @@ def register_tools(app):
                 if not callable(method):
                     continue
                 try:
-                    measurements = _extract_vo2_measurements(method(date_str))
-                except Exception:
+                    payload = method(date_str)
+                    measurements = _extract_vo2_measurements(payload)
+                    dated_measurements = _extract_dated_vo2_measurements(payload)
+                    if dated_measurements:
+                        dated_sports = set()
+                        for measurement_date, values in dated_measurements.items():
+                            dated_sports.update(values)
+                            if measurement_date <= date_str:
+                                add_measurements(measurement_date, values, method_name)
+                        # mostRecentVO2Max may repeat an earlier measurement;
+                        # its own date, rather than the requested date, is authoritative.
+                        measurements = {
+                            sport: value for sport, value in measurements.items()
+                            if sport not in dated_sports
+                        }
+                        if not measurements:
+                            break
+                except Exception as e:
+                    if _is_fatal_trend_error(e):
+                        return f"Error retrieving VO2 max data for {date_str}: {e}"
+                    request_errors.append({"source": method_name, "date": date_str, "error": str(e)})
                     continue
                 if not measurements:
                     continue
                 source = method_name
                 break
 
-            for sport, vo2 in measurements.items():
-                histories[sport].append(
-                    {
-                        "date": date_str,
-                        "vo2_max": round(vo2, 1),
-                        "source": source,
-                    }
-                )
+            add_measurements(date_str, measurements, source)
             current += datetime.timedelta(days=1)
 
         selected_sport = None
@@ -1619,16 +1682,22 @@ def register_tools(app):
                 ),
             )
 
-        trend = _build_vo2_trend_series(
-            histories[selected_sport] if selected_sport is not None else [], end
-        )
+        trend = [
+            entry for entry in _build_vo2_trend_series(
+                histories[selected_sport] if selected_sport is not None else [], end
+            )
+            if entry["date"] >= start_date
+        ]
 
         current_estimate = None
         current_sport = None
         if not trend:
             try:
                 profile = garmin_client.get_user_profile()
-            except Exception:
+            except Exception as e:
+                if _is_fatal_trend_error(e):
+                    return f"Error retrieving VO2 max data: {e}"
+                request_errors.append({"source": "get_user_profile", "error": str(e)})
                 profile = None
 
             profile_measurements = _extract_vo2_measurements(profile)
@@ -1638,6 +1707,8 @@ def register_tools(app):
                 )
                 current_estimate = profile_measurements[current_sport]
             else:
+                if request_errors:
+                    return f"Error retrieving VO2 max data: {request_errors[-1]['error']}"
                 return f"No VO2 max data found between {start_date} and {end_date}."
 
         first_vo2 = trend[0]["vo2_max"] if trend else None
@@ -1659,6 +1730,8 @@ def register_tools(app):
         }
         if selected_sport is not None:
             response["sport"] = selected_sport
+        if request_errors:
+            response["request_errors"] = request_errors
 
         if current_estimate is not None:
             response["current_vo2_max_estimate"] = {
@@ -1682,6 +1755,7 @@ def register_tools(app):
         trend for a complete recovery picture.
 
         Recommended range: 7-21 days. Maximum: 30 days.
+        Empty days are skipped; a failed daily request returns an error.
 
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -1722,8 +1796,8 @@ def register_tools(app):
                         entry["lowest_breaths_per_min"] = round(low_sleep, 1)
                     if len(entry) > 1:
                         trend.append(entry)
-            except Exception:
-                pass
+            except Exception as e:
+                return f"Error retrieving respiration data for {date_str}: {e}"
             current += datetime.timedelta(days=1)
 
         if not trend:
