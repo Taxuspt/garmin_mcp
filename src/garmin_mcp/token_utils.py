@@ -45,6 +45,10 @@ def secure_token_dir(path: str) -> None:
     else:
         os.chmod(expanded, 0o600)
 
+from garmin_mcp.garmin_cn_auth_patch import apply_garmin_cn_auth_patch
+
+apply_garmin_cn_auth_patch()
+
 
 def get_token_path() -> str:
     """Get token path from environment or default.
