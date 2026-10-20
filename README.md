@@ -25,23 +25,27 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+This MCP server registers **157 tools** across 16 functional modules using [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) (v0.3.2):
 
-- ✅ Activity Management (21 tools) - includes write tools for type, description, event type, perceived effort, feel, and exercise sets
-- ✅ Health & Wellness (34 tools) - includes custom lightweight summary tools
-- ✅ Training & Performance (13 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
-- ✅ Workouts (8 tools)
-- ✅ Devices (8 tools) - includes sending a workout to a device
-- ✅ Gear Management (5 tools)
+- ✅ Activity Management (23 tools) - includes write tools for type, description, event type, perceived effort, feel, and exercise sets
+- ✅ Health & Wellness (33 tools) - includes custom lightweight summary tools
+- ✅ Training & Performance (18 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
+- ✅ Workouts (15 tools) - includes rescheduling workouts
+- ✅ Devices (7 tools) - includes sending a workout to a device
+- ✅ Gear Management (3 tools)
 - ✅ Weight Tracking (5 tools)
-- ✅ Challenges & Badges (10 tools)
-- ✅ Nutrition (9 tools) - food logs, meals, custom foods, food logging, and multi-day intake summaries
+- ✅ Challenges & Badges (9 tools)
+- ✅ Nutrition (15 tools) - food logs, meals, custom foods, food logging, and multi-day intake summaries
 - ✅ Women's Health (3 tools)
-- ✅ User Profile (3 tools)
-- ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
+- ✅ User Profile (6 tools)
+- ✅ High-Level Workout Builders (6 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (5 tools) - list / get details / upload GPX as course / download GPX / delete course
-- ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
+- ✅ Activity Analysis (3 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
+- ✅ Data Management (3 tools) - upload body composition, hydration, and blood pressure
+- ✅ Calendar Events (1 tool) - scheduled activities, workouts, and events
+
+The tool list is generated from these registrations by `scripts/generate_dxt_tools.py` and included in `dxt/manifest.json`. Activity Analysis and Activity File Downloads share one module.
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
 
@@ -115,7 +119,7 @@ If you need any of these endpoints, please [open an issue](https://github.com/Ta
 
 ## Tool Filtering
 
-This server registers 155 tools by default, which is a lot of context for an
+This server registers 157 tools by default, which is a lot of context for an
 LLM to carry in every session. You can expose only the tools you need with
 three optional environment variables:
 
@@ -1214,13 +1218,15 @@ uv run pytest tests/e2e/ -m e2e -v
 
 ### Test Structure
 
-- **Integration tests** (200+ tests): Test all MCP tools using FastMCP integration with mocked Garmin API responses
+- **Unit tests** (`tests/unit/`): Test helpers, configuration, authentication logic, and packaging safeguards without contacting Garmin
+- **Integration tests** (`tests/integration/`): Test all MCP tools using FastMCP integration with mocked Garmin API responses
+- **Fixtures** (`tests/fixtures/`): Shared mock API responses and captured payloads
 - **End-to-end tests** (`tests/e2e/`): Test with real MCP server and Garmin API (requires valid credentials). Only run with `-m e2e`.
 
 ## Reinstalling from local path
 
-If you are working from a local checkout or fork:
+From the root of your local checkout or fork:
 
 ```bash
-uv tool install --python 3.12 --force C:\Users\aresd\Desktop\programacion\garmin_mcp
+uv tool install --python 3.12 --force .
 ```

@@ -23,6 +23,7 @@ build/
 
 # Local credentials and secrets — never send these to the build context
 .env
+secrets/
 .garminconnect/
 .garminconnect_base64
 

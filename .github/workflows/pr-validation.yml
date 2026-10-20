@@ -52,10 +52,12 @@ jobs:
       uses: astral-sh/setup-uv@v5
 
     - name: Test package installation
+      timeout-minutes: 5
       run: |
         uv python install 3.13
         uv sync
-        uv run garmin-mcp --help || echo "CLI help command check"
+        uv run python -c "from importlib.metadata import distribution; scripts = {entry.name: entry for entry in distribution('garmin-mcp').entry_points}; assert all(callable(scripts[name].load()) for name in ('garmin-mcp', 'garmin-mcp-auth'))"
+        uv run garmin-mcp-auth --help
 
   pr-info:
     runs-on: ubuntu-latest
