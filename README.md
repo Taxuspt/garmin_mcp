@@ -595,8 +595,9 @@ File-based secrets are useful in certain environments, such as inside a Docker c
 By default the server communicates over **stdio**, which is what Claude Desktop, the MCP Inspector, and most local clients expect. To serve over **HTTP** instead (e.g. when running in a container or Kubernetes), set the transport via environment variables:
 
 - `GARMIN_MCP_TRANSPORT`: `stdio` (default), `streamable-http`, or `sse`
-- `GARMIN_MCP_HOST`: bind address for HTTP transports (default `127.0.0.1`; set to `0.0.0.0` only when the endpoint is fronted by an authenticating reverse proxy)
+- `GARMIN_MCP_HOST`: bind address for HTTP transports (default `127.0.0.1`; set to `0.0.0.0` only together with `GARMIN_MCP_HTTP_TOKEN` or behind an authenticating reverse proxy)
 - `GARMIN_MCP_PORT`: bind port for HTTP transports (default `8000`)
+- `GARMIN_MCP_HTTP_TOKEN`: shared secret for the HTTP transports. When set, every request to `/mcp`, `/sse` and `/messages/` must carry `Authorization: Bearer <token>`; anything else gets `401`. `/healthz` and `/readyz` stay open for probes. See [Protecting the HTTP endpoint](#protecting-the-http-endpoint).
 - `GARMIN_MCP_STATELESS_HTTP`: set to `true` to run `streamable-http` without sessions (default `false`). The MCP SDK drops a stateful session after 30 minutes idle, so the first call after an idle gap gets `404 Session not found`; some clients (including claude.ai custom connectors) report that as a failed tool call rather than re-initializing and retrying. Stateless mode has no sessions to expire. No tool in this server depends on session state, so nothing is lost. Recommended for long-lived remote deployments.
 - `GARMIN_MCP_CALL_TIMEOUT`: per-request timeout in seconds for calls to Garmin (default `90`). Garmin's API occasionally stalls a single request indefinitely; without this bound the call hangs until the MCP client's own timeout fires and reports the whole server as unresponsive. On timeout the tool returns a clear, retry-able error instead. Set to `0` to disable the bound.
 
@@ -610,7 +611,35 @@ When an HTTP transport is selected:
 - **`GET /healthz`** returns `ok` as soon as the server is up — use it as a **liveness** probe.
 - **`GET /readyz`** reports whether Garmin login has finished — use it as a **readiness** probe. It returns `200 {"status": "ready"}` once login succeeded, and `503` with `{"status": "pending"}` while login is still running or `{"status": "failed"}` if it failed (re-run `garmin-mcp-auth` and restart).
 
-The server itself performs **no authentication** on the HTTP endpoint — put it behind a reverse proxy (nginx, Traefik, Authelia, etc.) if it is reachable beyond localhost.
+#### Protecting the HTTP endpoint
+
+The HTTP transports expose full read/write access to the Garmin account, so
+the server binds to loopback by default. For anything reachable from other
+machines, set a shared secret and have the client send it as a bearer token:
+
+```bash
+export GARMIN_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"
+GARMIN_MCP_TRANSPORT=streamable-http GARMIN_MCP_HOST=0.0.0.0 garmin-mcp
+```
+
+```bash
+# rejected: 401 {"error": "unauthorized", ...}
+curl -i http://localhost:8000/mcp
+# accepted (the MCP handshake then proceeds as usual)
+curl -i -H "Authorization: Bearer $GARMIN_MCP_HTTP_TOKEN" http://localhost:8000/mcp
+```
+
+Most MCP clients accept custom headers for remote servers (Claude Desktop and
+claude.ai connectors, the MCP Inspector, and the SDK clients all do); put the
+same `Authorization: Bearer …` header there. The comparison is constant-time.
+`/healthz` and `/readyz` never require the token, since they only report that
+the process is up and whether the Garmin login finished.
+
+Without the token the server still starts, but if `GARMIN_MCP_HOST` is not a
+loopback address it prints a warning on stderr that the account is exposed. A
+reverse proxy with its own authentication (nginx, Traefik, Authelia, etc.)
+remains a fine alternative; the token is the small, built-in option for the
+common self-hosted case.
 
 ### Garmin Connect China (garmin.cn)
 
