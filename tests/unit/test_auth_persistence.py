@@ -12,7 +12,7 @@ from garminconnect import (
 )
 
 import garmin_mcp
-from garmin_mcp import auth_cli
+from garmin_mcp import auth_cli, token_utils
 
 
 @pytest.fixture
@@ -32,8 +32,8 @@ def saved_token_login(monkeypatch, tmp_path):
     ready_client = Mock(display_name="test-user", unit_system="metric")
     constructor = Mock(side_effect=[initial_client, credential_client, ready_client])
     monkeypatch.setattr(garmin_mcp, "Garmin", constructor)
-    monkeypatch.setattr(garmin_mcp, "tokenstore", str(token_path))
-    monkeypatch.setattr(garmin_mcp, "tokenstore_base64", str(base64_path))
+    monkeypatch.setattr(token_utils, "get_token_path", lambda: str(token_path))
+    monkeypatch.setattr(token_utils, "get_token_base64_path", lambda: str(base64_path))
     monkeypatch.setattr(auth_cli, "Garmin", Mock(return_value=credential_client))
     monkeypatch.setattr(auth_cli, "token_exists", lambda _: False)
     monkeypatch.setattr(auth_cli, "get_credentials", lambda: ("user@example.invalid", "unused-test-password"))
