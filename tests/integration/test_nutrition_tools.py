@@ -1432,7 +1432,7 @@ async def test_upsert_and_log_existing_food(app_with_nutrition, mock_garmin_clie
         params={
             "searchExpression": "Greek Yogurt",
             "start": 0,
-            "limit": 10,
+            "limit": 20,
             "includeContent": "true",
         },
     )
@@ -1470,7 +1470,7 @@ async def test_upsert_and_log_creates_new_food(app_with_nutrition, mock_garmin_c
         params={
             "searchExpression": "New Food",
             "start": 0,
-            "limit": 10,
+            "limit": 20,
             "includeContent": "true",
         },
     )
@@ -1503,7 +1503,7 @@ async def test_upsert_and_log_recovers_ids_after_bodyless_create(app_with_nutrit
         params={
             "searchExpression": "Greek Yogurt",
             "start": 0,
-            "limit": 10,
+            "limit": 20,
             "includeContent": "true",
         },
     )
@@ -2180,6 +2180,9 @@ async def test_upsert_and_log_log_rejected_after_create(app_with_nutrition, mock
     assert data["write_committed"] is False
     assert data["upstream_status"] == 400
     assert "custom food food999 was created" in data["message"]
+    assert data["custom_food_created"] is True
+    assert "not logged" in data["hint"]
+    assert "Nothing was written" not in data["hint"]
 
 
 @pytest.mark.asyncio
@@ -2235,3 +2238,177 @@ async def test_nutrition_library_writes_report_commit_status(
     write.assert_called_once()
     if expected == "unknown":
         assert "before retrying" in data["hint"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_row", [None, {"foodMetaData": None}, {"foodMetaData": {"foodId": "incomplete"}, "nutritionContents": None}])
+async def test_search_foods_retains_good_rows_with_null_optional_data(
+    app_with_nutrition, mock_garmin_client, bad_row
+):
+    mock_garmin_client.connectapi.return_value = {
+        "results": [bad_row, *_SEARCH_RESPONSE["results"]], "moreDataAvailable": False,
+    }
+    result = await app_with_nutrition.call_tool("search_foods", {"query": "Cheerios"})
+    data = json.loads(result[0][0].text)
+    good = next(row for row in data["results"] if row.get("name") == "Cheerios")
+    assert good["servings"][0]["calories"] == 100
+
+
+@pytest.mark.asyncio
+async def test_search_foods_handles_null_results(app_with_nutrition, mock_garmin_client):
+    mock_garmin_client.connectapi.return_value = {"results": None}
+    result = await app_with_nutrition.call_tool("search_foods", {"query": "Cheerios"})
+    assert json.loads(result[0][0].text)["results"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool, extra", [
+    ("log_food", {"name": "Oats", "calories": 100, "carbs": 10, "protein": 5, "fat": 2}),
+    ("log_custom_food", {"food_id": "food001", "serving_id": "srv001"}),
+    ("upsert_and_log", {"food_name": "Oats", "calories": 100}),
+])
+@pytest.mark.parametrize("meal_date, meal_time", [
+    ("2024-01-15", "8:30:00"), ("2024-01-15", "noon"),
+    ("2024-01-15", "25:00:00"), ("2024-01-15", "12:30 PM"),
+    ("2024-01-15", "2024-01-15T08:30:00"), ("2024-02-30", "08:30:00"),
+])
+async def test_food_logging_rejects_invalid_meal_datetime_before_requests(
+    app_with_nutrition, mock_garmin_client, tool, extra, meal_date, meal_time
+):
+    mock_garmin_client.connectapi.return_value = MOCK_MEALS
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool(tool, {"meal_date": meal_date, "meal_time": meal_time, **extra})
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert "meal_date" in data["message"] or "meal_time" in data["message"]
+    mock_garmin_client.connectapi.assert_not_called()
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [
+    GarminConnectConnectionError("HTTP error: API Error 500 - lookup failed"),
+    GarminConnectConnectionError("HTTP error: API Error 401 - expired"),
+    TimeoutError("lookup timed out"),
+])
+async def test_upsert_lookup_failure_after_create_does_not_commit_log(
+    app_with_nutrition, mock_garmin_client, failure
+):
+    mock_garmin_client.connectapi.side_effect = [{"customFoods": []}, failure]
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert data["custom_food_created"] is True
+    assert "not logged" in data["hint"]
+    assert "Nothing was written" not in data["hint"]
+    mock_garmin_client.client.put.assert_called_once()
+    assert mock_garmin_client.client.put.call_args.args[1] == "/nutrition-service/customFood"
+
+
+@pytest.mark.asyncio
+async def test_upsert_missing_ids_after_create_is_structured(
+    app_with_nutrition, mock_garmin_client
+):
+    mock_garmin_client.connectapi.return_value = {"customFoods": []}
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "error"
+    assert data["write_committed"] is False
+    assert data["custom_food_created"] is True
+    assert "not logged" in data["hint"]
+    mock_garmin_client.client.put.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_missing_meals_after_create_reports_partial_write(
+    app_with_nutrition, mock_garmin_client
+):
+    mock_garmin_client.connectapi.side_effect = [{"customFoods": []}, {"meals": []}]
+    mock_garmin_client.client.put.return_value = MOCK_CUSTOM_FOODS["customFoods"][0]
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert data["custom_food_created"] is True
+    assert data["food_id"] == "food001"
+    assert "No nutrition meal windows" in data["message"]
+    mock_garmin_client.client.put.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_pages_exact_name_match_before_creating(
+    app_with_nutrition, mock_garmin_client
+):
+    variants = [
+        {"foodMetaData": {"foodId": f"variant{i}", "foodName": f"Greek Yogurt {i}"},
+         "nutritionContents": [{"servingId": f"s{i}"}]}
+        for i in range(20)
+    ]
+    catalog = variants + MOCK_CUSTOM_FOODS["customFoods"]
+
+    def get_data(url, **kwargs):
+        if url.endswith("customFood"):
+            params = kwargs["params"]
+            return {"customFoods": catalog[params["start"]:params["start"] + params["limit"]]}
+        return MOCK_MEALS
+
+    mock_garmin_client.connectapi.side_effect = get_data
+    mock_garmin_client.client.put.return_value = {}
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    assert result[0][0].text == "Food logged successfully."
+    mock_garmin_client.client.put.assert_called_once()
+    assert mock_garmin_client.client.put.call_args.kwargs["json"]["foodLogItems"][0]["foodId"] == "food001"
+    searches = [c.kwargs["params"]["start"] for c in mock_garmin_client.connectapi.call_args_list if "params" in c.kwargs]
+    assert searches == [0, 20]
+
+
+@pytest.mark.asyncio
+async def test_upsert_refuses_creation_when_search_limit_is_exhausted(
+    app_with_nutrition, mock_garmin_client
+):
+    mock_garmin_client.connectapi.return_value = {"customFoods": [
+        {"foodMetaData": {"foodName": f"Greek Yogurt {i}"}} for i in range(20)
+    ]}
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert "search limit" in data["message"]
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_existing_food_without_serving_does_not_create_duplicate(
+    app_with_nutrition, mock_garmin_client
+):
+    mock_garmin_client.connectapi.return_value = {"customFoods": [
+        {"foodMetaData": {"foodId": "food001", "foodName": "Greek Yogurt"},
+         "nutritionContents": None}
+    ]}
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is False
+    assert "serving" in data["message"]
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["create", "log"])
+async def test_upsert_response_decode_commit_status_refers_to_food_log(
+    app_with_nutrition, mock_garmin_client, phase
+):
+    import requests
+
+    mock_garmin_client.connectapi.side_effect = (
+        [{"customFoods": []}] if phase == "create" else [MOCK_CUSTOM_FOODS, MOCK_MEALS]
+    )
+    mock_garmin_client.client.put.side_effect = requests.exceptions.JSONDecodeError(
+        "invalid JSON", "bad", 0
+    )
+    result = await app_with_nutrition.call_tool("upsert_and_log", _UPSERT_ARGS)
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is (phase == "log")
+    if phase == "create":
+        assert data["custom_food_created"] is True
+        assert "not logged" in data["hint"]
+    mock_garmin_client.client.put.assert_called_once()

@@ -41,13 +41,24 @@ _API_ERROR_RE = re.compile(r"API Error (\d{3})(?: - (.*))?", re.DOTALL)
 
 def _upstream(exc):
     """Return (status, body) parsed from a garminconnect error, or (None, None)."""
-    if isinstance(exc, GarminConnectTooManyRequestsError):
-        return 429, str(exc)[:_MAX_BODY_CHARS] or None
-    match = _API_ERROR_RE.search(str(exc))
-    if not match:
-        return None, None
-    body = (match.group(2) or "").strip()[:_MAX_BODY_CHARS]
-    return int(match.group(1)), body or None
+    # The proxy chains its actionable message from the original exception.
+    # Prefer the innermost status-bearing cause so our hint is never mistaken
+    # for Garmin's response body. Guard against malformed cyclic chains.
+    chain = []
+    seen = set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__
+    for current in reversed(chain):
+        match = _API_ERROR_RE.search(str(current))
+        if match:
+            body = (match.group(2) or "").strip()[:_MAX_BODY_CHARS]
+            return int(match.group(1)), body or None
+        if isinstance(current, GarminConnectTooManyRequestsError):
+            return 429, str(current)[:_MAX_BODY_CHARS] or None
+    return None, None
 
 
 def _connection_never_opened(exc):

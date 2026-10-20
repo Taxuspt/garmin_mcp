@@ -354,4 +354,80 @@ def register_tools(app):
         except Exception as e:
             return f"Error retrieving device alarms: {str(e)}"
 
+    @app.tool()
+    async def push_workout_to_device(
+        workout_id: int, device_id: Optional[int] = None
+    ) -> str:
+        """Send a workout from the workout library to a Garmin device
+
+        Queues the workout in Garmin Connect's device message queue, the same
+        as "Send to Device" in the Garmin Connect app. The watch picks it up
+        at its next sync with Garmin Connect (phone app or Wi-Fi), so it does
+        not appear on the watch immediately. Scheduling a workout does not
+        need this: scheduled workouts reach the watch's calendar on their own.
+
+        Each call queues another copy, so do not push the same workout twice.
+
+        Args:
+            workout_id: ID of the workout to send (from get_workouts or upload_workout)
+            device_id: Device ID (optional; defaults to the most recently used
+                device; can be obtained from get_devices or get_device_last_used)
+        """
+        try:
+            if device_id is None:
+                last_used = garmin_client.get_device_last_used()
+                device_id = (last_used or {}).get("userDeviceId")
+                if not device_id:
+                    return json.dumps({
+                        "status": "failed",
+                        "workout_id": workout_id,
+                        "message": (
+                            "No default device found. Pass device_id explicitly "
+                            "(see get_devices)."
+                        ),
+                    }, indent=2)
+
+            # Garmin's message queue shows this name on the device.
+            workout = garmin_client.get_workout_by_id(workout_id) or {}
+            workout_name = workout.get("workoutName") or f"Workout {workout_id}"
+
+            payload = [{
+                "deviceId": device_id,
+                "messageUrl": f"workout-service/workout/FIT/{workout_id}",
+                "messageType": "workouts",
+                "groupName": None,
+                "messageName": workout_name,
+                "priority": 1,
+                "fileType": "FIT",
+                "metaDataId": workout_id,
+            }]
+            url = "device-service/devicemessage/messages"
+            response = garmin_client.client.post("connectapi", url, json=payload)
+
+            if response.status_code in (200, 204):
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "workout_name": workout_name,
+                    "device_id": device_id,
+                    "message": (
+                        f"Queued workout {workout_id} for device {device_id}; "
+                        "it arrives on the device at its next sync"
+                    ),
+                }, indent=2)
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "device_id": device_id,
+                "http_status": response.status_code,
+                "message": f"Failed to push workout: HTTP {response.status_code}",
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "device_id": device_id,
+                "message": f"Failed to push workout: {str(e)}",
+            }, indent=2)
+
     return app
