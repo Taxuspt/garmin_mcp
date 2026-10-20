@@ -171,12 +171,6 @@ def _is_custom_food_unsupported_403(exc: Exception) -> bool:
     )
 
 
-def _response_text_from_connection_error(exc: GarminConnectConnectionError) -> str:
-    if hasattr(exc, "error") and hasattr(exc.error, "response"):
-        return getattr(exc.error.response, "text", "")
-    return ""
-
-
 _CUSTOM_FOOD_PAGE_SIZE = 20
 _CUSTOM_FOOD_MAX_SCAN = 500
 
@@ -439,6 +433,7 @@ def register_tools(app):
         """
         if all(v is None for v in (calorie_goal, carbs_grams, fat_grams, protein_grams)):
             return "No fields to update — supply at least one of calorie_goal, carbs_grams, fat_grams, protein_grams."
+        tracker = WriteTracker("set_nutrition_daily_settings", "Error updating nutrition settings")
         try:
             url = f"/nutrition-service/settings/{date}"
             current = garmin_client.connectapi(url)
@@ -467,7 +462,9 @@ def register_tools(app):
                     return "Could not read current macro goals — cannot apply update."
                 macros.update({key: value for key, value in macro_overrides.items() if value is not None})
                 current["macroGoals"] = macros
+            tracker.sending()
             resp = garmin_client.client.put("connectapi", url, json=current, api=True)
+            tracker.committed()
             result = resp
             if not result:
                 try:
@@ -487,7 +484,7 @@ def register_tools(app):
                 "weight_goal_target_date": result.get("targetDate"),
             }, indent=2)
         except Exception as e:
-            return f"Error updating nutrition settings: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def search_foods(
@@ -676,6 +673,7 @@ def register_tools(app):
             iron: Iron in mg per serving (NOT %DV)
             vitamin_d: Vitamin D in mcg per serving (NOT %DV)
         """
+        tracker = WriteTracker("create_custom_food", "Error creating custom food")
         try:
             nutrition = {
                 "servingUnit": serving_unit,
@@ -717,17 +715,16 @@ def register_tools(app):
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
+            tracker.sending()
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
+            tracker.committed()
             if not resp:
                 return "Custom food created (no response data returned)."
             return json.dumps(resp, indent=2)
-        except GarminConnectConnectionError as e:
-            body = _response_text_from_connection_error(e)
-            return f"Error creating custom food: {e} | Response: {body}"
         except Exception as e:
-            return f"Error creating custom food: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def update_custom_food(
@@ -801,6 +798,7 @@ def register_tools(app):
             iron: Iron in mg per serving (NOT %DV)
             vitamin_d: Vitamin D in mcg per serving (NOT %DV)
         """
+        tracker = WriteTracker("update_custom_food", "Error updating custom food")
         try:
             # Fetch current record so omitted fields are preserved (not wiped).
             try:
@@ -883,17 +881,16 @@ def register_tools(app):
                 "nutritionContents": [nutrition],
             }
             url = "/nutrition-service/customFood"
+            tracker.sending()
             resp = garmin_client.client.put(
                 "connectapi", url, json=payload, api=True
             )
+            tracker.committed()
             if not resp:
                 return "Custom food updated (no response data returned)."
             return json.dumps(resp, indent=2)
-        except GarminConnectConnectionError as e:
-            body = _response_text_from_connection_error(e)
-            return f"Error updating custom food: {e} | Response: {body}"
         except Exception as e:
-            return f"Error updating custom food: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def delete_custom_food(food_id: str) -> str:
@@ -917,21 +914,19 @@ def register_tools(app):
             food_id: ID of the custom food to delete — a 32-char hex string
                 (from get_custom_foods or create_custom_food)
         """
+        tracker = WriteTracker("delete_custom_food", "Error deleting custom food")
         try:
             url = f"/nutrition-service/customFood/{food_id}"
+            tracker.sending()
             garmin_client.client.delete("connectapi", url, api=True)
+            tracker.committed()
             return json.dumps(
                 {"status": "success", "food_id": food_id,
                  "message": f"Custom food {food_id} deleted successfully."},
                 indent=2,
             )
-        except GarminConnectConnectionError as e:
-            body = ""
-            if hasattr(e, "error") and hasattr(e.error, "response"):
-                body = getattr(e.error.response, "text", "")
-            return f"Error deleting custom food: {e} | Response: {body}"
         except Exception as e:
-            return f"Error deleting custom food: {str(e)}"
+            return tracker.error(e)
 
     @app.tool()
     async def log_custom_food(
