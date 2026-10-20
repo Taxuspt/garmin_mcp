@@ -1066,8 +1066,8 @@ def _compute_temperature_stats(records: List[Dict]) -> Optional[Dict]:
 
     cool_hr = _safe_round(_safe_avg([r["heart_rate_bpm"] for r in coolest if r.get("heart_rate_bpm")]))
     hot_hr = _safe_round(_safe_avg([r["heart_rate_bpm"] for r in hottest if r.get("heart_rate_bpm")]))
-    cool_power = _safe_round(_safe_avg([r["power_w"] for r in coolest if r.get("power_w")]))
-    hot_power = _safe_round(_safe_avg([r["power_w"] for r in hottest if r.get("power_w")]))
+    cool_power = _safe_round(_safe_avg([r["power_w"] for r in coolest if r.get("power_w") is not None]))
+    hot_power = _safe_round(_safe_avg([r["power_w"] for r in hottest if r.get("power_w") is not None]))
 
     result: Dict[str, Any] = {
         "avg_temp_c": _safe_round(avg_temp),
@@ -1305,8 +1305,6 @@ def _curate_session(message) -> Dict[str, Any]:
         "total_ascent_m": _get_field(message, "total_ascent"),
         "total_descent_m": _get_field(message, "total_descent"),
         "total_training_effect": _get_field(message, "total_training_effect"),
-        "avg_left_power_phase_start_deg": _get_field(message, "avg_left_power_phase"),
-        "avg_right_power_phase_start_deg": _get_field(message, "avg_right_power_phase"),
         "avg_left_pco_mm": _get_field(message, "avg_left_pco"),
         "avg_right_pco_mm": _get_field(message, "avg_right_pco"),
         "avg_left_torque_effectiveness_pct": _get_field(message, "avg_left_torque_effectiveness"),
@@ -1314,6 +1312,16 @@ def _curate_session(message) -> Dict[str, Any]:
         "avg_left_pedal_smoothness_pct": _get_field(message, "avg_left_pedal_smoothness"),
         "avg_right_pedal_smoothness_pct": _get_field(message, "avg_right_pedal_smoothness"),
     }
+    # FIT power_phase_type indexes 0/1 are the start/end angles.
+    for side in ("left", "right"):
+        phase = _get_field(message, f"avg_{side}_power_phase")
+        if isinstance(phase, (list, tuple)):
+            if phase:
+                session[f"avg_{side}_power_phase_start_deg"] = phase[0]
+            if len(phase) > 1:
+                session[f"avg_{side}_power_phase_end_deg"] = phase[1]
+        elif phase is not None:
+            session[f"avg_{side}_power_phase_start_deg"] = phase
     balance_raw = _get_field(message, "left_right_balance")
     session["avg_left_power_pct"] = _decode_left_right_balance(balance_raw)
     if session["avg_left_power_pct"] is not None:
@@ -1952,7 +1960,7 @@ def register_tools(app):
     ) -> str:
         """Get season-best Power Duration Curve across recent activities.
 
-        Downloads FIT files for recent cycling activities and computes best mean maximal
+        Downloads FIT files for recent activities of the requested type and computes best mean maximal
         power at each standard duration. Returns season bests with which activity and date
         each best came from.
 
@@ -1963,7 +1971,8 @@ def register_tools(app):
         Warning: downloads multiple FIT files — may take 30-60 seconds for 20 activities.
 
         Args:
-            num_activities: Number of recent activities to analyze (default 20, max 50)
+            num_activities: Number of recent activities matching activity_type to request
+                            (default 20, max 50)
             activity_type: Activity type to filter (default "cycling")
         """
         if not FITPARSE_AVAILABLE:
@@ -1975,21 +1984,27 @@ def register_tools(app):
         try:
             from garminconnect import Garmin
 
-            # Fetch recent activities
-            activities = garmin_client.get_activities(0, num_activities)
+            # Filter before applying the count so other sports do not consume
+            # the requested window on multi-sport accounts.
+            requested_type = activity_type.lower()
+            activities = garmin_client.get_activities(
+                0, num_activities, activitytype=requested_type
+            )
             if not activities:
                 return "No activities found."
 
-            # Filter by sport type. "cycling" also matches the *_biking typeKeys
-            # (road_biking, mountain_biking); other types must not pull in bike power.
-            requested_type = activity_type.lower()
+            # Keep a local sport guard too. Cycling's parent type includes
+            # virtual_ride, cyclocross, and e-bike types without either substring.
             cycling_activities = [
                 a for a in activities
                 if requested_type in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or requested_type in str((a.get("activityType") or {}).get("parentTypeId", "")).lower()
+                or requested_type == str((a.get("activityType") or {}).get("parentTypeId", ""))
                 or (
                     requested_type == "cycling"
-                    and "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                    and (
+                        str((a.get("activityType") or {}).get("parentTypeId", "")) == "2"
+                        or "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
+                    )
                 )
             ]
 

@@ -865,6 +865,32 @@ async def test_get_activity_fit_data_power_balance_uses_profile_field_types(
     assert data["records"][0]["right_power_pct"] == 52.0
 
 
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_session_power_phase_uses_profile_indexes(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Each phase array contains separate start/end angles, not one start value."""
+    mock_garmin_client.download_activity.return_value = b"\x00" * 20
+    session_msg = _make_profile_fit_message(
+        18,
+        [
+            (116, (337.5, 22.5), (240, 16)),
+            (118, (345.9375, 15.46875), (246, 11)),
+        ],
+    )
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile([session_msg])
+        result = await app_with_activity_analysis.call_tool(
+            "get_activity_fit_data", {"activity_id": ACTIVITY_ID}
+        )
+
+    session = json.loads(result[0][0].text)["session"]
+    assert session["avg_left_power_phase_start_deg"] == 337.5
+    assert session["avg_left_power_phase_end_deg"] == 22.5
+    assert session["avg_right_power_phase_start_deg"] == 345.9375
+    assert session["avg_right_power_phase_end_deg"] == 15.46875
+
+
 # ---------------------------------------------------------------------------
 # No DI2 data
 # ---------------------------------------------------------------------------
@@ -1102,6 +1128,67 @@ async def test_power_duration_curve_filters_by_requested_activity_type(
     assert data["season_bests"]["5s"]["activity_id"] == expected_id
 
 
+@pytest.mark.asyncio
+async def test_power_duration_curve_includes_cycling_parent_subtypes(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Garmin's cycling parent includes names without 'cycling' or 'biking'."""
+    mock_garmin_client.get_activities.return_value = [
+        {"activityId": i, "activityType": {"typeKey": key, "parentTypeId": 2}}
+        for i, key in enumerate(
+            ["virtual_ride", "cyclocross", "e_bike_fitness", "e_bike_mountain"],
+            start=1,
+        )
+    ]
+    mock_garmin_client.download_activity.return_value = b"ride"
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.side_effect = lambda _: _mock_power_fitfile(300)
+        result = await app_with_activity_analysis.call_tool("get_power_duration_curve", {})
+
+    data = json.loads(result[0][0].text)
+    assert data["activities_analyzed"] == 4
+    assert [call.args[0] for call in mock_garmin_client.download_activity.call_args_list] == [1, 2, 3, 4]
+    assert data["season_bests"]["5s"]["watts"] == 300
+
+
+@pytest.mark.asyncio
+async def test_power_duration_curve_requests_matching_activities_before_limiting(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """The requested count applies to rides, rather than an all-sport window."""
+    from garminconnect import Garmin
+
+    activities = [
+        {"activityId": i, "activityType": {"typeKey": key, "parentTypeId": parent}}
+        for i, key, parent in [
+            (1, "running", 17), (2, "road_biking", 2),
+            (3, "running", 17), (4, "road_biking", 2),
+        ]
+    ]
+    # Exercise the installed library's activitytype -> activityType mapping,
+    # replacing only the transport so this test never contacts Garmin.
+    client = Garmin()
+    client.connectapi = Mock(side_effect=lambda url, params: (
+        [a for a in activities if a["activityType"]["parentTypeId"] == 2]
+        if params.get("activityType") == "cycling" else activities
+    )[int(params["start"]):int(params["start"]) + int(params["limit"])])
+    mock_garmin_client.get_activities.side_effect = client.get_activities
+    mock_garmin_client.download_activity.return_value = b"ride"
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.side_effect = lambda _: _mock_power_fitfile(300)
+        result = await app_with_activity_analysis.call_tool(
+            "get_power_duration_curve", {"num_activities": 2, "activity_type": "CYCLING"}
+        )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities_analyzed"] == 2
+    assert [call.args[0] for call in mock_garmin_client.download_activity.call_args_list] == [2, 4]
+    client.connectapi.assert_called_once_with(
+        client.garmin_connect_activities,
+        params={"start": "0", "limit": "2", "activityType": "cycling"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Climb detection + VAM (unit tests)
 # ---------------------------------------------------------------------------
@@ -1232,6 +1319,23 @@ def test_temperature_stats_none_when_no_data():
     """Returns None when no temperature data"""
     records = [{"power_w": 200, "heart_rate_bpm": 145}] * 50
     assert _compute_temperature_stats(records) is None
+
+
+def test_temperature_stats_include_zero_power_and_skip_missing_samples():
+    """Coasting contributes 0 W; missing power and 0 bpm dropouts stay excluded."""
+    records = [
+        {"temperature_c": 10, "power_w": power, "heart_rate_bpm": hr}
+        for power, hr in [(0, 0), (200, 140), (None, None)]
+    ] + [{"temperature_c": 20}] * 3 + [
+        {"temperature_c": 30, "power_w": power, "heart_rate_bpm": hr}
+        for power, hr in [(0, 0), (0, 150), (None, None)]
+    ]
+
+    stats = _compute_temperature_stats(records)
+    assert stats["avg_power_coolest_third_w"] == 100
+    assert stats["avg_power_hottest_third_w"] == 0
+    assert stats["avg_hr_coolest_third_bpm"] == 140
+    assert stats["avg_hr_hottest_third_bpm"] == 150
 
 
 # ---------------------------------------------------------------------------
