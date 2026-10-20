@@ -310,3 +310,204 @@ class TestGetTokenInfo:
 
         assert Path(info["path"]) == Path.home() / ".garminconnect"
         mock_get_path.assert_called_once()
+
+
+class TestInspectTokenStore:
+    """inspect_token_store describes the store on disk without network access."""
+
+    def test_missing_directory_from_env(self, monkeypatch, tmp_path):
+        from garmin_mcp.token_utils import inspect_token_store
+
+        missing = tmp_path / "nope"
+        monkeypatch.setenv("GARMINTOKENS", str(missing))
+
+        info = inspect_token_store()
+
+        assert info["path"] == str(missing)
+        assert info["source"] == f"from GARMINTOKENS={missing}"
+        assert info["exists"] is False
+        assert info["has_token_file"] is False
+        assert info["mode"] is None
+
+    def test_default_path_when_env_unset(self, monkeypatch, tmp_path):
+        from garmin_mcp.token_utils import inspect_token_store
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        monkeypatch.delenv("GARMINTOKENS", raising=False)
+
+        info = inspect_token_store()
+
+        assert info["path"] == str(tmp_path / ".garminconnect")
+        assert info["source"] == "the default; GARMINTOKENS is not set"
+
+    def test_explicit_path_reports_env_mismatch(self, monkeypatch, tmp_path):
+        from garmin_mcp.token_utils import inspect_token_store
+
+        monkeypatch.setenv("GARMINTOKENS", str(tmp_path / "elsewhere"))
+
+        info = inspect_token_store(str(tmp_path / "here"))
+
+        assert info["source"] == (
+            f"given explicitly; GARMINTOKENS={tmp_path / 'elsewhere'} points elsewhere"
+        )
+
+    def test_directory_without_token_file(self, tmp_path):
+        from garmin_mcp.token_utils import inspect_token_store
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "oauth1_token.json").write_text("{}")
+
+        info = inspect_token_store(str(store))
+
+        assert info["exists"] and info["is_dir"]
+        assert info["has_token_file"] is False
+        assert info["files"] == ["oauth1_token.json"]
+        assert info["mode"] is not None
+
+    def test_corrupt_token_file(self, tmp_path):
+        from garmin_mcp.token_utils import inspect_token_store
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "garmin_tokens.json").write_text("{not json")
+
+        info = inspect_token_store(str(store))
+
+        assert info["has_token_file"] is True
+        assert info["token_file_error"].startswith("unreadable or not JSON")
+
+    def test_token_file_without_tokens(self, tmp_path):
+        from garmin_mcp.token_utils import inspect_token_store
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "garmin_tokens.json").write_text('{"di_token": null}')
+
+        info = inspect_token_store(str(store))
+
+        assert info["token_file_error"] == "no di_token/di_refresh_token inside"
+
+    def test_good_token_file(self, tmp_path):
+        from garmin_mcp.token_utils import inspect_token_store
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "garmin_tokens.json").write_text(
+            '{"di_token": "a", "di_refresh_token": "b", "di_client_id": "c"}'
+        )
+
+        info = inspect_token_store(str(store))
+
+        assert info["has_token_file"] is True
+        assert info["token_file_error"] == ""
+        assert info["token_file"] == str(store / "garmin_tokens.json")
+
+
+class TestDescribeTokenFailure:
+    """describe_token_failure names the real problem and the resolved path."""
+
+    @staticmethod
+    def _good_store(tmp_path):
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "garmin_tokens.json").write_text(
+            '{"di_token": "a", "di_refresh_token": "b", "di_client_id": "c"}'
+        )
+        return store
+
+    def test_missing_directory(self, monkeypatch, tmp_path):
+        from garminconnect import GarminConnectAuthenticationError
+        from garmin_mcp.token_utils import describe_token_failure
+
+        missing = tmp_path / "nope"
+        monkeypatch.setenv("GARMINTOKENS", str(missing))
+
+        message = describe_token_failure(
+            str(missing), GarminConnectAuthenticationError("Username and password are required")
+        )
+
+        assert message.startswith(f"No token directory at '{missing}' (from GARMINTOKENS={missing})")
+        assert "garmin-mcp-auth" in message
+
+    def test_directory_without_token_file_lists_contents(self, monkeypatch, tmp_path):
+        from garminconnect import GarminConnectAuthenticationError
+        from garmin_mcp.token_utils import describe_token_failure
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "oauth1_token.json").write_text("{}")
+        monkeypatch.delenv("GARMINTOKENS", raising=False)
+
+        message = describe_token_failure(
+            str(store), GarminConnectAuthenticationError("Username and password are required")
+        )
+
+        assert "has no garmin_tokens.json (found: oauth1_token.json)" in message
+
+    def test_corrupt_token_file(self, monkeypatch, tmp_path):
+        from garminconnect import GarminConnectAuthenticationError
+        from garmin_mcp.token_utils import describe_token_failure
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "garmin_tokens.json").write_text("garbage")
+
+        message = describe_token_failure(
+            str(store), GarminConnectAuthenticationError("Username and password are required")
+        )
+
+        assert message.startswith(f"{store / 'garmin_tokens.json'} could not be loaded")
+        assert "--force-reauth" in message
+
+    def test_rejected_tokens(self, tmp_path):
+        from garminconnect import GarminConnectAuthenticationError
+        from garmin_mcp.token_utils import describe_token_failure
+
+        store = self._good_store(tmp_path)
+
+        message = describe_token_failure(
+            str(store), GarminConnectAuthenticationError("Failed to retrieve social profile")
+        )
+
+        assert "loaded but Garmin rejected them" in message
+        assert "Failed to retrieve social profile" in message
+        assert "--force-reauth" in message
+
+    def test_network_failure(self, tmp_path):
+        from garminconnect import GarminConnectConnectionError
+        from garmin_mcp.token_utils import describe_token_failure
+
+        store = self._good_store(tmp_path)
+
+        message = describe_token_failure(
+            str(store), GarminConnectConnectionError("Connection refused")
+        )
+
+        assert message.startswith("Could not reach Garmin Connect")
+        assert "Connection refused" in message
+
+    def test_unauthorized_connection_error_counts_as_rejection(self, tmp_path):
+        from garminconnect import GarminConnectConnectionError
+        from garmin_mcp.token_utils import describe_token_failure
+
+        store = self._good_store(tmp_path)
+
+        message = describe_token_failure(
+            str(store), GarminConnectConnectionError("API Error 401 - Unauthorized")
+        )
+
+        assert "Garmin rejected them" in message
+
+    def test_rate_limited(self, tmp_path):
+        from garminconnect import GarminConnectTooManyRequestsError
+        from garmin_mcp.token_utils import describe_token_failure
+
+        store = self._good_store(tmp_path)
+
+        message = describe_token_failure(
+            str(store), GarminConnectTooManyRequestsError("Too many requests")
+        )
+
+        assert message.startswith("Garmin rate-limited the login (429)")

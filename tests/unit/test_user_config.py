@@ -7,8 +7,8 @@ import pytest
 from garmin_mcp import (
     _normalize_optional_user_config,
     init_api,
-    tokenstore,
 )
+from garmin_mcp.token_utils import get_token_path
 
 
 @pytest.mark.parametrize(
@@ -40,4 +40,4 @@ def test_unresolved_credentials_do_not_trigger_login(mock_garmin, _mock_terminal
 
     assert result is None
     mock_garmin.assert_called_once_with(is_cn=False)
-    mock_garmin.return_value.login.assert_called_once_with(tokenstore)
+    mock_garmin.return_value.login.assert_called_once_with(get_token_path())
