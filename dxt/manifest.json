@@ -592,12 +592,20 @@
       "description": "Quick-add a food entry with macro values to the nutrition log"
     },
     {
+      "name": "push_workout_to_device",
+      "description": "Send a workout from the workout library to a Garmin device"
+    },
+    {
       "name": "remove_gear_from_activity",
       "description": "Remove gear association from an activity"
     },
     {
       "name": "request_reload",
       "description": "Request reload of epoch data"
+    },
+    {
+      "name": "reschedule_workout",
+      "description": "Move a scheduled workout to another date on the Garmin Connect calendar"
     },
     {
       "name": "schedule_week",

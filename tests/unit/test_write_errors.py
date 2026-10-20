@@ -163,3 +163,21 @@ class TestResultShape:
     def test_correlation_ids_are_unique(self):
         exc = GarminConnectConnectionError("API Error 401 - ")
         assert _error(exc)["correlation_id"] != _error(exc)["correlation_id"]
+
+
+@pytest.mark.parametrize("status, body", [(401, ""), (404, "Meal not found"), (429, "Slow down"), (500, "Service down")])
+def test_upstream_body_excludes_proxy_hint(status, body):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from garmin_mcp import _GarminProxy
+
+    client = SimpleNamespace(connectapi=Mock(side_effect=GarminConnectConnectionError(
+        f"HTTP error: API Error {status} - {body}"
+    )))
+    proxy = _GarminProxy(client, timeout=0)
+    with pytest.raises(GarminConnectConnectionError) as caught:
+        proxy.connectapi("/nutrition-service/meals/2024-01-15")
+    result = _error(caught.value)
+    assert result["upstream_status"] == status
+    assert result["upstream_body"] == (body or None)
+    assert result["write_committed"] is False

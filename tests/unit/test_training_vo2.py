@@ -151,3 +151,13 @@ def test_build_vo2_trend_series_handles_empty_history_and_early_end():
     history = [{"date": "2024-01-20", "vo2_max": 48.0, "source": "get_max_metrics"}]
 
     assert training._build_vo2_trend_series(history, datetime.date(2024, 1, 16)) == []
+
+
+def test_extract_dated_vo2_measurements_preserves_root_date_for_nested_sport():
+    payload = {
+        "calendarDate": "2024-01-13",
+        "mostRecentVO2Max": {"generic": {"vo2MaxValue": 48}},
+    }
+    assert training._extract_dated_vo2_measurements(payload) == {
+        "2024-01-13": {"running": 48}
+    }

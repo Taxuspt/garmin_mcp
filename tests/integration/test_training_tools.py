@@ -1721,7 +1721,7 @@ async def test_hrv_trend_averages_only_available_nights(app_with_training, mock_
         {"hrvSummary": {"lastNightAvg": 54}},
         None,
         {"hrvSummary": {"lastNightAvg": None, "weeklyAvg": 60}},
-        Exception("unavailable"),
+        {"hrvSummary": None},
         {"hrvSummary": {"lastNightAvg": 71}},
     ]
     result = await app_with_training.call_tool(
@@ -1793,3 +1793,273 @@ async def test_training_status_retains_monthly_load_without_status_snapshot(
     assert data["training_balance_feedback"] == "BALANCED"
     assert "reporting_device_id" not in data
     assert "load_unavailable_reason" not in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool, method", [
+    ("get_training_load_trend", "get_training_status"),
+    ("get_hrv_trend", "get_hrv_data"),
+    ("get_respiration_trend", "get_respiration_data"),
+    ("get_vo2max_trend", "get_training_status"),
+])
+@pytest.mark.parametrize("status", [401, 429, 503])
+async def test_training_trends_surface_upstream_request_failures(
+    app_with_training, mock_garmin_client, tool, method, status
+):
+    """garminconnect 0.3.2 wraps API status errors as connection errors."""
+    from garminconnect import GarminConnectConnectionError
+
+    getattr(mock_garmin_client, method).side_effect = GarminConnectConnectionError(
+        f"HTTP error: API Error {status} - failed request"
+    )
+    mock_garmin_client.garmin_connect_metrics_url = None
+    result = await app_with_training.call_tool(
+        tool, {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+    text = result[0][0].text
+    assert text.startswith("Error retrieving")
+    assert str(status) in text
+    getattr(mock_garmin_client, method).assert_called_once_with("2024-01-13")
+
+
+@pytest.mark.asyncio
+async def test_vo2_trend_stops_after_range_auth_failure(app_with_training, mock_garmin_client):
+    from garminconnect import GarminConnectConnectionError
+
+    mock_garmin_client.garmin_connect_metrics_url = "/metrics-service/metrics/maxmet/daily"
+    mock_garmin_client.connectapi.side_effect = GarminConnectConnectionError("API Error 401 - expired")
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+    assert result[0][0].text.startswith("Error retrieving VO2 max data:")
+    mock_garmin_client.get_training_status.assert_not_called()
+    mock_garmin_client.get_user_profile.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vo2_trend_retains_measurement_dates_and_marks_carried_days(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.garmin_connect_metrics_url = "/metrics-service/metrics/maxmet/daily"
+    mock_garmin_client.connectapi.return_value = [
+        {"generic": {"calendarDate": "2024-01-13", "vo2MaxPreciseValue": 47.6}},
+        {"generic": {"calendarDate": "2024-01-15", "vo2MaxPreciseValue": 48.7}},
+    ]
+
+    def status(date):
+        return {"mostRecentVO2Max": {"generic": {
+            "calendarDate": "2024-01-13" if date < "2024-01-15" else "2024-01-15",
+            "vo2MaxPreciseValue": 47.6 if date < "2024-01-15" else 48.7,
+        }}}
+
+    mock_garmin_client.get_training_status.side_effect = status
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-16"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["data_points"] == 4  # counts displayed days, including carried values
+    assert [point.get("carried_forward", False) for point in data["trend"]] == [False, True, False, True]
+    assert [point["source"] for point in data["trend"]] == ["get_max_metrics"] * 4
+
+
+@pytest.mark.asyncio
+async def test_vo2_trend_carries_previous_measurement_into_requested_range(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.garmin_connect_metrics_url = "/metrics-service/metrics/maxmet/daily"
+    mock_garmin_client.connectapi.return_value = []
+    mock_garmin_client.get_training_status.return_value = {"mostRecentVO2Max": {"cycling": {
+        "calendarDate": "2024-01-10", "vo2MaxPreciseValue": 55.1,
+    }}}
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "cycling"
+    assert [point["date"] for point in data["trend"]] == ["2024-01-13", "2024-01-14", "2024-01-15"]
+    assert all(point.get("carried_forward") is True for point in data["trend"])
+    assert all(point["vo2_max"] == 55.1 for point in data["trend"])
+
+
+@pytest.mark.asyncio
+async def test_vo2_trend_reports_endpoint_failure_when_fallbacks_are_empty(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.garmin_connect_metrics_url = "/metrics-service/metrics/maxmet/daily"
+    mock_garmin_client.connectapi.side_effect = RuntimeError("range unavailable")
+    mock_garmin_client.get_training_status.return_value = {}
+    mock_garmin_client.get_user_profile.return_value = {}
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+    assert result[0][0].text == "Error retrieving VO2 max data: range unavailable"
+
+
+@pytest.mark.asyncio
+async def test_vo2_trend_discloses_recovered_endpoint_failure(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.garmin_connect_metrics_url = "/metrics-service/metrics/maxmet/daily"
+    mock_garmin_client.connectapi.side_effect = RuntimeError("range unavailable")
+    mock_garmin_client.get_training_status.return_value = {
+        "mostRecentVO2Max": {"generic": {"vo2MaxValue": 48}}
+    }
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["latest_vo2_max"] == 48
+    assert data["request_errors"] == [{"source": "get_max_metrics", "error": "range unavailable"}]
+
+
+@pytest.mark.asyncio
+async def test_training_load_trend_stops_after_device_auth_failure(
+    app_with_training, mock_garmin_client
+):
+    from garminconnect import GarminConnectConnectionError
+
+    mock_garmin_client.get_devices.side_effect = GarminConnectConnectionError("API Error 401 - expired")
+    result = await app_with_training.call_tool(
+        "get_training_load_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+    assert result[0][0].text == "Error retrieving training load device data: API Error 401 - expired"
+    mock_garmin_client.get_training_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_training_load_trend_surfaces_readiness_rate_limit(
+    app_with_training, mock_garmin_client
+):
+    from garminconnect import GarminConnectConnectionError
+
+    mock_garmin_client.get_devices.return_value = [{"deviceId": 100, "primaryDevice": True}]
+    mock_garmin_client.get_training_status.return_value = {"mostRecentTrainingStatus": {
+        "latestTrainingStatusData": {"200": {"deviceId": 200}}
+    }}
+    mock_garmin_client.get_training_readiness.side_effect = GarminConnectConnectionError("API Error 429 - rate limited")
+    result = await app_with_training.call_tool(
+        "get_training_load_trend", {"start_date": "2024-01-13", "end_date": "2024-01-15"}
+    )
+    assert result[0][0].text == "Error retrieving training load data for 2024-01-13: API Error 429 - rate limited"
+    mock_garmin_client.get_training_readiness.assert_called_once_with("2024-01-13")
+
+
+@pytest.mark.asyncio
+async def test_vo2_trend_preserves_undated_sport_alongside_dated_sport(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.garmin_connect_metrics_url = None
+    mock_garmin_client.get_training_status.side_effect = [
+        {"mostRecentVO2Max": {
+            "generic": {"vo2MaxValue": 48},
+            "cycling": {"calendarDate": "2024-01-10", "vo2MaxValue": 55},
+        }},
+        {"mostRecentVO2Max": {"generic": {"vo2MaxValue": 48.5}}},
+    ]
+    result = await app_with_training.call_tool(
+        "get_vo2max_trend", {"start_date": "2024-01-13", "end_date": "2024-01-14"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["sport"] == "running"
+    assert [point["vo2_max"] for point in data["trend"]] == [48, 48.5]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("summary", [None, {"lastNightAvg": 54}])
+async def test_hrv_timeseries_preserves_summary_with_null_readings(
+    app_with_training, mock_garmin_client, summary
+):
+    """Unmeasured readings do not discard the available HRV summary."""
+    mock_garmin_client.get_hrv_data.return_value = {
+        "hrvSummary": summary,
+        "hrvReadings": None,
+    }
+    result = await app_with_training.call_tool(
+        "get_hrv_data", {"date": "2024-01-15", "return_timeseries": True}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["date"] == "2024-01-15"
+    assert data["hrv_readings"] == []
+    assert data["readings_count"] == 0
+    if summary:
+        assert data["last_night_avg_hrv_ms"] == 54
+
+
+@pytest.mark.asyncio
+async def test_cycling_ftp_accepts_list_payload(app_with_training, mock_garmin_client):
+    """garminconnect 0.3.2 declares the latest FTP endpoint may return a list."""
+    mock_garmin_client.get_cycling_ftp.return_value = [MOCK_CYCLING_FTP]
+    result = await app_with_training.call_tool("get_cycling_ftp", {})
+    data = json.loads(result[0][0].text)
+    assert data["functional_threshold_power_watts"] == MOCK_CYCLING_FTP["functionalThresholdPower"]
+    assert data["sport"] == MOCK_CYCLING_FTP["sport"]
+
+
+@pytest.mark.asyncio
+async def test_hill_score_preserves_metrics_with_null_daily_scores(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_hill_score.return_value = {
+        "hillScoreDTOList": None, "periodAvgScore": None, "maxScore": 74,
+    }
+    result = await app_with_training.call_tool(
+        "get_hill_score", {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["max_score"] == 74
+    assert data["daily_scores"] == []
+    assert "latest_date" not in data
+
+
+@pytest.mark.asyncio
+async def test_hill_score_selects_latest_calendar_date(
+    app_with_training, mock_garmin_client
+):
+    """The latest score must not depend on upstream list order."""
+    mock_garmin_client.get_hill_score.return_value = {
+        "hillScoreDTOList": [
+            {"calendarDate": "2024-01-08", "overallScore": 40},
+            {"calendarDate": "2024-01-15", "overallScore": 55, "strengthScore": 60},
+            {"calendarDate": "2024-01-10", "overallScore": 45},
+        ]
+    }
+    result = await app_with_training.call_tool(
+        "get_hill_score", {"start_date": "2024-01-08", "end_date": "2024-01-15"}
+    )
+    data = json.loads(result[0][0].text)
+    assert data["latest_date"] == "2024-01-15"
+    assert data["latest_overall_score"] == 55
+    assert data["latest_strength_score"] == 60
+    assert len(data["daily_scores"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_get_endurance_score_handles_null_score_dto(app_with_training, mock_garmin_client):
+    """A day without a score must not crash the tool.
+
+    For days before the device computed an endurance score (and for today,
+    until Garmin has computed it), Garmin answers with an explicit null
+    `enduranceScoreDTO` and null period stats. `.get("enduranceScoreDTO", {})`
+    returned None and the next `.get` raised "'NoneType' object has no attribute 'get'".
+    """
+    mock_garmin_client.get_endurance_score.return_value = {
+        "userProfilePK": 1,
+        "startDate": "2022-09-01",
+        "endDate": "2022-09-01",
+        "avg": None,
+        "max": None,
+        "groupMap": {"2022-08-29": None},
+        "enduranceScoreDTO": None,
+    }
+    mock_garmin_client.get_activity_types.return_value = MOCK_ACTIVITY_TYPES
+    training._activity_type_cache = None
+
+    result = await app_with_training.call_tool(
+        "get_endurance_score",
+        {"start_date": "2022-09-01", "end_date": "2022-09-01"},
+    )
+    # The tool drops None fields, so a day without a score keeps only its dates.
+    data = json.loads(result[0][0].text)
+    assert "current_score" not in data
+    assert data["start_date"] == "2022-09-01"
+    assert data["weekly_breakdown"] == [{"week_start": "2022-08-29"}]
