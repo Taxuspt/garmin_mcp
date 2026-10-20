@@ -28,6 +28,7 @@ ADDITIVE_TOOLS = frozenset(
         "create_z2_walk_workout",
         "log_custom_food",
         "log_food",
+        "push_workout_to_device",
         "request_reload",
         "schedule_week",
         "schedule_workout",
