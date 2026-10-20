@@ -59,6 +59,7 @@ DESTRUCTIVE_TOOLS = frozenset(
         "download_course_gpx",
         "download_workout",
         "remove_gear_from_activity",
+        "reschedule_workout",
         "set_activity_description",
         "set_activity_event_type",
         "set_activity_exercise_sets",
@@ -78,7 +79,9 @@ DESTRUCTIVE_TOOLS = frozenset(
 # These tools are explicitly documented as safe to repeat with the same
 # arguments. Batch scheduling can also upload an inline workout, so it is
 # intentionally excluded even though its existing-workout path is guarded.
-IDEMPOTENT_TOOLS = frozenset({"schedule_week", "schedule_workout"})
+IDEMPOTENT_TOOLS = frozenset(
+    {"reschedule_workout", "schedule_week", "schedule_workout"}
+)
 
 
 # This is the only registered tool whose effect is strictly local. All other

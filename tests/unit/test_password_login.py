@@ -79,10 +79,13 @@ def test_server_password_login_replaces_revoked_garmintokens(fake_garmin, monkey
     token_dir = str(tmp_path / "tokens")
     fake_garmin[token_dir] = "revoked:bob@example.com"
     monkeypatch.setenv("GARMINTOKENS", token_dir)
-    monkeypatch.setattr(garmin_mcp, "tokenstore", token_dir)
-    monkeypatch.setattr(garmin_mcp, "tokenstore_base64", str(tmp_path / "tokens_base64"))
 
-    garmin = garmin_mcp.init_api("bob@example.com", "secret")
+    garmin = garmin_mcp.init_api(
+        "bob@example.com",
+        "secret",
+        tokenstore=token_dir,
+        tokenstore_base64=str(tmp_path / "tokens_base64"),
+    )
 
     assert garmin is not None
     assert fake_garmin[token_dir] == "fresh:bob@example.com"
@@ -93,10 +96,13 @@ def test_server_password_login_loads_profile(fake_garmin, monkeypatch, tmp_path)
     """A login without MFA returns a client with the profile and settings loaded."""
     token_dir = str(tmp_path / "tokens")
     monkeypatch.delenv("GARMINTOKENS", raising=False)
-    monkeypatch.setattr(garmin_mcp, "tokenstore", token_dir)
-    monkeypatch.setattr(garmin_mcp, "tokenstore_base64", str(tmp_path / "tokens_base64"))
 
-    garmin = garmin_mcp.init_api("bob@example.com", "secret")
+    garmin = garmin_mcp.init_api(
+        "bob@example.com",
+        "secret",
+        tokenstore=token_dir,
+        tokenstore_base64=str(tmp_path / "tokens_base64"),
+    )
 
     assert garmin is not None
     assert garmin.display_name == "bob@example.com"

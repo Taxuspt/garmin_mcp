@@ -3089,6 +3089,102 @@ async def test_unschedule_workout_error(app_with_workouts, mock_garmin_client):
     assert "Network error" in result_data["message"]
 
 
+# reschedule_workout tests
+SCHEDULED_ENTRY = {
+    "workoutScheduleId": 1677275789,
+    "calendarDate": "2024-01-15",
+    "workout": {
+        "workoutId": 123456,
+        "workoutName": "5K Tempo Run",
+        "workoutSegments": [{"segmentOrder": 1}],
+    },
+    "ownerId": 80653452,
+    "createdDate": "2024-01-10T08:00:00.0",
+}
+
+
+@pytest.mark.asyncio
+async def test_reschedule_workout_success(app_with_workouts, mock_garmin_client):
+    """The entry is PUT back with the new date and only the workout reference"""
+    import json as json_module
+
+    mock_garmin_client.get_scheduled_workout_by_id.return_value = SCHEDULED_ENTRY
+    mock_garmin_client.client.put.return_value = Mock(status_code=200)
+
+    result = await app_with_workouts.call_tool(
+        "reschedule_workout",
+        {"scheduled_workout_id": 1677275789, "calendar_date": "2024-01-17"}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "success"
+    assert result_data["previous_date"] == "2024-01-15"
+    assert result_data["scheduled_date"] == "2024-01-17"
+    assert result_data["workout_id"] == 123456
+    mock_garmin_client.get_scheduled_workout_by_id.assert_called_once_with(1677275789)
+    args, kwargs = mock_garmin_client.client.put.call_args
+    assert args == ("connectapi", "workout-service/schedule/1677275789")
+    assert kwargs["json"] == {
+        "workoutScheduleId": 1677275789,
+        "calendarDate": "2024-01-17",
+        "workout": {"workoutId": 123456},
+        "ownerId": 80653452,
+        "createdDate": "2024-01-10T08:00:00.0",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reschedule_workout_invalid_date(app_with_workouts, mock_garmin_client):
+    """A malformed date is rejected before anything is read or sent"""
+    import json as json_module
+
+    result = await app_with_workouts.call_tool(
+        "reschedule_workout",
+        {"scheduled_workout_id": 1677275789, "calendar_date": "2024-02-30"}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    mock_garmin_client.get_scheduled_workout_by_id.assert_not_called()
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_workout_not_found(app_with_workouts, mock_garmin_client):
+    """Nothing is sent when the calendar entry doesn't exist"""
+    import json as json_module
+
+    mock_garmin_client.get_scheduled_workout_by_id.return_value = None
+
+    result = await app_with_workouts.call_tool(
+        "reschedule_workout",
+        {"scheduled_workout_id": 999, "calendar_date": "2024-01-17"}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert "not found" in result_data["message"]
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_reschedule_workout_error(app_with_workouts, mock_garmin_client):
+    """A failed PUT is reported, not raised"""
+    import json as json_module
+
+    mock_garmin_client.get_scheduled_workout_by_id.return_value = SCHEDULED_ENTRY
+    mock_garmin_client.client.put.side_effect = Exception("API Error 400")
+
+    result = await app_with_workouts.call_tool(
+        "reschedule_workout",
+        {"scheduled_workout_id": 1677275789, "calendar_date": "2024-01-17"}
+    )
+
+    result_data = json_module.loads(result[0][0].text)
+    assert result_data["status"] == "failed"
+    assert "400" in result_data["message"]
+
+
 # unschedule_workouts (batch) tests
 @pytest.mark.asyncio
 async def test_unschedule_workouts_multiple(app_with_workouts, mock_garmin_client):

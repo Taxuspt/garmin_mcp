@@ -604,6 +604,10 @@
       "description": "Request reload of epoch data"
     },
     {
+      "name": "reschedule_workout",
+      "description": "Move a scheduled workout to another date on the Garmin Connect calendar"
+    },
+    {
       "name": "schedule_week",
       "description": "Schedule a list of workouts for the week in a single call."
     },

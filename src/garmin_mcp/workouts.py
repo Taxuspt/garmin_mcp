@@ -1526,6 +1526,80 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
+    async def reschedule_workout(scheduled_workout_id: int, calendar_date: str) -> str:
+        """Move a scheduled workout to another date on the Garmin Connect calendar
+
+        Moves the existing calendar entry in place, so its id stays the same
+        and no duplicate entry is created. Prefer this over unschedule +
+        schedule. Safe to repeat: moving an entry to the date it is already
+        on changes nothing.
+
+        IMPORTANT: scheduled_workout_id is the calendar-entry id, which is
+        different from the workout's id. Get it from get_scheduled_workouts
+        (the "scheduled_workout_id" field), not from get_workouts.
+
+        Args:
+            scheduled_workout_id: Calendar-entry id from get_scheduled_workouts
+            calendar_date: New date in YYYY-MM-DD format
+        """
+        try:
+            _validate_date(calendar_date, "calendar_date")
+        except ValueError as e:
+            return json.dumps({
+                "status": "failed",
+                "scheduled_workout_id": scheduled_workout_id,
+                "scheduled_date": calendar_date,
+                "message": str(e),
+            }, indent=2)
+
+        try:
+            # Garmin's schedule PUT takes the whole entry back with the new
+            # date, and only the workout reference rather than the workout.
+            current = garmin_client.get_scheduled_workout_by_id(scheduled_workout_id)
+            if not current:
+                return json.dumps({
+                    "status": "failed",
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "message": f"Scheduled workout {scheduled_workout_id} not found",
+                }, indent=2)
+            workout = current.get("workout") or {}
+            payload = {
+                **current,
+                "calendarDate": calendar_date,
+                "workout": {"workoutId": workout.get("workoutId")} if workout else None,
+            }
+
+            url = f"workout-service/schedule/{scheduled_workout_id}"
+            response = garmin_client.client.put("connectapi", url, json=payload)
+
+            if response.status_code in (200, 204):
+                return json.dumps({
+                    "status": "success",
+                    "scheduled_workout_id": scheduled_workout_id,
+                    "workout_id": workout.get("workoutId"),
+                    "previous_date": current.get("calendarDate"),
+                    "scheduled_date": calendar_date,
+                    "message": (
+                        f"Moved scheduled workout {scheduled_workout_id} "
+                        f"to {calendar_date}"
+                    ),
+                }, indent=2)
+            return json.dumps({
+                "status": "failed",
+                "scheduled_workout_id": scheduled_workout_id,
+                "scheduled_date": calendar_date,
+                "http_status": response.status_code,
+                "message": f"Failed to reschedule workout: HTTP {response.status_code}",
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "failed",
+                "scheduled_workout_id": scheduled_workout_id,
+                "scheduled_date": calendar_date,
+                "message": f"Failed to reschedule workout: {str(e)}",
+            }, indent=2)
+
+    @app.tool()
     async def unschedule_workout(scheduled_workout_id: int) -> str:
         """Remove a scheduled workout from the Garmin Connect calendar
 
