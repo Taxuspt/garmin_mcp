@@ -377,6 +377,16 @@ def diagnose_tokens(token_path: str | None, is_cn: bool) -> bool:
 
 def main():
     """Main entry point for the authentication CLI tool."""
+    # The CLI prints check marks (✓/✗) that cannot be encoded in common legacy
+    # CJK code pages (cp936/GBK, cp932). On such consoles print() raised
+    # UnicodeEncodeError and aborted the whole flow mid-run. Replace unencodable
+    # characters with '?' instead of crashing, keeping the console's encoding so
+    # localized text still renders correctly.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(
         description="Pre-authenticate with Garmin Connect for MCP server use",
         formatter_class=argparse.RawDescriptionHelpFormatter,
