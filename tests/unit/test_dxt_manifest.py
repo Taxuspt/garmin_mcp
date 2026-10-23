@@ -3,6 +3,7 @@
 import asyncio
 import json
 import sys
+import tomllib
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -38,6 +39,14 @@ def test_bundled_manifest_matches_source_manifest():
         bundled_manifest = json.loads(bundle.read("manifest.json"))
 
     assert bundled_manifest == manifest
+
+
+def test_extension_python_requirement_matches_project():
+    """Desktop installs must not advertise an unsupported Python runtime."""
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())["project"]
+    manifest = _read_manifest()
+
+    assert manifest["compatibility"]["runtimes"]["python"] == project["requires-python"]
 
 
 def test_tools_list_matches_registered_tools():
