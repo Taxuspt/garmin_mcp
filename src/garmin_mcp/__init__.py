@@ -20,6 +20,7 @@ from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnec
 
 # Import all modules
 from garmin_mcp import token_utils
+from garmin_mcp import personal_api
 from garmin_mcp import activity_management
 from garmin_mcp import health_wellness
 from garmin_mcp import user_profile
@@ -100,6 +101,26 @@ def load_credentials() -> tuple[str | None, str | None]:
 
 def _resolve_is_cn() -> bool:
     return os.getenv("GARMIN_IS_CN", "false").lower() in ("true", "1", "yes")
+
+
+# --- Auth backend selection -------------------------------------------------
+#   GARMIN_AUTH_MODE - auto (default) | personal | sso
+# "auto" uses the official Personal API when a key is configured
+# (GARMIN_PERSONAL_API_KEY or the key file) and falls back to the SSO backend
+# when no key is found, so an existing install keeps working untouched.
+# "personal" never contacts the SSO service; "sso" never reads a Personal key.
+# AUTH MODES:
+_VALID_AUTH_MODES = ("auto", "personal", "sso")
+
+
+def _resolve_auth_mode() -> str:
+    """Read and validate GARMIN_AUTH_MODE. Raises ValueError on bad input."""
+    mode = os.getenv("GARMIN_AUTH_MODE", "auto").strip().lower()
+    if mode not in _VALID_AUTH_MODES:
+        raise ValueError(
+            f"Invalid GARMIN_AUTH_MODE {mode!r}; expected one of {', '.join(_VALID_AUTH_MODES)}"
+        )
+    return mode
 
 
 # --- Tool filtering ---------------------------------------------------------
@@ -579,11 +600,70 @@ class _ToolFilter:
 # ---------------------------------------------------------------------------
 
 
-def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=None):
+def _init_personal_api(mode: str):
+    """Log in through the official Personal API, or return None to fall back.
+
+    ``mode`` is the resolved GARMIN_AUTH_MODE. In "auto" every failure is
+    reported and then ignored, so an installation whose key expired keeps
+    working through the SSO backend instead of losing all its tools. In
+    "personal" the caller asked for this backend specifically: report and
+    return None so the server fails loudly instead of quietly logging in as
+    somebody else's mechanism.
+    """
+    resolved = personal_api.resolve_api_key()
+    if resolved is None:
+        if mode == "personal":
+            print(
+                "ERROR: GARMIN_AUTH_MODE=personal but no Personal API key was found.\n"
+                f"  Set GARMIN_PERSONAL_API_KEY or write the key to "
+                f"{personal_api.resolve_api_key_file()}\n"
+                "  Create one at https://connect.garmin.com/app/settings/personalApiToken",
+                file=sys.stderr,
+            )
+        return None
+
+    key, source = resolved
+    try:
+        client = personal_api.login_personal(key)
+    except Exception as err:  # noqa: BLE001 - every failure is a fallback decision
+        message = personal_api.describe_login_error(err)
+        if mode == "personal":
+            print(f"ERROR: {message}", file=sys.stderr)
+        else:
+            print(
+                f"WARNING: {message}\n"
+                "  Falling back to the SSO backend for this session "
+                "(set GARMIN_AUTH_MODE=sso to silence this, or fix the key).",
+                file=sys.stderr,
+            )
+        return None
+
+    print(
+        f"Using the official Garmin Personal API at {client.client.base_url} "
+        f"(key from {source}).\n"
+        "  This backend is READ-ONLY: workouts, courses and every other write need\n"
+        "  GARMIN_AUTH_MODE=sso or Garmin's business Starter tier.",
+        file=sys.stderr,
+    )
+    if not client.display_name:
+        print(
+            "WARNING: the Personal API did not return a display name; tools that build\n"
+            "  URLs from it (daily summaries, sleep, ...) will fail until it does.",
+            file=sys.stderr,
+        )
+    return client
+
+
+def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=None, auth_mode=None):
     """Initialize Garmin API with your credentials.
 
     tokenstore, tokenstore_base64 and is_cn default to the environment
     (GARMINTOKENS, GARMINTOKENS_BASE64, GARMIN_IS_CN), read when this runs.
+
+    When auth_mode (default: $GARMIN_AUTH_MODE) selects the official Personal
+    API -- either explicitly, or through "auto" with a key configured -- no SSO
+    request is made at all: the API key is exchanged for a bearer token and the
+    returned client is read-only (see personal_api).
     """
     if tokenstore is None:
         tokenstore = token_utils.get_token_path()
@@ -591,6 +671,13 @@ def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=Non
         tokenstore_base64 = token_utils.get_token_base64_path()
     if is_cn is None:
         is_cn = _resolve_is_cn()
+    if auth_mode is None:
+        auth_mode = _resolve_auth_mode()
+
+    if auth_mode in ("auto", "personal"):
+        garmin = _init_personal_api(auth_mode)
+        if garmin is not None or auth_mode == "personal":
+            return garmin
 
     # Claude Desktop may leave blank optional user_config values as literal
     # placeholders. Do not mistake those strings for credentials and trigger a
@@ -756,12 +843,21 @@ def init_api(email, password, tokenstore=None, tokenstore_base64=None, is_cn=Non
 def main():
     """Initialize the MCP server and register all tools"""
 
-    # On Windows, stdout runs in text mode and translates \n to \r\n, which
-    # breaks the MCP stdio framing that Claude Desktop and other clients expect.
-    # Force binary-transparent newlines so JSON messages arrive intact.
+    # On Windows, stdout runs in text mode and turns every newline into CRLF,
+    # which breaks the MCP stdio framing that Claude Desktop and other clients
+    # expect. Force binary-transparent newlines so JSON messages arrive intact.
+    #
+    # Reconfigure the stream in place instead of wrapping it in a new
+    # TextIOWrapper: a wrapper is closed when it is garbage collected, and
+    # closing it also closes the underlying stream. Under pytest that killed
+    # the capture stream for every test after the first one that called main().
     if sys.platform == "win32":
-        import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
+        try:
+            sys.stdout.reconfigure(newline="\n")
+        except (AttributeError, ValueError, OSError):
+            import io
+
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, newline="\n")
 
     # Garmin login (init_api) runs on a background thread below so it can't
     # block the MCP handshake (issue #255). That thread may still emit
@@ -783,6 +879,7 @@ def main():
         enabled_tools, disabled_tools = _resolve_tool_filters()
         transport, http_host, http_port = _parse_transport_config()
         stateless_http = _resolve_stateless_http()
+        auth_mode = _resolve_auth_mode()
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
@@ -794,7 +891,7 @@ def main():
     # failing well before a client's own initialize timeout would matter
     # again on a later call.
     pending_client = _PendingGarminClient(timeout=90.0)
-    pending_client.start(lambda: init_api(email, password))
+    pending_client.start(lambda: init_api(email, password, auth_mode=auth_mode))
     garmin_client = _GarminProxy(pending_client)
 
     # Configure all modules with the Garmin client

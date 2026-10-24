@@ -9,10 +9,12 @@ import os
 import sys
 import getpass
 import base64
+import time
 
 import requests
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
+from garmin_mcp import personal_api
 from garmin_mcp.token_utils import (
     TOKEN_FILE_NAME,
     inspect_token_store,
@@ -375,6 +377,46 @@ def diagnose_tokens(token_path: str | None, is_cn: bool) -> bool:
     return False
 
 
+def check_personal_key() -> bool:
+    """Validate the official Personal API key end to end.
+
+    SSO login is the one part of this project Garmin does not document or
+    support, and it is what breaks for people behind a rate limit or a region
+    block (#366, #477). The Personal API replaces it with a key, so this check
+    exists to answer "is my key good?" without starting the MCP server.
+    """
+    resolved = personal_api.resolve_api_key()
+    if resolved is None:
+        print("\n✗ No Personal API key found.")
+        print("  Set GARMIN_PERSONAL_API_KEY, or write the key to")
+        print(f"    {personal_api.resolve_api_key_file()}")
+        print("  Create one at https://connect.garmin.com/app/settings/personalApiToken")
+        return False
+
+    key, source = resolved
+    print(f"\nPersonal API key: found ({source})")
+    try:
+        client = personal_api.login_personal(key)
+    except Exception as err:  # noqa: BLE001 - reported, not raised, to the user
+        print(f"\n✗ {personal_api.describe_login_error(err)}")
+        return False
+
+    info = personal_api.describe_backend(client)
+    print(f"  Endpoint        : {info['base_url']}")
+    print("  Read-only       : yes (Personal tier)")
+    print(
+        "  Token valid to  : "
+        + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(info["token_cached_until"]))
+    )
+    print(f"  Token cache     : {info['token_cache_file']}")
+    print(f"  Profile         : {client.display_name or '(no display name returned)'}")
+    print("\n✓ The key authenticates. Start the server with GARMIN_AUTH_MODE=personal")
+    print("  (or leave the default 'auto' with the key configured).")
+    print("  Writes (workouts, courses, weigh-ins, ...) are unavailable on this tier:")
+    print("  use GARMIN_AUTH_MODE=sso for those.")
+    return True
+
+
 def main():
     """Main entry point for the authentication CLI tool."""
     parser = argparse.ArgumentParser(
@@ -431,6 +473,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--personal",
+        action="store_true",
+        help=(
+            "Check the official Garmin Personal API key (GARMIN_PERSONAL_API_KEY or "
+            "~/.config/garmin/connect-personal-api-key) instead of SSO tokens"
+        ),
+    )
+
+    parser.add_argument(
         "--is-cn",
         action="store_true",
         default=None,
@@ -454,6 +505,10 @@ Examples:
     if is_cn:
         print("Region: China (garmin.cn)")
     print("=" * 60)
+
+    # Personal API key mode
+    if args.personal:
+        sys.exit(0 if check_personal_key() else 1)
 
     # Diagnose mode: explain what the server will find at the token path
     if args.diagnose:

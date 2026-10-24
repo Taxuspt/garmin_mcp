@@ -642,14 +642,26 @@ def test_build_course_payload_rejects_too_few_points():
         _build_course_payload({}, "X", 1, None)
 
 
-def test_resolve_gpx_output_path():
-    """Output path resolution precedence and directory handling."""
+def test_resolve_gpx_output_path(tmp_path):
+    """Output path resolution precedence and directory handling.
+
+    Paths come from ``tmp_path`` rather than a hard-coded ``/tmp``: the tool
+    returns ``os.path.abspath`` of what it is given, which on Windows is
+    ``C:\\tmp\\...`` and made this assertion fail on the platform most of the
+    users hitting the auth bugs run.
+    """
     # 1. Custom file path
-    assert _resolve_gpx_output_path(123, "/tmp/custom.gpx") == "/tmp/custom.gpx"
+    target = tmp_path / "custom.gpx"
+    assert _resolve_gpx_output_path(123, str(target)) == str(target)
 
-    # 2. Custom directory path
-    assert _resolve_gpx_output_path(123, "/tmp/dir/") == "/tmp/dir/123.gpx"
+    # 2. Custom directory path (trailing separator marks it as a directory)
+    directory = tmp_path / "dir"
+    assert _resolve_gpx_output_path(123, str(directory) + os.sep) == str(directory / "123.gpx")
 
-    # 3. Default path
+    # 3. Rejects a non-GPX file name
+    with pytest.raises(ValueError, match="must be a directory or a .gpx file"):
+        _resolve_gpx_output_path(123, str(tmp_path / "custom.txt"))
+
+    # 4. Default path
     resolved_default = _resolve_gpx_output_path(123)
-    assert resolved_default.endswith("courses/123.gpx") or "123.gpx" in resolved_default
+    assert resolved_default.endswith("courses" + os.sep + "123.gpx") or "123.gpx" in resolved_default

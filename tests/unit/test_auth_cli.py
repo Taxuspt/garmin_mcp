@@ -221,15 +221,25 @@ class TestAuthenticate:
                 "${HOME}/.garminconnect_base64",
             )
 
+        # compare normalized paths: on Windows ${HOME} expands with backslashes
+        # while the configured suffix keeps its forward slash
         expected_token_path = str(tmp_path / ".garminconnect")
         expected_base64_path = str(tmp_path / ".garminconnect_base64")
         assert result is True
-        mock_exists.assert_called_once_with(expected_token_path)
-        mock_garmin.return_value.client.dump.assert_called_once_with(
+        assert os.path.normpath(mock_exists.call_args[0][0]) == os.path.normpath(
             expected_token_path
         )
-        mock_verify.assert_called_once_with(expected_token_path, False)
-        mock_chmod.assert_any_call(expected_base64_path, 0o600)
+        assert os.path.normpath(
+            mock_garmin.return_value.client.dump.call_args[0][0]
+        ) == os.path.normpath(expected_token_path)
+        assert os.path.normpath(mock_verify.call_args[0][0]) == os.path.normpath(
+            expected_token_path
+        )
+        assert any(
+            os.path.normpath(called[0][0]) == os.path.normpath(expected_base64_path)
+            and called[0][1] == 0o600
+            for called in mock_chmod.call_args_list
+        )
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
@@ -557,6 +567,10 @@ class TestAuthenticateIsCn:
         )
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="chmod on Windows only toggles the read-only bit; POSIX modes are not observable",
+)
 class TestSecureTokenDir:
     """Tests for _secure_token_dir: verifies owner-only permissions are applied."""
 

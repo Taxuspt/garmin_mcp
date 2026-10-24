@@ -110,7 +110,7 @@ def test_main_passes_credentials_read_at_startup(clean_env, monkeypatch, tmp_pat
     seen = {}
     called = threading.Event()
 
-    def fake_init_api(email, password):
+    def fake_init_api(email, password, **kwargs):
         seen.update(email=email, password=password)
         called.set()
         return Mock()
