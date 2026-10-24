@@ -338,7 +338,11 @@ class TestInspectTokenStore:
 
         info = inspect_token_store()
 
-        assert info["path"] == str(tmp_path / ".garminconnect")
+        # Windows expands "~" with backslashes and keeps the suffix's "/", so
+        # compare normalized paths instead of the literal string.
+        assert os.path.normpath(info["path"]) == os.path.normpath(
+            str(tmp_path / ".garminconnect")
+        )
         assert info["source"] == "the default; GARMINTOKENS is not set"
 
     def test_explicit_path_reports_env_mismatch(self, monkeypatch, tmp_path):

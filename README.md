@@ -588,6 +588,8 @@ Your Garmin Connect credentials are read from environment variables:
 - `GARMIN_IS_CN`: Set to `true` to use Garmin Connect China (garmin.cn) instead of the international version (default: `false`)
 - `GARMIN_FIT_DOWNLOAD_DIR`: Default directory for downloaded activity files. When set, skips the first-run setup prompt in `download_activity_file`.
 - `GARMIN_FIT_CONFIG`: Path to the persisted download-directory config file (default: `~/.garminconnect_fit_config.json`).
+- `GARMIN_AUTH_MODE`: `auto` (default), `personal` or `sso` -- which backend talks to Garmin. See [Official Garmin Personal API](#official-garmin-personal-api-read-only-no-sso).
+- `GARMIN_PERSONAL_API_KEY` / `GARMIN_PERSONAL_API_KEY_FILE`: Official Personal API key, or a file holding it (default `~/.config/garmin/connect-personal-api-key`).
 
 File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
 
@@ -677,6 +679,68 @@ For Claude Desktop, add `GARMIN_IS_CN` to the `env` section:
 ```
 
 For Docker, add `GARMIN_IS_CN=true` to your `.env` file or uncomment it in `docker-compose.yml`.
+
+### Official Garmin Personal API (read-only, no SSO)
+
+Since 2026-10-21 Garmin lets any individual create a **Personal API key** on
+Garmin Connect and use it against an official, documented endpoint. This server
+can use that key instead of the SSO login, which removes the email/password/MFA
+flow entirely -- and with it the 429 rate limiting and token-store confusion
+behind issues #330, #366 and #477.
+
+1. Create a key at
+   <https://connect.garmin.com/app/settings/personalApiToken> (30/90/180/365
+   days; the key is displayed once).
+2. Give it to the server, either in the environment:
+
+   ```bash
+   export GARMIN_PERSONAL_API_KEY="..."
+   ```
+
+   or in a key file, which is the better option on a shared machine:
+
+   ```bash
+   mkdir -p ~/.config/garmin
+   printf '%s' "$KEY" > ~/.config/garmin/connect-personal-api-key
+   chmod 600 ~/.config/garmin/connect-personal-api-key
+   ```
+
+3. Start the server as usual. With `GARMIN_AUTH_MODE=auto` (the default) a key
+   that is present is used; without one, the SSO backend behaves exactly as
+   before.
+
+Check the key without starting the server:
+
+```bash
+garmin-mcp-auth --personal
+```
+
+**This tier is read-only.** Garmin exposes Activity, Health and Women's Health
+data; Courses, Training, gear, challenges and every other write belong to the
+business Starter tier. The server refuses writes locally with an explicit error
+instead of forwarding them for a 403.
+
+- `GARMIN_AUTH_MODE`: `auto` (default), `personal` or `sso`. `personal` never
+  contacts the SSO service; `sso` never reads a key.
+- `GARMIN_PERSONAL_API_KEY` / `GARMIN_PERSONAL_API_KEY_FILE`: the key, or a file
+  holding it (default `~/.config/garmin/connect-personal-api-key`).
+- `GARMIN_PERSONAL_API_BASE_URL`: override the endpoint (default
+  `https://personal.connectapi.garmin.com`).
+
+Access tokens live 24 hours and are cached in
+`~/.config/garmin/connect-personal-api-bearer-token.json` (mode 600), so the key
+is exchanged about once a day rather than once per call. There are no refresh
+tokens: when the key expires, generate a new one -- the error message says so.
+
+Garmin documents the data areas but not the full list of service paths the
+gateway proxies, so to see which tools your key can actually reach:
+
+```bash
+python scripts/probe_personal_api.py --json probe.json
+```
+
+See [PERSONAL_API.md](PERSONAL_API.md) for the capability matrix and
+the backend design.
 
 ### Testing the server locally with MCP Inspector
 
