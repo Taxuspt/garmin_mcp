@@ -54,16 +54,21 @@ def _initial_bearing(p1: Dict[str, float], p2: Dict[str, float]) -> float:
     return (initial_bearing + 360) % 360
 
 
-# Garmin Connect activity typeIds (see get_activity_types).
+# Garmin Connect activity typeIds (see get_activity_types) for the course
+# types the Course Creator offers.  Courses have no walking or generic cycling
+# type: the apps show those as "Other", so walking is saved as hiking and
+# cycling as road_biking, the Creator's choices for them.
 _ACTIVITY_TYPE_IDS = {
     "running": 1,
-    "cycling": 2,
+    "cycling": 10,  # road_biking
     "hiking": 3,
-    "walking": 9,
+    "walking": 3,  # hiking
     "trail_running": 6,
+    "obstacle_run": 154,
     "mountain_biking": 5,
     "road_biking": 10,
     "gravel_cycling": 143,
+    "other": 4,
 }
 
 
@@ -375,8 +380,10 @@ def register_tools(app):
             gpx_path: Absolute path to the .gpx file on disk.
             course_name: Override the course name. Defaults to the name parsed
                 from the GPX file. Max 128 characters; Garmin rejects longer.
-            activity_type: One of running, cycling, hiking, walking, trail_running,
-                mountain_biking, road_biking, gravel_cycling. Defaults to running.
+            activity_type: One of running, trail_running, obstacle_run, hiking,
+                road_biking, gravel_cycling, mountain_biking or other, the
+                Course Creator's types. walking is saved as hiking and cycling
+                as road_biking, since courses have neither. Defaults to running.
             description: Optional description shown on the course detail page.
                 Max 512 characters; Garmin rejects longer.
         """

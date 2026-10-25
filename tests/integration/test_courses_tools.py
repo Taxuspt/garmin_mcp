@@ -521,13 +521,15 @@ async def test_upload_course_success(app_with_courses, mock_garmin_client, tmp_p
     "activity_type,type_id",
     [
         ("running", 1),
-        ("cycling", 2),
+        ("cycling", 10),
         ("hiking", 3),
-        ("walking", 9),
+        ("walking", 3),
         ("mountain_biking", 5),
         ("trail_running", 6),
+        ("obstacle_run", 154),
         ("road_biking", 10),
         ("gravel_cycling", 143),
+        ("other", 4),
     ],
 )
 async def test_upload_course_posts_garmin_activity_type_id(
