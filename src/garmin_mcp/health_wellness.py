@@ -1208,7 +1208,17 @@ def register_tools(app):
             # Calculate average from time-series if available
             hr_values = hr_data.get('heartRateValues', [])
             if hr_values:
-                valid_values = [v[1] for v in hr_values if v[1] and v[1] > 0]
+                valid_values = [
+                    sample[1]
+                    for sample in hr_values
+                    if (
+                        isinstance(sample, (list, tuple))
+                        and len(sample) > 1
+                        and isinstance(sample[1], (int, float))
+                        and not isinstance(sample[1], bool)
+                        and sample[1] > 0
+                    )
+                ]
                 if valid_values:
                     summary["avg_heart_rate_bpm"] = round(sum(valid_values) / len(valid_values), 1)
                     summary["data_points_count"] = len(valid_values)

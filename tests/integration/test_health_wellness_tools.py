@@ -908,6 +908,25 @@ async def test_get_heart_rates_summary_tool(app_with_health_wellness, mock_garmi
 
 
 @pytest.mark.asyncio
+async def test_get_heart_rates_summary_ignores_unavailable_samples(
+    app_with_health_wellness, mock_garmin_client
+):
+    """Sparse heart-rate samples can contain null readings that are not data."""
+    mock_garmin_client.get_heart_rates.return_value = {
+        "calendarDate": "2024-01-15",
+        "heartRateValues": [None, [1705320060000, 60]],
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_heart_rates_summary", {"date": "2024-01-15"}
+    )
+
+    summary = json.loads(result[0][0].text)
+    assert summary["avg_heart_rate_bpm"] == 60.0
+    assert summary["data_points_count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_get_hydration_data_tool(app_with_health_wellness, mock_garmin_client):
     """Test get_hydration_data tool returns hydration data"""
     # Setup mock
