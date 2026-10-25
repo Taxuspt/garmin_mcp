@@ -840,6 +840,20 @@ async def test_get_activities_tool(app_with_activity_management, mock_garmin_cli
 
 
 @pytest.mark.asyncio
+async def test_get_activities_rejects_negative_start(
+    app_with_activity_management, mock_garmin_client
+):
+    """The Garmin client contract requires a non-negative activity offset."""
+    result = await app_with_activity_management.call_tool(
+        "get_activities",
+        {"start": -1, "limit": 20},
+    )
+
+    assert "start must be non-negative" in result[0][0].text
+    mock_garmin_client.get_activities.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_activity_types_tool(app_with_activity_management, mock_garmin_client):
     """Test get_activity_types tool returns available activity types"""
     # Setup mock
