@@ -121,6 +121,32 @@ async def test_get_course_details_success(app_with_courses, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_course_details_preserves_explicit_zero_metrics(
+    app_with_courses, mock_garmin_client
+):
+    """Explicit zero metrics must not fall through to stale legacy fields."""
+    mock_garmin_client.client.connectapi.return_value = {
+        "courseId": 780,
+        "courseName": "Single Point",
+        "distanceInMeters": 0.0,
+        "distanceMeter": 123.0,
+        "elevationGainInMeters": 0.0,
+        "elevationGainMeter": 4.0,
+        "elevationLossInMeters": 0.0,
+        "elevationLossMeter": 5.0,
+        "coursePoints": [],
+        "geoPoints": [{"latitude": 52.1, "longitude": 20.9}],
+    }
+
+    result = await app_with_courses.call_tool("get_course_details", {"course_id": 780})
+
+    data = json.loads(_result_text(result))
+    assert data["distance_m"] == 0.0
+    assert data["elevation_gain_m"] == 0.0
+    assert data["elevation_loss_m"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_get_course_details_treats_null_course_points_as_empty(
     app_with_courses, mock_garmin_client
 ):

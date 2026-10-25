@@ -33,6 +33,12 @@ def _gpx_decimal(value: Any) -> str:
     return format(Decimal(str(value)), "f")
 
 
+def _first_present(data: Dict[str, Any], primary: str, fallback: str) -> Any:
+    """Use the primary API field when present, including an explicit zero."""
+    value = data.get(primary)
+    return data.get(fallback) if value is None else value
+
+
 _EARTH_RADIUS_M = 6371000.0
 
 
@@ -267,9 +273,13 @@ def register_tools(app):
             result = {
                 "course_id": data.get("courseId"),
                 "name": data.get("courseName"),
-                "distance_m": data.get("distanceInMeters") or data.get("distanceMeter"),
-                "elevation_gain_m": data.get("elevationGainInMeters") or data.get("elevationGainMeter"),
-                "elevation_loss_m": data.get("elevationLossInMeters") or data.get("elevationLossMeter"),
+                "distance_m": _first_present(data, "distanceInMeters", "distanceMeter"),
+                "elevation_gain_m": _first_present(
+                    data, "elevationGainInMeters", "elevationGainMeter"
+                ),
+                "elevation_loss_m": _first_present(
+                    data, "elevationLossInMeters", "elevationLossMeter"
+                ),
                 "activity": (data.get("activityType") or {}).get("typeKey"),
                 "waypoints_count": len(course_points),
                 "waypoints": course_points,
