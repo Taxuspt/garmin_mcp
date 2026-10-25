@@ -4,6 +4,7 @@ Integration tests for the courses module MCP tools.
 Covers get_courses, get_course_details, download_course_gpx, upload_course, and delete_course
 using FastMCP integration with a mocked Garmin client. No real Garmin account or network access is used.
 """
+import base64
 import json
 import os
 import xml.etree.ElementTree as ET
@@ -514,6 +515,74 @@ async def test_upload_course_success(app_with_courses, mock_garmin_client, tmp_p
     import_call, create_call = mock_garmin_client.client.post.call_args_list
     assert import_call.args[1] == "/course-service/course/import"
     assert create_call.args[1] == "/course-service/course"
+
+
+@pytest.mark.asyncio
+async def test_upload_course_from_base64(app_with_courses, mock_garmin_client):
+    """gpx_base64 uploads the decoded GPX without touching the disk."""
+    gpx = b"<?xml version='1.0'?><gpx><trk><trkseg></trkseg></trk></gpx>"
+    mock_garmin_client.client.post.side_effect = [
+        {
+            "courseName": "Inline Loop",
+            "geoPoints": [
+                {"latitude": 40.0, "longitude": -105.0, "elevation": 1600.0},
+                {"latitude": 40.01, "longitude": -105.01, "elevation": 1610.0},
+            ],
+        },
+        {"courseId": 1001, "courseName": "Inline Loop", "activityTypePk": 1},
+    ]
+
+    result = await app_with_courses.call_tool(
+        "upload_course", {"gpx_base64": base64.b64encode(gpx).decode()}
+    )
+
+    data = json.loads(_result_text(result))
+    assert data["status"] == "success"
+    assert data["course_id"] == 1001
+    import_call = mock_garmin_client.client.post.call_args_list[0]
+    file_name, body, content_type = import_call.kwargs["files"]["file"]
+    assert file_name == "course.gpx"
+    assert body.read() == gpx
+    assert content_type == "application/gpx+xml"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "args,message",
+    [
+        ({}, "exactly one of gpx_path or gpx_base64"),
+        (
+            {"gpx_path": "/tmp/route.gpx", "gpx_base64": "PGdweD48L2dweD4="},
+            "exactly one of gpx_path or gpx_base64",
+        ),
+        ({"gpx_base64": "not base64!"}, "not valid base64"),
+        ({"gpx_base64": "aGVsbG8gd29ybGQ="}, "does not decode to a GPX"),
+    ],
+)
+async def test_upload_course_base64_rejected(
+    app_with_courses, mock_garmin_client, args, message
+):
+    """Bad or ambiguous inputs are refused before anything is sent to Garmin."""
+    result = await app_with_courses.call_tool("upload_course", args)
+
+    assert message in _result_text(result)
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_course_base64_too_large(
+    app_with_courses, mock_garmin_client, monkeypatch
+):
+    """Inline GPX over the size cap is refused."""
+    monkeypatch.setattr(courses, "_MAX_GPX_BYTES", 16)
+    gpx = b"<gpx>" + b" " * 32 + b"</gpx>"
+
+    result = await app_with_courses.call_tool(
+        "upload_course", {"gpx_base64": base64.b64encode(gpx).decode()}
+    )
+
+    assert "GPX is over" in _result_text(result)
+    mock_garmin_client.client.post.assert_not_called()
 
 
 @pytest.mark.asyncio

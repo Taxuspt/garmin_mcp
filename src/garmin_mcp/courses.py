@@ -5,6 +5,8 @@ Adds support for uploading GPX files as Garmin Connect Courses, listing courses,
 getting detailed course waypoints/metadata, downloading course GPX files, and deleting courses.
 """
 
+import base64
+import binascii
 import datetime
 from decimal import Decimal
 import io
@@ -34,6 +36,9 @@ def _gpx_decimal(value: Any) -> str:
 
 
 _EARTH_RADIUS_M = 6371000.0
+
+# Upper bound for an inline (base64) GPX upload.
+_MAX_GPX_BYTES = 10 * 1024 * 1024
 
 
 def _haversine(p1: Dict[str, float], p2: Dict[str, float]) -> float:
@@ -361,15 +366,18 @@ def register_tools(app):
 
     @app.tool()
     async def upload_course(
-        gpx_path: str,
+        gpx_path: Optional[str] = None,
         course_name: Optional[str] = None,
         activity_type: str = "running",
         description: Optional[str] = None,
+        gpx_base64: Optional[str] = None,
     ) -> str:
         """Upload a GPX file as a Garmin Connect Course.
 
         The course can then be loaded onto the watch (sync or "Send to Device")
         and used as a navigation course or to build a PacePro strategy.
+
+        Pass exactly one of gpx_path or gpx_base64.
 
         Args:
             gpx_path: Absolute path to the .gpx file on disk.
@@ -379,14 +387,31 @@ def register_tools(app):
                 mountain_biking, road_biking, gravel_cycling. Defaults to running.
             description: Optional description shown on the course detail page.
                 Max 512 characters; Garmin rejects longer.
+            gpx_base64: The GPX file's contents, base64-encoded, for clients
+                that cannot place a file on the server's disk.
         """
         try:
-            _p = pathlib.Path(gpx_path)
-            if _p.suffix.lower() != ".gpx":
-                return f"Error: only .gpx files are allowed, got: {_p.suffix or '(no extension)'}"
-            gpx_path = str(_p.resolve())
-            if not os.path.isfile(gpx_path):
-                return f"Error: GPX file not found: {gpx_path}"
+            if (gpx_path is None) == (gpx_base64 is None):
+                return "Error: pass exactly one of gpx_path or gpx_base64."
+
+            if gpx_base64 is not None:
+                try:
+                    gpx_bytes = base64.b64decode(gpx_base64, validate=True)
+                except (binascii.Error, ValueError):
+                    return "Error: gpx_base64 is not valid base64."
+                if len(gpx_bytes) > _MAX_GPX_BYTES:
+                    return f"Error: GPX is over {_MAX_GPX_BYTES // (1024 * 1024)} MB."
+                if b"<gpx" not in gpx_bytes[:4096]:
+                    return "Error: gpx_base64 does not decode to a GPX document."
+                file_name = "course.gpx"
+            else:
+                _p = pathlib.Path(gpx_path)
+                if _p.suffix.lower() != ".gpx":
+                    return f"Error: only .gpx files are allowed, got: {_p.suffix or '(no extension)'}"
+                gpx_path = str(_p.resolve())
+                if not os.path.isfile(gpx_path):
+                    return f"Error: GPX file not found: {gpx_path}"
+                file_name = os.path.basename(gpx_path)
 
             activity_type_id = _ACTIVITY_TYPE_IDS.get(activity_type.lower())
             if activity_type_id is None:
@@ -395,8 +420,9 @@ def register_tools(app):
                     f"Supported: {', '.join(sorted(_ACTIVITY_TYPE_IDS))}."
                 )
 
-            with open(gpx_path, "rb") as f:
-                gpx_bytes = f.read()
+            if gpx_path is not None:
+                with open(gpx_path, "rb") as f:
+                    gpx_bytes = f.read()
 
             # Step 1: parse the GPX server-side
             parsed = garmin_client.client.post(
@@ -404,7 +430,7 @@ def register_tools(app):
                 "/course-service/course/import",
                 files={
                     "file": (
-                        os.path.basename(gpx_path),
+                        file_name,
                         io.BytesIO(gpx_bytes),
                         "application/gpx+xml",
                     )
@@ -415,7 +441,7 @@ def register_tools(app):
             effective_name = (
                 course_name
                 or parsed.get("courseName")
-                or os.path.splitext(os.path.basename(gpx_path))[0]
+                or os.path.splitext(file_name)[0]
             )
 
             # Step 2: build the create payload and save
