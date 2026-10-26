@@ -37,6 +37,7 @@ from garmin_mcp import workout_builders
 from garmin_mcp import courses
 from garmin_mcp import activity_analysis
 from garmin_mcp import calendar_events
+from garmin_mcp import exercise_catalog
 from garmin_mcp.tool_annotations import annotations_for
 from garmin_mcp.tool_profiles import resolve_tool_profile
 from garmin_mcp.write_errors import _upstream
@@ -839,6 +840,7 @@ def main():
         print(f"Tool filter: denylist of {len(disabled_tools)} tool(s).", file=sys.stderr)
 
     # Register tools from all modules
+    app = exercise_catalog.register_tools(app)
     app = activity_management.register_tools(app)
     app = health_wellness.register_tools(app)
     app = user_profile.register_tools(app)

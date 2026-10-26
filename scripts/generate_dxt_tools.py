@@ -22,6 +22,7 @@ from garmin_mcp import (
     courses,
     data_management,
     devices,
+    exercise_catalog,
     gear_management,
     health_wellness,
     nutrition,
@@ -36,6 +37,7 @@ from garmin_mcp import (
 # Same modules, same order, as the `configure`/`register_tools` calls in
 # garmin_mcp.__init__.main(). Keep in sync with that list.
 MODULES = [
+    exercise_catalog,
     activity_management,
     health_wellness,
     user_profile,

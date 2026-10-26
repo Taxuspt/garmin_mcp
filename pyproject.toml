@@ -32,4 +32,3 @@ dev-dependencies = [
     "pytest-mock>=3.14.0",
     "pytest-timeout>=2.3.1",
 ]
-

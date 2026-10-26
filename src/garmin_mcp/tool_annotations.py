@@ -202,6 +202,9 @@ READ_ONLY_TOOLS = frozenset(
         "get_weigh_ins",
         "get_workout_by_id",
         "get_workouts",
+        "list_strength_exercises",
+        "match_strength_exercise",
+        "resolve_strength_exercises",
         "search_foods",
     }
 )

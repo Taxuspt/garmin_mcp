@@ -19,7 +19,7 @@ def test_annotation_registry_is_exhaustive_and_disjoint():
     tools = asyncio.run(app.list_tools())
     names = {tool.name for tool in tools}
 
-    assert len(names) == 157
+    assert len(names) == 160
     assert tool_annotations.ALL_ANNOTATED_TOOLS == names
     assert not (
         tool_annotations.READ_ONLY_TOOLS
@@ -48,3 +48,15 @@ def test_annotations_use_conservative_open_world_defaults():
         tool_annotations.annotations_for("set_fit_download_dir").openWorldHint
         is False
     )
+
+
+def test_strength_catalog_tools_are_read_only():
+    for name in (
+        "list_strength_exercises",
+        "match_strength_exercise",
+        "resolve_strength_exercises",
+    ):
+        annotations = tool_annotations.annotations_for(name)
+        assert annotations is not None
+        assert annotations.readOnlyHint is True
+        assert annotations.destructiveHint is False

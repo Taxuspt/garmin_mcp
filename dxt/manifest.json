@@ -584,12 +584,20 @@
       "description": "Get all workouts with curated summary list"
     },
     {
+      "name": "list_strength_exercises",
+      "description": "List Garmin strength exercises and their exact category/exerciseName identifiers. Supports category filtering, text search, and pagination. Use the returned category and exercise_name fields when creating a strength workout."
+    },
+    {
       "name": "log_custom_food",
       "description": "Log a food item to a meal on a date"
     },
     {
       "name": "log_food",
       "description": "Quick-add a food entry with macro values to the nutrition log"
+    },
+    {
+      "name": "match_strength_exercise",
+      "description": "Match a human-friendly exercise description to Garmin's exercise catalog. Returns the exact category and exercise_name identifiers, a confidence score, and alternatives. It never creates or modifies a workout."
     },
     {
       "name": "push_workout_to_device",
@@ -606,6 +614,10 @@
     {
       "name": "reschedule_workout",
       "description": "Move a scheduled workout to another date on the Garmin Connect calendar"
+    },
+    {
+      "name": "resolve_strength_exercises",
+      "description": "Resolve a batch of strength exercise inputs to exact Garmin category and exercise_name identifiers without creating a workout."
     },
     {
       "name": "schedule_week",
