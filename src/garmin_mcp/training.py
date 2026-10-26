@@ -1555,7 +1555,11 @@ def register_tools(app):
         }, indent=2)
 
     @app.tool()
-    async def get_vo2max_trend(start_date: str, end_date: str) -> str:
+    async def get_vo2max_trend(
+        start_date: str,
+        end_date: str,
+        sport: Literal["auto", "running", "cycling", "both"] = "auto",
+    ) -> str:
         """Get VO2 max trend over a date range.
 
         Returns daily VO2 max estimates from Garmin's FirstBeat algorithm. Use this to track
@@ -1577,11 +1581,17 @@ def register_tools(app):
         fallback succeeds. Authentication, rate-limit, and connection failures
         stop the request.
 
+        Garmin keeps separate running and cycling VO2 max series. The
+        response's "sport" says which one the trend is. "auto" (default)
+        returns running whenever the range has any running value and cycling
+        otherwise; "both" returns each series under "sports".
+
         Recommended range: 4-12 weeks. Maximum: 90 days.
 
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
+            sport: "auto" (default), "running", "cycling", or "both"
         """
         MAX_DAYS = 90
         try:
@@ -1675,27 +1685,43 @@ def register_tools(app):
             add_measurements(date_str, measurements, source)
             current += datetime.timedelta(days=1)
 
-        selected_sport = None
-        if any(histories.values()):
-            # Prefer the sport with the best coverage; make ties deterministic.
-            selected_sport = max(
-                histories,
-                key=lambda sport: (
-                    len(histories[sport]),
-                    sport == "running",
-                ),
+        def summarize(series_sport):
+            trend = [
+                entry for entry in _build_vo2_trend_series(histories[series_sport], end)
+                if entry["date"] >= start_date
+            ]
+            first_vo2 = trend[0]["vo2_max"] if trend else None
+            latest_vo2 = trend[-1]["vo2_max"] if trend else None
+            change = (
+                round(latest_vo2 - first_vo2, 1)
+                if (first_vo2 is not None and latest_vo2 is not None)
+                else None
             )
+            return {
+                "data_points": len(trend),
+                "first_vo2_max": first_vo2,
+                "latest_vo2_max": latest_vo2,
+                "change": change,
+                "trend": trend,
+            }
 
-        trend = [
-            entry for entry in _build_vo2_trend_series(
-                histories[selected_sport] if selected_sport is not None else [], end
-            )
-            if entry["date"] >= start_date
-        ]
+        if sport == "auto":
+            # A runner who also rides usually has more cycling recomputes, so
+            # coverage alone would hide the running series.
+            selected_sports = [
+                "cycling"
+                if histories["cycling"] and not histories["running"]
+                else "running"
+            ]
+        elif sport == "both":
+            selected_sports = ["running", "cycling"]
+        else:
+            selected_sports = [sport]
+        summaries = {name: summarize(name) for name in selected_sports}
 
         current_estimate = None
         current_sport = None
-        if not trend:
+        if not any(summary["trend"] for summary in summaries.values()):
             try:
                 profile = garmin_client.get_user_profile()
             except Exception as e:
@@ -1705,6 +1731,11 @@ def register_tools(app):
                 profile = None
 
             profile_measurements = _extract_vo2_measurements(profile)
+            if sport in ("running", "cycling"):
+                profile_measurements = {
+                    name: value for name, value in profile_measurements.items()
+                    if name == sport
+                }
             if profile_measurements:
                 current_sport = (
                     "running" if "running" in profile_measurements else "cycling"
@@ -1713,27 +1744,20 @@ def register_tools(app):
             else:
                 if request_errors:
                     return f"Error retrieving VO2 max data: {request_errors[-1]['error']}"
-                return f"No VO2 max data found between {start_date} and {end_date}."
+                sport_label = "" if sport in ("auto", "both") else f"{sport} "
+                return f"No {sport_label}VO2 max data found between {start_date} and {end_date}."
 
-        first_vo2 = trend[0]["vo2_max"] if trend else None
-        latest_vo2 = trend[-1]["vo2_max"] if trend else None
-        change = (
-            round(latest_vo2 - first_vo2, 1)
-            if (first_vo2 is not None and latest_vo2 is not None)
-            else None
-        )
-
-        response = {
+        response: Dict[str, Any] = {
             "start_date": start_date,
             "end_date": end_date,
-            "data_points": len(trend),
-            "first_vo2_max": first_vo2,
-            "latest_vo2_max": latest_vo2,
-            "change": change,
-            "trend": trend,
         }
-        if selected_sport is not None:
-            response["sport"] = selected_sport
+        if sport == "both":
+            response["sport"] = "both"
+            response["sports"] = summaries
+        else:
+            response.update(summaries[selected_sports[0]])
+            if summaries[selected_sports[0]]["trend"] or sport != "auto":
+                response["sport"] = selected_sports[0]
         if request_errors:
             response["request_errors"] = request_errors
 
