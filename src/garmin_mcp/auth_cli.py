@@ -377,6 +377,14 @@ def diagnose_tokens(token_path: str | None, is_cn: bool) -> bool:
 
 def main():
     """Main entry point for the authentication CLI tool."""
+    # Ensure glyphs like the check/cross marks print on Windows consoles
+    # (cp1252) without crashing.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(
         description="Pre-authenticate with Garmin Connect for MCP server use",
         formatter_class=argparse.RawDescriptionHelpFormatter,
