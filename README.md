@@ -37,6 +37,7 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Challenges & Badges (10 tools)
 - ✅ Nutrition (9 tools) - food logs, meals, custom foods, food logging, and multi-day intake summaries
 - ✅ Women's Health (3 tools)
+- ✅ ECG (2 tools) - ECG App recordings: rhythm classification, average HR, symptoms, and the single-lead waveform
 - ✅ User Profile (3 tools)
 - ✅ High-Level Workout Builders (4 tools) - create and schedule workouts without writing JSON
 - ✅ Courses (5 tools) - list / get details / upload GPX as course / download GPX / delete course
@@ -44,6 +45,18 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
 > **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+
+### ECG Recordings
+
+`get_ecg_recordings` lists the ECG App recordings in a date range (rhythm
+classification such as `SINUS_NORMAL` or `AFIB`, average heart rate, RMSSD HRV,
+symptoms, device), and `get_ecg_recording` returns one recording's parameters
+(lead type, sample rate, duration) with the 128 Hz waveform in mV on request
+(`include_samples=true`, 3840 values for a 30 s recording). The ECG service
+lives on `ghs.garmin.com`, which garminconnect 0.3.2 has no methods for, so the
+tools call it with the library's authenticated session. Accounts without the
+ECG feature get a 404 error. The classification is the device's own result,
+not a medical diagnosis.
 
 ### Gear Notes
 
