@@ -23,6 +23,3 @@ playground/*
 scratch/*
 tests/fixtures/captured/*
 !tests/fixtures/captured/poc_walk_run.json
-
-# local agent memory
-.memsearch/
