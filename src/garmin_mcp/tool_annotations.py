@@ -135,6 +135,8 @@ READ_ONLY_TOOLS = frozenset(
         "get_device_solar_data",
         "get_devices",
         "get_earned_badges",
+        "get_ecg_recording",
+        "get_ecg_recordings",
         "get_endurance_score",
         "get_energy_balance",
         "get_fitnessage_data",

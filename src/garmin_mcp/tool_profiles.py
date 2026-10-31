@@ -89,6 +89,9 @@ HEALTH_TOOLS = CORE_TOOLS | frozenset(
         "get_menstrual_calendar_data",
         "get_menstrual_data_for_date",
         "get_pregnancy_summary",
+        # ecg
+        "get_ecg_recording",
+        "get_ecg_recordings",
         # health metrics that live in the training module
         "get_fitnessage_data",
         "get_hrv_data",

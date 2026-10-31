@@ -316,6 +316,14 @@
       "description": "Get earned badges for user"
     },
     {
+      "name": "get_ecg_recording",
+      "description": "Get one ECG App recording: result, recording parameters, optional waveform"
+    },
+    {
+      "name": "get_ecg_recordings",
+      "description": "List ECG App recordings (rhythm result, average HR) in a date range"
+    },
+    {
       "name": "get_endurance_score",
       "description": "Get endurance score data between dates"
     },
