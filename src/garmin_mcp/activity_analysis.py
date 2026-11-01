@@ -17,7 +17,7 @@ import io
 import json
 import os
 import zipfile
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from garmin_mcp.activity_management import sanitize_lap_distance
 
@@ -175,6 +175,42 @@ def _fit_field_definition_number(field: Any) -> Optional[int]:
     return None
 
 
+# Garmin FIT SDK profile fields that fitparse 1.2.0's bundled profile predates,
+# keyed by (message name, field definition number): (name, scale, units).
+_FIT_PROFILE_ADDITIONS = {
+    ("record", 108): ("enhanced_respiration_rate", 100, "Breaths/min"),
+}
+
+
+def _fit_profile_addition(field: Any, message: Any) -> Optional[tuple]:
+    """Return the newer-profile definition for a field fitparse left unknown."""
+    if message is None:
+        return None
+    name = getattr(field, "name", None)
+    if name and not str(name).startswith("unknown"):
+        return None
+    message_name = str(getattr(message, "name", None) or "").lower()
+    return _FIT_PROFILE_ADDITIONS.get(
+        (message_name, _fit_field_definition_number(field))
+    )
+
+
+def _fit_field_name(field: Any, message: Any = None) -> str:
+    """Return a field's FIT name, naming newer-profile and unknown fields."""
+    addition = _fit_profile_addition(field, message)
+    if addition is not None:
+        return addition[0]
+    name = getattr(field, "name", None)
+    if name:
+        return str(name)
+    definition_number = _fit_field_definition_number(field)
+    return (
+        f"unknown_{definition_number}"
+        if definition_number is not None
+        else "unknown"
+    )
+
+
 def _fit_profile_label(value: Any, raw_value: Any, values: Any) -> Any:
     """Resolve one FIT enum label from either decoded or raw profile values."""
     if not isinstance(values, dict):
@@ -312,20 +348,20 @@ def _contextual_fit_value_names(field: Any, message: Any) -> tuple[bool, Any]:
 def _serialize_fit_field(field: Any, message: Any = None) -> Dict[str, Any]:
     """Serialize one fitparse FieldData without curating fields by sport."""
     definition_number = _fit_field_definition_number(field)
-    name = getattr(field, "name", None)
-    if not name:
-        name = (
-            f"unknown_{definition_number}"
-            if definition_number is not None
-            else "unknown"
-        )
+    value = getattr(field, "value", None)
+    units = getattr(field, "units", None)
+    addition = _fit_profile_addition(field, message)
+    if addition is not None:
+        _, scale, units = addition
+        # fitparse leaves unknown fields unscaled.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            value = value / scale
 
     serialized: Dict[str, Any] = {
-        "name": str(name),
-        "value": _json_safe_fit_value(getattr(field, "value", None)),
+        "name": _fit_field_name(field, message),
+        "value": _json_safe_fit_value(value),
     }
 
-    units = getattr(field, "units", None)
     if units is not None:
         serialized["units"] = str(units)
     if definition_number is not None:
@@ -384,6 +420,79 @@ def _fit_global_message_number(message: Any) -> Optional[int]:
     return None
 
 
+# Every get_activity_fit_messages response stays under this many characters so
+# a large page cannot exceed what MCP clients accept in one tool result.
+FIT_MESSAGES_MAX_RESPONSE_CHARS = 1_000_000
+
+FitMessagesFormat = Literal["verbose", "compact", "columnar"]
+
+
+def _dump_fit_messages_result(
+    result: Dict[str, Any], output_format: str
+) -> str:
+    """Serialize a FIT messages result; only verbose output is indented."""
+    if output_format == "verbose":
+        return json.dumps(result, indent=2, ensure_ascii=False)
+    return json.dumps(result, separators=(",", ":"), ensure_ascii=False)
+
+
+def _compact_fit_fields(fields: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Map serialized fields to {name: value}, dropping null values.
+
+    A repeated name keeps its first value; later ones are keyed
+    name@definition_number so no decoded value is lost.
+    """
+    compact: Dict[str, Any] = {}
+    for field in fields:
+        if field["value"] is None:
+            continue
+        key = field["name"]
+        if key in compact:
+            key = f"{key}@{field.get('definition_number')}"
+        compact[key] = field["value"]
+    return compact
+
+
+def _estimated_message_chars(message: Dict[str, Any], output_format: str) -> int:
+    """Estimate one message's contribution to the dumped response."""
+    if output_format == "verbose":
+        text = json.dumps(message, indent=2, ensure_ascii=False)
+        # Messages sit two levels deep in the indented response.
+        return len(text) + 4 * (text.count("\n") + 1) + 2
+    if output_format == "columnar":
+        # Each value appears once in its column; keys appear once per page.
+        return sum(
+            len(json.dumps(value, ensure_ascii=False)) + 1
+            for value in message["fields"].values()
+        ) + len(str(message["message_index"])) + 1
+    return len(
+        json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+    ) + 1
+
+
+def _columnar_fit_messages(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Pivot compact messages into per-type column arrays.
+
+    The message_index column is the message's position in the file; a FIT
+    message_index field (definition 254, e.g. on laps) is keyed
+    message_index@254 so the two cannot share a column.
+    """
+    columns: Dict[str, Dict[str, List[Any]]] = {}
+    for message in messages:
+        table = columns.setdefault(message["type"], {"message_index": []})
+        row_count = len(table["message_index"])
+        table["message_index"].append(message["message_index"])
+        for name, value in message["fields"].items():
+            if name == "message_index":
+                name = "message_index@254"
+            column = table.setdefault(name, [None] * row_count)
+            column.append(value)
+        for column in table.values():
+            if len(column) == row_count:
+                column.append(None)
+    return columns
+
+
 def _parse_fit_messages(
     raw: bytes,
     *,
@@ -391,6 +500,9 @@ def _parse_fit_messages(
     include_records: bool = False,
     message_offset: int = 0,
     message_limit: int = 1000,
+    fields: Optional[List[str]] = None,
+    output_format: FitMessagesFormat = "verbose",
+    max_response_chars: int = FIT_MESSAGES_MAX_RESPONSE_CHARS,
 ) -> Dict[str, Any]:
     """Parse all FIT messages/fields with safe high-frequency pagination.
 
@@ -399,12 +511,39 @@ def _parse_fit_messages(
     counted but omitted by default. Other message types with more than 100
     instances are also inventoried but omitted from unfiltered default results.
     Explicitly filtered results use general pagination so a long activity
-    cannot accidentally exceed MCP result limits.
+    cannot accidentally exceed MCP result limits. A page also ends early once
+    its estimated size reaches max_response_chars.
+
+    fields keeps only the named fields (plus timestamp) in each message.
+    "compact" returns each message's fields as {name: value} without nulls or
+    decoder metadata; "columnar" also pivots them into per-type arrays.
     """
     if message_offset < 0:
         raise ValueError("message_offset must be at least 0")
     if not 1 <= message_limit <= 5000:
         raise ValueError("message_limit must be between 1 and 5000")
+    if output_format not in ("verbose", "compact", "columnar"):
+        raise ValueError(
+            'output_format must be "verbose", "compact", or "columnar"'
+        )
+
+    selected_fields = None
+    if fields is not None:
+        selected_fields = {
+            str(field_name).strip().lower()
+            for field_name in fields
+            if str(field_name).strip()
+        }
+        selected_fields.add("timestamp")
+
+    def field_is_selected(field: Any, message: Any) -> bool:
+        if selected_fields is None:
+            return True
+        if _fit_field_name(field, message).lower() in selected_fields:
+            return True
+        # Callers may keep using unknown_NNN after a field gains a name.
+        definition_number = _fit_field_definition_number(field)
+        return f"unknown_{definition_number}" in selected_fields
 
     selected_types = None
     if message_types is not None:
@@ -454,8 +593,13 @@ def _parse_fit_messages(
     )
     page_end = message_offset + message_limit
     messages: List[Dict[str, Any]] = []
+    units: Dict[str, Dict[str, str]] = {}
     eligible_index = 0
     seen_type_counts: Dict[str, int] = {}
+    # Reserve room for the inventory, pagination, and units envelope.
+    size_budget = max_response_chars - 2 * len(json.dumps(message_counts)) - 4096
+    page_chars = 0
+    truncated_by_size = False
     for message_index, message in enumerate(fit_messages):
         message_type = str(getattr(message, "name", None) or "unknown")
         type_index = seen_type_counts.get(message_type, 0)
@@ -464,23 +608,43 @@ def _parse_fit_messages(
             continue
 
         if message_offset <= eligible_index < page_end:
+            serialized_fields = [
+                _serialize_fit_field(field, message)
+                for field in getattr(message, "fields", [])
+                if field_is_selected(field, message)
+            ]
             serialized_message: Dict[str, Any] = {
                 "message_index": message_index,
                 "type_index": type_index,
                 "type": message_type,
+            }
+            if output_format == "verbose":
                 # A list rather than an object preserves duplicate/unknown field
                 # definitions instead of overwriting fields that share a name.
-                "fields": [
-                    _serialize_fit_field(field, message)
-                    for field in getattr(message, "fields", [])
-                ],
-            }
-            global_message_number = _fit_global_message_number(message)
-            if global_message_number is not None:
-                serialized_message["global_message_number"] = (
-                    global_message_number
+                serialized_message["fields"] = serialized_fields
+                global_message_number = _fit_global_message_number(message)
+                if global_message_number is not None:
+                    serialized_message["global_message_number"] = (
+                        global_message_number
+                    )
+            else:
+                serialized_message["fields"] = _compact_fit_fields(
+                    serialized_fields
                 )
+
+            message_chars = _estimated_message_chars(
+                serialized_message, output_format
+            )
+            if messages and page_chars + message_chars > size_budget:
+                truncated_by_size = True
+                break
+            page_chars += message_chars
             messages.append(serialized_message)
+            if output_format != "verbose":
+                type_units = units.setdefault(message_type, {})
+                for field in serialized_fields:
+                    if "units" in field and field["value"] is not None:
+                        type_units.setdefault(field["name"], field["units"])
         eligible_index += 1
         if eligible_index >= page_end:
             break
@@ -519,15 +683,33 @@ def _parse_fit_messages(
     }
     if message_offset + len(messages) < total_eligible_count:
         pagination["next_offset"] = message_offset + len(messages)
+    if truncated_by_size:
+        pagination["truncated_by_size"] = True
+        pagination["hint"] = (
+            "Page ended early to stay under "
+            f"{FIT_MESSAGES_MAX_RESPONSE_CHARS} characters. "
+            "Continue from next_offset, or narrow it with fields and "
+            'output_format="columnar".'
+        )
 
-    result = {
+    result: Dict[str, Any] = {
         "fit_size_bytes": len(fit_bytes),
         "message_counts": message_counts,
         "returned_message_counts": returned_counts,
         "record_stream": record_stream,
         "pagination": pagination,
-        "messages": messages,
     }
+    if output_format != "verbose":
+        result["format"] = output_format
+        result["units"] = {
+            message_type: type_units
+            for message_type, type_units in units.items()
+            if type_units
+        }
+    if output_format == "columnar":
+        result["columns"] = _columnar_fit_messages(messages)
+    else:
+        result["messages"] = messages
     if omitted_high_frequency_types:
         result["omitted_high_frequency_message_types"] = {
             message_type: {
@@ -1759,6 +1941,8 @@ def register_tools(app):
         include_records: bool = False,
         message_offset: int = 0,
         message_limit: int = 1000,
+        fields: Optional[List[str]] = None,
+        output_format: FitMessagesFormat = "verbose",
     ) -> str:
         """Retrieve and generically parse an activity's original FIT file.
 
@@ -1785,6 +1969,17 @@ def register_tools(app):
         ["session", "lap", "set", "exercise_title"]. Message type names are
         case-insensitive and should use FIT/fitparse snake_case names.
 
+        Verbose records cost several KB each. For a record stream, pass the
+        fields you need and output_format="columnar", e.g.
+        fields=["heart_rate", "enhanced_respiration_rate"] returns one array
+        per field for a whole run in a single page. Fields missing from
+        fitparse's profile appear as unknown_<definition number>; record field
+        108 is decoded as enhanced_respiration_rate (breaths/min).
+
+        Every response stays under about 1,000,000 characters. A page that
+        would exceed it ends early with pagination.truncated_by_size=true and
+        next_offset.
+
         Args:
             activity_id: Garmin activity ID.
             message_types: Optional list of FIT message types to return. Omit to
@@ -1792,6 +1987,12 @@ def register_tools(app):
             include_records: Include the high-frequency record stream (default false).
             message_offset: Zero-based offset within the selected message stream.
             message_limit: Maximum messages returned per call, 1-5000 (default 1000).
+            fields: Optional field names to keep in each message (timestamp is
+                    always kept). unknown_<n> names are accepted.
+            output_format: "verbose" (default; every field with decoder
+                           metadata), "compact" ({name: value}, nulls dropped,
+                           units listed once), or "columnar" (compact values
+                           as per-type arrays under "columns").
         """
         if not FITPARSE_AVAILABLE:
             return (
@@ -1812,13 +2013,35 @@ def register_tools(app):
 
             raw = bytes(downloaded)
             try:
-                parsed = _parse_fit_messages(
-                    raw,
-                    message_types=message_types,
-                    include_records=include_records,
-                    message_offset=message_offset,
-                    message_limit=message_limit,
-                )
+                size_budget = FIT_MESSAGES_MAX_RESPONSE_CHARS
+                while True:
+                    parsed = _parse_fit_messages(
+                        raw,
+                        message_types=message_types,
+                        include_records=include_records,
+                        message_offset=message_offset,
+                        message_limit=message_limit,
+                        fields=fields,
+                        output_format=output_format,
+                        max_response_chars=size_budget,
+                    )
+                    result = {
+                        "activity_id": activity_id,
+                        "source": "garmin_original_fit",
+                        **parsed,
+                    }
+                    text = _dump_fit_messages_result(result, output_format)
+                    # The page size is estimated; shrink the budget until the
+                    # dumped response fits or only one message remains.
+                    if (
+                        len(text) <= FIT_MESSAGES_MAX_RESPONSE_CHARS
+                        or parsed["pagination"]["returned_count"] <= 1
+                    ):
+                        return text
+                    size_budget = int(
+                        size_budget * FIT_MESSAGES_MAX_RESPONSE_CHARS
+                        / len(text) * 0.95
+                    )
             except Exception as parse_err:
                 return json.dumps({
                     "error": str(parse_err),
@@ -1832,13 +2055,6 @@ def register_tools(app):
                         ),
                     },
                 }, indent=2)
-
-            result = {
-                "activity_id": activity_id,
-                "source": "garmin_original_fit",
-                **parsed,
-            }
-            return json.dumps(result, indent=2, ensure_ascii=False)
         except Exception as e:
             return f"Error downloading FIT data for activity {activity_id}: {str(e)}"
 
