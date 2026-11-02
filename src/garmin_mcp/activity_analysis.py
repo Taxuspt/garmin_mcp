@@ -874,9 +874,6 @@ def _summarize_climb(
     end_alt = segment[-1].get("altitude_m")
     elevation_gain = (end_alt - start_alt) if (start_alt is not None and end_alt is not None) else None
 
-    powers = [r["power_w"] for r in segment if r.get("power_w") is not None]
-    cadences = [r["cadence_rpm"] for r in segment if r.get("cadence_rpm") is not None]
-    hrs = [r["heart_rate_bpm"] for r in segment if r.get("heart_rate_bpm") is not None]
     grades = [r["grade_pct"] for r in segment if r.get("grade_pct") is not None]
     speeds = [
         (r["speed_mps"], held) for r, held in zip(segment, segment_held_s)
@@ -902,18 +899,21 @@ def _summarize_climb(
         total_dist = sum(s * held for s, held in speeds)  # m/s * s = m per record
         result["distance_m"] = round(total_dist)
 
+    for field, output, digits in (
+        ("grade_pct", "avg_grade_pct", 1),
+        ("power_w", "avg_power_w", 0),
+        ("cadence_rpm", "avg_cadence_rpm", 0),
+        ("heart_rate_bpm", "avg_hr_bpm", 0),
+    ):
+        samples = [(r[field], held) for r, held in zip(segment, segment_held_s)
+                   if r.get(field) is not None and held > 0]
+        duration = sum(held for _, held in samples)
+        if duration:
+            average = sum(value * held for value, held in samples) / duration
+            result[output] = round(average, digits) if digits else round(average)
+
     if grades:
-        result["avg_grade_pct"] = round(_safe_avg(grades), 1)
         result["max_grade_pct"] = round(max(grades), 1)
-
-    if powers:
-        result["avg_power_w"] = round(_safe_avg(powers))
-
-    if cadences:
-        result["avg_cadence_rpm"] = round(_safe_avg(cadences))
-
-    if hrs:
-        result["avg_hr_bpm"] = round(_safe_avg(hrs))
 
     return result
 

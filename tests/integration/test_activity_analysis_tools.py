@@ -1434,6 +1434,43 @@ def test_detect_climbs_speed_distance_uses_record_spacing():
     assert climbs[0]["distance_m"] == 6000
 
 
+def test_climb_averages_weight_uneven_samples_by_time():
+    from garmin_mcp.activity_analysis import _record_seconds, _summarize_climb
+
+    first = _records_every(10, [{"grade_pct": 4, "power_w": 100, "cadence_rpm": 60, "heart_rate_bpm": 100}])
+    later = _records_every(1, [{"grade_pct": 8, "power_w": 300, "cadence_rpm": 100, "heart_rate_bpm": 160}] * 10,
+                           start=_RIDE_START + datetime.timedelta(seconds=10))
+    records = first + later
+    climb = _summarize_climb(records, 0, len(records) - 1, _record_seconds(records))
+
+    assert climb["duration_s"] == 20
+    assert climb["avg_grade_pct"] == 6.0
+    assert climb["max_grade_pct"] == 8
+    assert climb["avg_power_w"] == 200
+    assert climb["avg_cadence_rpm"] == 80
+    assert climb["avg_hr_bpm"] == 130
+
+
+def test_climb_averages_handle_missing_zero_and_paused_samples():
+    from garmin_mcp.activity_analysis import _record_seconds, _summarize_climb
+
+    records = [
+        {"timestamp": _RIDE_START, "grade_pct": 4, "power_w": 0, "cadence_rpm": None},
+        {"timestamp": _RIDE_START + datetime.timedelta(seconds=10), "grade_pct": None, "power_w": None, "cadence_rpm": 90},
+        {"timestamp": _RIDE_START + datetime.timedelta(seconds=40), "grade_pct": 10, "power_w": 200, "cadence_rpm": 0},
+        {"timestamp": _RIDE_START + datetime.timedelta(seconds=40), "grade_pct": 20, "power_w": 1000, "cadence_rpm": 100},
+        {"timestamp": _RIDE_START + datetime.timedelta(seconds=41), "grade_pct": 10, "power_w": 200, "cadence_rpm": 0},
+    ]
+    climb = _summarize_climb(records, 0, len(records) - 1, _record_seconds(records))
+
+    assert climb["duration_s"] == 13
+    assert climb["avg_grade_pct"] == 5.8
+    assert climb["max_grade_pct"] == 20
+    assert climb["avg_power_w"] == 100
+    assert climb["avg_cadence_rpm"] == 63
+    assert "avg_hr_bpm" not in climb
+
+
 def test_hr_drift_requires_60_minutes_not_3600_records():
     """70 min recorded every 3 s qualifies; 50 min does not."""
     row = {"power_w": 200, "heart_rate_bpm": 145}
