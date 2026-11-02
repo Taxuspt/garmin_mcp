@@ -1350,6 +1350,31 @@ async def test_get_morning_training_readiness_recovery_reached_zero(
     assert data["recovery_time_hours"] == 0.0
 
 
+@pytest.mark.asyncio
+async def test_readiness_tools_use_post_exercise_recovery_with_stale_phrase(
+    app_with_health_wellness, mock_garmin_client
+):
+    snapshot = {
+        "timestampLocal": "2026-10-31T17:35:03",
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "recoveryTime": 1222,
+        "recoveryTimeChangePhrase": "REACHED_ZERO",
+    }
+    mock_garmin_client.get_training_readiness.return_value = [snapshot]
+
+    result = await app_with_health_wellness.call_tool(
+        "get_training_readiness", {"date": "2026-10-31"}
+    )
+    assert json.loads(result[0][0].text)[0]["recovery_time_hours"] == 20.4
+
+    result = await app_with_health_wellness.call_tool(
+        "get_recovery_time_remaining", {"date": "2026-10-31"}
+    )
+    recovery = json.loads(result[0][0].text)
+    assert recovery["remaining_hours"] == 20.4
+    assert recovery["state"] == "recovering"
+
+
 # Error handling tests
 @pytest.mark.asyncio
 async def test_get_steps_data_no_data(app_with_health_wellness, mock_garmin_client):
