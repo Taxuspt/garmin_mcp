@@ -1051,23 +1051,44 @@ def _compute_temperature_stats(records: List[Dict]) -> Optional[Dict]:
     if not temps:
         return None
 
-    avg_temp = _safe_avg(temps)
+    samples = [(r, held) for r, held in zip(records, _record_seconds(records))
+               if r.get("temperature_c") is not None and held > 0]
+    if not samples:
+        # Identical timestamps provide no durations; retain the sample-based
+        # fallback instead of dividing by zero or discarding the summary.
+        samples = [(r, 1) for r in records if r.get("temperature_c") is not None]
+    total_s = sum(held for _, held in samples)
+    avg_temp = sum(r["temperature_c"] * held for r, held in samples) / total_s
     temp_min = min(temps)
     temp_max = max(temps)
 
-    # Compare HR and power in coolest vs hottest third of records
-    sorted_by_temp = sorted(
-        [r for r in records if r.get("temperature_c") is not None],
-        key=lambda r: r["temperature_c"]
-    )
-    third = max(1, len(sorted_by_temp) // 3)
-    coolest = sorted_by_temp[:third]
-    hottest = sorted_by_temp[-third:]
+    # Select equal-duration thirds, sharing a boundary proportionally across
+    # equal temperatures so their original record order cannot bias a result.
+    groups: Dict[Any, list] = {}
+    for record, held in samples:
+        groups.setdefault(record["temperature_c"], []).append((record, held))
 
-    cool_hr = _safe_round(_safe_avg([r["heart_rate_bpm"] for r in coolest if r.get("heart_rate_bpm")]))
-    hot_hr = _safe_round(_safe_avg([r["heart_rate_bpm"] for r in hottest if r.get("heart_rate_bpm")]))
-    cool_power = _safe_round(_safe_avg([r["power_w"] for r in coolest if r.get("power_w") is not None]))
-    hot_power = _safe_round(_safe_avg([r["power_w"] for r in hottest if r.get("power_w") is not None]))
+    def third_averages(start: float, end: float) -> tuple:
+        weighted = {"heart_rate_bpm": [0.0, 0.0], "power_w": [0.0, 0.0]}
+        position = 0.0
+        for temperature in sorted(groups):
+            group = groups[temperature]
+            group_s = sum(held for _, held in group)
+            overlap = max(0.0, min(position + group_s, end) - max(position, start))
+            fraction = overlap / group_s
+            for record, held in group:
+                duration = held * fraction
+                for field, (value_sum, seconds) in weighted.items():
+                    value = record.get(field)
+                    if value is not None and (field != "heart_rate_bpm" or value):
+                        weighted[field] = [value_sum + value * duration, seconds + duration]
+            position += group_s
+        return tuple(_safe_round(value_sum / seconds) if seconds else None
+                     for value_sum, seconds in weighted.values())
+
+    third = total_s / 3
+    cool_hr, cool_power = third_averages(0, third)
+    hot_hr, hot_power = third_averages(total_s - third, total_s)
 
     result: Dict[str, Any] = {
         "avg_temp_c": _safe_round(avg_temp),
