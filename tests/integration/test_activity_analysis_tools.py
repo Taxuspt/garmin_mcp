@@ -1424,6 +1424,34 @@ def test_detect_climbs_flat_tolerance_is_in_seconds():
     assert [c["duration_s"] for c in climbs] == [600, 600]
 
 
+def test_detect_climbs_ends_before_flat_with_missing_grade_samples():
+    climbing = [{"grade_pct": 5, "altitude_m": 100 + 10 * i} for i in range(12)]
+    flat = [{"grade_pct": grade, "altitude_m": 210} for grade in (0, None, 0, None, 0, None, 0)]
+    records = _records_every(10, climbing + flat)
+
+    climbs = _detect_climbs(records)
+
+    assert len(climbs) == 1
+    assert climbs[0]["end_time"] == records[11]["timestamp"]
+    assert climbs[0]["duration_s"] == 120
+    assert climbs[0]["elevation_gain_m"] == 110
+    assert climbs[0]["vam_m_per_hr"] == 3300
+
+
+def test_detect_climbs_resets_flat_boundary_after_short_dip():
+    climbing = [{"grade_pct": 5, "altitude_m": 100 + 10 * i} for i in range(12)]
+    dip = [{"grade_pct": 0, "altitude_m": 210}] * 2
+    resumed = [{"grade_pct": 5, "altitude_m": 220}]
+    flat = [{"grade_pct": 0, "altitude_m": 220}] * 4
+    records = _records_every(10, climbing + dip + resumed + flat)
+
+    climbs = _detect_climbs(records)
+
+    assert len(climbs) == 1
+    assert climbs[0]["end_time"] == records[14]["timestamp"]
+    assert climbs[0]["duration_s"] == 150
+
+
 def test_detect_climbs_speed_distance_uses_record_spacing():
     """Without an odometer, each speed sample covers its 3 s interval."""
     climbing = [

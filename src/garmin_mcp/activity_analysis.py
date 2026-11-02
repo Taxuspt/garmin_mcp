@@ -813,7 +813,7 @@ def _detect_climbs(
     climbs = []
     in_climb = False
     climb_start_idx = 0
-    flat_count = 0
+    flat_start_idx = None
     flat_s = 0
     FLAT_TOLERANCE_S = 30
     held_s = _record_seconds(records)
@@ -827,24 +827,25 @@ def _detect_climbs(
             if grade >= min_avg_grade_pct:
                 in_climb = True
                 climb_start_idx = i
-                flat_count = 0
+                flat_start_idx = None
                 flat_s = 0
         else:
             if grade < min_avg_grade_pct:
-                flat_count += 1
+                if flat_start_idx is None:
+                    flat_start_idx = i
                 flat_s += held_s[i]
                 if flat_s > FLAT_TOLERANCE_S:
                     # End the climb at where the flat started
-                    end_idx = i - flat_count
+                    end_idx = flat_start_idx - 1
                     climb = _summarize_climb(records, climb_start_idx, end_idx, held_s)
                     if (climb.get("elevation_gain_m", 0) >= min_elevation_gain_m and
                             climb.get("duration_s", 0) >= min_duration_s):
                         climbs.append(climb)
                     in_climb = False
-                    flat_count = 0
+                    flat_start_idx = None
                     flat_s = 0
             else:
-                flat_count = 0
+                flat_start_idx = None
                 flat_s = 0
 
     # Close any open climb at end of ride
