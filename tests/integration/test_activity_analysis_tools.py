@@ -1338,6 +1338,53 @@ def test_temperature_stats_include_zero_power_and_skip_missing_samples():
     assert stats["avg_hr_hottest_third_bpm"] == 150
 
 
+def test_temperature_stats_weight_uneven_recording_by_time():
+    start = datetime.datetime(2026, 1, 1)
+    records = [{"timestamp": start, "temperature_c": 10, "heart_rate_bpm": 100, "power_w": 0}]
+    records += [{"timestamp": start + datetime.timedelta(seconds=i), "temperature_c": 30,
+                 "heart_rate_bpm": 150, "power_w": 300} for i in range(10, 20)]
+
+    stats = _compute_temperature_stats(records)
+
+    assert stats["avg_temp_c"] == 20
+    assert stats["avg_hr_coolest_third_bpm"] == 100
+    assert stats["avg_hr_hottest_third_bpm"] == 150
+    assert stats["avg_power_coolest_third_w"] == 0
+    assert stats["avg_power_hottest_third_w"] == 300
+
+
+def test_temperature_ties_at_boundaries_do_not_depend_on_record_order():
+    records = [{"temperature_c": 20, "heart_rate_bpm": hr, "power_w": power}
+               for hr, power in ((100, 0), (150, 300), (0, None))]
+    stats = _compute_temperature_stats(records)
+
+    assert stats == _compute_temperature_stats(list(reversed(records)))
+    assert stats["avg_hr_coolest_third_bpm"] == 125
+    assert stats["avg_hr_hottest_third_bpm"] == 125
+    assert stats["avg_power_coolest_third_w"] == 150
+    assert stats["avg_power_hottest_third_w"] == 150
+
+
+def test_temperature_third_can_cross_temperature_groups():
+    start = datetime.datetime(2026, 1, 1)
+    records = [{"timestamp": start, "temperature_c": 10, "heart_rate_bpm": 100}]
+    records += [{"timestamp": start + datetime.timedelta(seconds=i), "temperature_c": 30,
+                 "heart_rate_bpm": 150} for i in range(2, 9)]
+
+    stats = _compute_temperature_stats(records)
+
+    assert stats["avg_hr_coolest_third_bpm"] == 116.7
+    assert stats["avg_hr_hottest_third_bpm"] == 150
+
+
+def test_temperature_stats_zero_duration_samples_fall_back_to_equal_weights():
+    when = datetime.datetime(2026, 1, 1)
+    records = [{"timestamp": when, "temperature_c": 10},
+               {"timestamp": when, "temperature_c": 30}]
+    stats = _compute_temperature_stats(records)
+    assert stats["avg_temp_c"] == 20
+
+
 # ---------------------------------------------------------------------------
 # Grade analysis (unit tests)
 # ---------------------------------------------------------------------------
