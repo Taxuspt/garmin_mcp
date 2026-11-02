@@ -52,7 +52,7 @@ This repository uses GitHub Actions for continuous integration and security chec
 1. `dependency-check` - Security and dependency validation
 2. `code-quality` - Code syntax and import checks
 
-### 4. Release & Docker image (`release.yml`)
+### 4. Release (`release.yml`)
 
 **Triggers:**
 - Pushes to `main`
@@ -60,9 +60,9 @@ This repository uses GitHub Actions for continuous integration and security chec
 - Manual trigger via workflow_dispatch, to republish the image of an existing release tag
 
 **What it does:**
-- [release-please](https://github.com/googleapis/release-please) keeps a release PR open with the next version and changelog, computed from [Conventional Commits](https://www.conventionalcommits.org/) (`fix:` bumps the patch version, `feat:` the minor version; while the version is `0.x`, breaking changes also bump the minor version). Merging that PR bumps `pyproject.toml` and `uv.lock`, tags the release (`X.Y.Z`, no `v` prefix) and creates the GitHub release.
+- [release-please](https://github.com/googleapis/release-please) opens a release PR with the next version and changelog, computed from [Conventional Commits](https://www.conventionalcommits.org/) (`fix:` bumps the patch version, `feat:` the minor version; while the version is `0.x`, breaking changes also bump the minor version). Merging that PR bumps `pyproject.toml` and `uv.lock`, tags the release (`X.Y.Z`, no `v` prefix) and creates the GitHub release. `feat:`, `fix:`, `perf:`, `deps:`, `revert:` and `docs:` commits open or update it; `chore:`, `ci:`, `test:`, `build:`, `refactor:` and `style:` commits don't.
 - Builds the Docker image natively on `amd64` and `arm64` runners and runs `scripts/docker_smoke_test.py` against each: MCP `initialize` + `tools/list` over streamable-http and stdio, plus the image `HEALTHCHECK`. No Garmin credentials are needed. The build itself fails if `uv.lock` is out of date (`uv sync --locked`).
-- Pushes both architectures to `ghcr.io/<owner>/garmin_mcp` and merges them into one multi-arch tag set: `main` and `sha-<commit>` on every push, plus `X.Y.Z`, `X.Y` and `latest` when a release is created (built from the tagged commit). `latest` never points at an unreleased build, and the rolling tags only move forward: `latest` follows the newest release and `X.Y` the newest patch of `X.Y`.
+- Pushes both architectures to `ghcr.io/<owner>/garmin_mcp` and merges them into one multi-arch tag set: `sha-<commit>` for the built commit and `main` when that is the head of `main`, plus `X.Y.Z`, `X.Y` and `latest` when a release is created (built from the tagged commit). `latest` never points at an unreleased build, and the rolling tags only move forward: `latest` follows the newest release and `X.Y` the newest patch of `X.Y`.
 - Publishes SBOM and provenance attestations with the image, plus a signed build provenance attestation (`gh attestation verify`).
 
 Publishing runs in this workflow rather than on `release: published` because releases created with `GITHUB_TOKEN` don't trigger other workflows.
@@ -74,16 +74,21 @@ Publishing runs in this workflow rather than on `release: published` because rel
 4. `publish` - Multi-arch tags and attestation (not on pull requests)
 
 **One-time setup:**
-- Settings → Actions → General → Workflow permissions: enable *Allow GitHub Actions to create and approve pull requests* (release-please opens the release PR).
-- After the first push, the GHCR package is private: Package settings → Change visibility → Public, so `docker pull` works without logging in.
+- Before the first push: Settings → Actions → General → Workflow permissions: enable *Allow GitHub Actions to create and approve pull requests* (release-please opens the release PR).
+- After the first push, check the GHCR package is public so `docker pull` works without logging in; if not, Package settings → Change visibility → Public.
 
-**Cutting a release:** merge the open `chore(main): release X.Y.Z` PR. Because `GITHUB_TOKEN` opened it, pull request checks don't run on that PR on their own; it only changes version numbers and the changelog, and the image is still smoke-tested after the merge.
+**Cutting a release:** merge the open `chore(main): release X.Y.Z` PR. Because `GITHUB_TOKEN` opened it, GitHub lists `pull_request` runs for it that show as failed; they can be ignored and nothing requires them. The PR only changes version numbers and the changelog, and the image is still smoke-tested after the merge.
 
-**If a release has no image** (the run failed or was cancelled after the tag was created): Actions → Release & Docker image → Run workflow, with the release tag as `version`. Republishing an older release only updates its own `X.Y.Z` tag (and `X.Y` if it is still the newest patch of that minor version); `latest` stays on the newest release.
+**Automatic releases (optional):** set the repository variable `AUTO_RELEASE` to `true` (Settings → Secrets and variables → Actions → Variables), and the workflow merges the release PR in the run that opened it, so every push with a commit of a releasing type ships. What to expect:
+- A release doesn't wait for `ci.yml`, which runs alongside it on the same push: a commit that fails the tests is still released and reaches `latest`, because only the image smoke test runs before publishing.
+- Only runs queued while another is running collapse into the newest one, and a run takes about 2 minutes, so merges further apart each get their own release. Replaying the 29 merges of 2026-10-20 gives about 13-19 releases.
+- If `main` moves during the run, the merge is skipped and the next run handles it, so no commit ships without a changelog entry. If the merge is refused, the run logs a warning and the PR stays open for a manual merge.
+
+**If a release has no image** (the run failed or was cancelled after the tag was created): Actions → Release → Run workflow, with the release tag as `version`. Republishing an older release only updates its own `X.Y.Z` tag (and `X.Y` if it is still the newest patch of that minor version); `latest` stays on the newest release.
 
 ### 5. Dependabot (`dependabot.yml`)
 
-Workflows pin actions to commit SHAs, and the Dockerfile pins `uv`. Dependabot opens a weekly grouped PR for each to keep those pins current.
+The release workflow pins actions to commit SHAs, and the Dockerfile pins `uv`. Dependabot opens a weekly grouped PR for each to keep those pins current.
 
 ## Running Tests Locally
 

@@ -1,17 +1,21 @@
-name: Release & Docker image
+name: Release
 
 # On every push to main:
 #   1. release-please opens/updates the release PR, or tags a release when that
-#      PR is merged.
+#      PR is merged. With the repository variable AUTO_RELEASE=true, this
+#      workflow also merges the PR right away and tags the release in this run,
+#      so every push with a user-facing commit ships without a manual merge. If
+#      the merge is refused, the PR stays open for a manual merge.
 #   2. The image is built natively on amd64 and arm64 runners, smoke-tested
 #      without Garmin credentials, then pushed to GHCR by digest.
 #   3. The per-arch digests are merged into one multi-arch tag set and a signed
 #      build provenance attestation is published.
-# Pull requests run steps 1-2 without pushing anything. A manual run
+# Pull requests run step 2 without pushing anything. A manual run
 # (workflow_dispatch) republishes the image of an existing release tag.
 #
 # Releases created by release-please use GITHUB_TOKEN, which doesn't trigger
-# other workflows (no `on: release`), so publishing happens in this workflow.
+# other workflows (no `on: release`, and merging the release PR starts no new
+# push run), so publishing happens in this workflow.
 
 on:
   push:
@@ -34,6 +38,7 @@ permissions: {}
 
 jobs:
   release-please:
+    name: Release PR and tag
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
@@ -41,16 +46,77 @@ jobs:
       issues: write
       pull-requests: write
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      version: ${{ steps.release.outputs.version }}
-      sha: ${{ steps.release.outputs.sha }}
+      release_created: ${{ steps.tagged.outputs.release_created || steps.release.outputs.release_created }}
+      version: ${{ steps.tagged.outputs.version || steps.release.outputs.version }}
+      sha: ${{ steps.tagged.outputs.sha || steps.release.outputs.sha }}
 
     steps:
+    - name: Remember the head of main
+      id: head
+      if: vars.AUTO_RELEASE == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: echo "sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)" >> "$GITHUB_OUTPUT"
+
     - name: Create release PR or release
       id: release
       uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
 
+    - name: Merge the release PR
+      id: merge
+      if: vars.AUTO_RELEASE == 'true' && steps.release.outputs.release_created != 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        HEAD_BEFORE: ${{ steps.head.outputs.sha }}
+        RELEASE_PR: ${{ steps.release.outputs.pr }}
+      run: |
+        # The output is empty when an open PR needed no update. Listing alone
+        # isn't enough: a PR opened seconds ago may not be listed yet.
+        pr=$(jq -r '.number // empty' <<< "${RELEASE_PR:-null}")
+        if [ -z "$pr" ]; then
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base "$GITHUB_REF_NAME" \
+            --label 'autorelease: pending' --json number,headRefName \
+            --jq 'map(select(.headRefName | startswith("release-please--"))) | .[0].number // empty')
+        fi
+        if [ -z "$pr" ]; then
+          echo "No release PR to merge."
+          exit 0
+        fi
+        # A commit that landed after release-please read the history would ship
+        # without a changelog entry or version bump. Its own run handles it.
+        if [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)" != "$HEAD_BEFORE" ]; then
+          echo "main moved during this run; the next run merges the release PR."
+          exit 0
+        fi
+        # A refused merge (branch rules, for example) must not stop the image of
+        # the pushed commit: the PR stays open for a manual merge.
+        if ! gh pr merge "$pr" --repo "$GITHUB_REPOSITORY" --squash; then
+          echo "::warning::Could not merge release PR #$pr; merge it by hand to release."
+          exit 0
+        fi
+        # release-please looks the merged PR up next; give the API time to catch up.
+        for _ in 1 2 3 4 5 6; do
+          [ "$(gh pr view "$pr" --repo "$GITHUB_REPOSITORY" --json state --jq .state)" = MERGED ] && break
+          sleep 5
+        done
+        sleep 10
+        echo "merged=true" >> "$GITHUB_OUTPUT"
+
+    - name: Tag the merged release PR
+      id: tagged
+      if: steps.merge.outputs.merged == 'true'
+      uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+      with:
+        skip-github-pull-request: true
+
+    - name: Check the release was created
+      if: steps.merge.outputs.merged == 'true' && steps.tagged.outputs.release_created != 'true'
+      run: |
+        echo "::error::The release PR was merged but no release was created. Re-run this job; the next run also retries."
+        exit 1
+
   meta:
+    name: Resolve version and tags
     needs: release-please
     if: ${{ !cancelled() && needs.release-please.result != 'failure' }}
     runs-on: ubuntu-latest
@@ -110,7 +176,11 @@ jobs:
           echo "short=${sha::7}"
           echo "ref=$ref"
           # `main` only moves when this run builds the commit main points at.
-          echo "main=$([ "$EVENT" = push ] && [ "$sha" = "$GITHUB_SHA" ] && echo true || echo false)"
+          main=false
+          if [ "$EVENT" = push ]; then
+            if [ "$sha" = "$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)" ]; then main=true; fi
+          fi
+          echo "main=$main"
         } >> "$GITHUB_OUTPUT"
 
     - name: Compute tags and labels
@@ -134,6 +204,7 @@ jobs:
           org.opencontainers.image.revision=${{ steps.target.outputs.sha }}
 
   build:
+    name: Docker image (${{ matrix.arch }})
     needs: meta
     if: ${{ !cancelled() && needs.meta.result == 'success' }}
     strategy:
@@ -215,6 +286,7 @@ jobs:
         retention-days: 1
 
   publish:
+    name: Publish Docker image
     needs: [ meta, build ]
     if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
