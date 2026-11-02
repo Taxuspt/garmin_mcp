@@ -981,8 +981,9 @@ def _grade_analysis(records: List[Dict]) -> Optional[Dict]:
 def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
     """Compute aerobic decoupling (HR drift vs. power over the ride).
 
-    Splits the ride into first and second halves by record count.
-    Computes power:HR ratio for each half.
+    Splits the valid recorded time into equal halves and weights power and HR
+    by the duration each sample covers. Missing samples and paused time do not
+    count towards either half.
     Drift % = change in ratio from first to second half.
     Negative drift = HR increased relative to power (decoupling = less efficient).
     """
@@ -993,25 +994,27 @@ def _compute_hr_drift(records: List[Dict]) -> Optional[Dict]:
     for r, held in zip(records, _record_seconds(records)):
         if (r.get("power_w") is not None and r.get("heart_rate_bpm") is not None
                 and r["heart_rate_bpm"] > 0):
-            filtered.append(r)
+            filtered.append((r, held))
             filtered_s += held
 
     if filtered_s < MIN_DURATION_S:
         return None
 
-    mid = len(filtered) // 2
-    first_half = filtered[:mid]
-    second_half = filtered[mid:]
+    midpoint = filtered_s / 2
+    elapsed = 0
+    # The duration factors cancel in the ratio of the two weighted averages.
+    totals = [[0.0, 0.0], [0.0, 0.0]]
+    for record, held in filtered:
+        first_s = max(0, min(held, midpoint - elapsed))
+        for total, duration in zip(totals, (first_s, held - first_s)):
+            total[0] += record["power_w"] * duration
+            total[1] += record["heart_rate_bpm"] * duration
+        elapsed += held
 
-    def power_hr_ratio(recs):
-        avg_p = _safe_avg([r["power_w"] for r in recs])
-        avg_hr = _safe_avg([r["heart_rate_bpm"] for r in recs])
-        if avg_p is None or avg_hr is None or avg_hr == 0:
-            return None
-        return avg_p / avg_hr
+    def power_hr_ratio(total):
+        return total[0] / total[1] if total[1] else None
 
-    r1 = power_hr_ratio(first_half)
-    r2 = power_hr_ratio(second_half)
+    r1, r2 = (power_hr_ratio(total) for total in totals)
 
     if r1 is None or r2 is None or r1 == 0:
         return None
