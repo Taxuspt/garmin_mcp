@@ -1443,6 +1443,53 @@ def test_hr_drift_requires_60_minutes_not_3600_records():
     assert _compute_hr_drift(_records_every(3, [row] * 1000)) is None
 
 
+def test_hr_drift_weights_uneven_recording_by_time():
+    first = _records_every(9, [{"power_w": 200, "heart_rate_bpm": 100}] * 400)
+    second = _records_every(
+        1, [{"power_w": 200, "heart_rate_bpm": 120}] * 3600,
+        start=_RIDE_START + datetime.timedelta(hours=1),
+    )
+    drift = _compute_hr_drift(first + second)
+    assert drift["hr_drift_pct"] == -16.7
+    assert drift["interpretation"] == "significant_decoupling"
+
+
+def test_hr_drift_splits_sample_crossing_midpoint():
+    first = _records_every(3, [{"power_w": 200, "heart_rate_bpm": 100}] * 599)
+    crossing = _records_every(
+        10, [{"power_w": 200, "heart_rate_bpm": 100}],
+        start=_RIDE_START + datetime.timedelta(seconds=1797),
+    )
+    second = _records_every(
+        1, [{"power_w": 200, "heart_rate_bpm": 120}] * 1793,
+        start=_RIDE_START + datetime.timedelta(seconds=1807),
+    )
+    drift = _compute_hr_drift(first + crossing + second)
+    # Three seconds of the 10-second sample are in the first half, seven in
+    # the second, which consequently averages 119.922 bpm.
+    assert drift["first_half_power_hr_ratio"] == 2.0
+    assert drift["second_half_power_hr_ratio"] == 1.668
+    assert drift["hr_drift_pct"] == -16.6
+
+
+def test_hr_drift_excludes_missing_samples_and_pause_time():
+    first = _records_every(1, [{"power_w": 200, "heart_rate_bpm": 100}] * 1800)
+    missing = _records_every(
+        1, [{"heart_rate_bpm": 200}] * 200,
+        start=_RIDE_START + datetime.timedelta(seconds=2100),
+    )
+    second = _records_every(
+        1, [{"power_w": 200, "heart_rate_bpm": 120}] * 1800,
+        start=_RIDE_START + datetime.timedelta(seconds=2300),
+    )
+    drift = _compute_hr_drift(first + missing + second)
+    assert drift["hr_drift_pct"] == -16.7
+    assert drift["first_half_power_hr_ratio"] == 2.0
+    assert drift["second_half_power_hr_ratio"] == 1.667
+    # A long pause and invalid samples do not help reach the minimum duration.
+    assert _compute_hr_drift(first + missing) is None
+
+
 def test_grade_analysis_time_uses_record_spacing():
     """time_s per grade bin is elapsed seconds, not a record count."""
     records = _records_every(
