@@ -22,7 +22,23 @@ def test_recovery_state_bands():
     assert _recovery_state(3, None) == "nearly_recovered"
     assert _recovery_state(12, None) == "recovering"
     assert _recovery_state(36, None) == "not_recovered"
-    assert _recovery_state(12, "REACHED_ZERO") == "recovered"
+    assert _recovery_state(12, "REACHED_ZERO") == "recovering"
+    assert _recovery_state(None, "REACHED_ZERO") == "recovered"
+
+
+def test_post_exercise_reset_uses_new_minutes_with_stale_phrase():
+    snapshot = {
+        "timestampLocal": "2026-10-31T17:35:03",
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "recoveryTime": 1222,
+        "recoveryTimeChangePhrase": "REACHED_ZERO",
+    }
+    curated = _recovery_from_readiness(snapshot, "training_readiness")
+    assert curated["remaining_hours"] == 20.4
+    assert curated["state"] == "recovering"
+    assert curated["change_phrase"] == "REACHED_ZERO"
+    assert _hours_from_recovery_minutes(1, "REACHED_ZERO", "AFTER_POST_EXERCISE_RESET") == 0.0
+    assert _hours_from_recovery_minutes(None, "REACHED_ZERO", "AFTER_POST_EXERCISE_RESET") is None
 
 
 def test_recovery_from_readiness_uses_latest_snapshot():
