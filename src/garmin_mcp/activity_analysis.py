@@ -948,7 +948,7 @@ def _grade_analysis(records: List[Dict]) -> Optional[Dict]:
             bucket = "moderate"
         else:
             bucket = "steep"
-        bins[bucket]["records"].append(rec)
+        bins[bucket]["records"].append((rec, held))
         bins[bucket]["time_s"] += held
 
     if not has_grade:
@@ -960,15 +960,15 @@ def _grade_analysis(records: List[Dict]) -> Optional[Dict]:
         if not recs:
             continue
         entry: Dict[str, Any] = {"time_s": data["time_s"]}
-        powers = [r["power_w"] for r in recs if r.get("power_w") is not None]
-        cadences = [r["cadence_rpm"] for r in recs if r.get("cadence_rpm") is not None]
-        hrs = [r["heart_rate_bpm"] for r in recs if r.get("heart_rate_bpm") is not None]
-        if powers:
-            entry["avg_power_w"] = round(_safe_avg(powers))
-        if cadences:
-            entry["avg_cadence_rpm"] = round(_safe_avg(cadences))
-        if hrs:
-            entry["avg_hr_bpm"] = round(_safe_avg(hrs))
+        for field, output in (
+            ("power_w", "avg_power_w"),
+            ("cadence_rpm", "avg_cadence_rpm"),
+            ("heart_rate_bpm", "avg_hr_bpm"),
+        ):
+            samples = [(r[field], held) for r, held in recs if r.get(field) is not None and held > 0]
+            duration = sum(held for _, held in samples)
+            if duration:
+                entry[output] = round(sum(value * held for value, held in samples) / duration)
         result[key] = entry
 
     return result if result else None
