@@ -1453,6 +1453,53 @@ def test_grade_analysis_time_uses_record_spacing():
     assert result["gentle"]["time_s"] == 150
 
 
+def test_grade_analysis_averages_are_time_weighted():
+    """Uneven recording intervals do not bias a terrain bin's averages."""
+    records = [
+        {
+            "timestamp": _RIDE_START + datetime.timedelta(seconds=t),
+            "grade_pct": 0.5,
+            "power_w": 100 if t < 10 else 300,
+            "cadence_rpm": 60 if t < 10 else 100,
+            "heart_rate_bpm": 100 if t < 10 else 160,
+        }
+        for t in [0, *range(10, 20)]
+    ]
+    assert _grade_analysis(records)["flat"] == {
+        "time_s": 20,
+        "avg_power_w": 200,
+        "avg_cadence_rpm": 80,
+        "avg_hr_bpm": 130,
+    }
+
+
+def test_grade_analysis_averages_handle_missing_zero_and_pauses():
+    """Each metric has its own duration, pauses are capped, and zero counts."""
+    rows = [
+        (0, 999, 999, 999),  # Duplicate timestamp: no time attributed here.
+        (0, 0, None, 100),
+        (10, 100, 0, None),  # A 20 s gap is a pause, so holds for 1 s.
+        (30, None, 100, 200),
+        (31, 200, 100, 200),
+    ]
+    records = [
+        {
+            "timestamp": _RIDE_START + datetime.timedelta(seconds=t),
+            "grade_pct": 0.5,
+            "power_w": power,
+            "cadence_rpm": cadence,
+            "heart_rate_bpm": hr,
+        }
+        for t, power, cadence, hr in rows
+    ]
+    assert _grade_analysis(records)["flat"] == {
+        "time_s": 13,
+        "avg_power_w": 25,
+        "avg_cadence_rpm": 67,
+        "avg_hr_bpm": 117,
+    }
+
+
 @pytest.mark.asyncio
 async def test_power_duration_curve_tool_uses_record_timestamps(
     app_with_activity_analysis, mock_garmin_client
