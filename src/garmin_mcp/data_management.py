@@ -39,11 +39,13 @@ def register_tools(app):
     ) -> str:
         """Add body composition data
         
-        Times are the user's local time: GARMIN_TZ (IANA name) if set,
-        otherwise the server's time zone.
+        Times without an offset use GARMIN_TZ (IANA name) if set,
+        otherwise UTC. Supply an offset or GARMIN_TZ for the user's local time.
+        If the server's DST rollback makes FIT encoding ambiguous, the write
+        is rejected; run the server with TZ=UTC and retry.
 
         Args:
-            date: Date (YYYY-MM-DD, recorded at 12:00 local) or local timestamp
+            date: Date (YYYY-MM-DD, recorded at 12:00 in GARMIN_TZ or UTC) or timestamp
                 (YYYY-MM-DDTHH:MM[:SS], optionally with a UTC offset)
             weight: Weight in kg
             percent_fat: Body fat percentage
@@ -109,24 +111,19 @@ def register_tools(app):
             diastolic: Diastolic pressure (bottom number)
             pulse: Pulse rate
             notes: Optional notes
-            timestamp: When the reading was taken, as local time
-                YYYY-MM-DDTHH:MM[:SS] (optionally with a UTC offset). Local is
-                GARMIN_TZ if set, otherwise the server's time zone. Defaults to now.
+            timestamp: When the reading was taken, as YYYY-MM-DDTHH:MM[:SS]
+                with an optional UTC offset. Without an offset, GARMIN_TZ is
+                used if set, otherwise UTC. Defaults to now in that zone.
         """
         try:
             measured_at = resolve_local_time(timestamp)
-            if measured_at is None:
-                result = garmin_client.set_blood_pressure(
-                    systolic, diastolic, pulse, notes=notes
-                )
-            else:
-                # An offset-aware timestamp: garminconnect keeps its wall-clock
-                # time as local and converts it to GMT itself.
-                result = garmin_client.set_blood_pressure(
-                    systolic, diastolic, pulse,
-                    timestamp=measured_at.isoformat(timespec="seconds"),
-                    notes=notes,
-                )
+            # garminconnect keeps the offset-aware wall time as local and
+            # converts it to GMT itself.
+            result = garmin_client.set_blood_pressure(
+                systolic, diastolic, pulse,
+                timestamp=measured_at.isoformat(timespec="seconds"),
+                notes=notes,
+            )
             return json.dumps(result, indent=2)
         except Exception as e:
             return f"Error setting blood pressure values: {str(e)}"

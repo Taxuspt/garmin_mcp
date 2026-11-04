@@ -4,21 +4,22 @@ garminconnect turns naive timestamps into instants using the server host's
 time zone. In Docker or a remote HTTP deployment the host usually runs in UTC
 while the user doesn't, so a date-only weigh-in can land on the previous day.
 GARMIN_TZ (an IANA name such as "America/Los_Angeles") says which zone the
-user's local times are in; without it the host's zone is used, as before.
+user's local times are in; without it, write timestamps default to UTC.
 """
 
 import datetime
 import os
+import time
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# A date given without a time is recorded at noon: far enough from midnight
-# that the calendar day survives any zone mismatch up to +/-12 h.
+# Noon reduces the chance that a date-only entry falls on an adjacent day
+# when the user's time zone is unknown, but cannot guarantee it worldwide.
 DATE_ONLY_TIME = datetime.time(12, 0)
 
 
 def user_timezone() -> Optional[datetime.tzinfo]:
-    """The zone named by GARMIN_TZ, or None to use the host's zone."""
+    """The zone named by GARMIN_TZ, or None when it is not configured."""
     name = (os.getenv("GARMIN_TZ") or "").strip()
     if not name:
         return None
@@ -31,20 +32,17 @@ def user_timezone() -> Optional[datetime.tzinfo]:
         ) from e
 
 
-def resolve_local_time(value: Optional[str]) -> Optional[datetime.datetime]:
+def resolve_local_time(value: Optional[str]) -> datetime.datetime:
     """Parse a user date or timestamp into an aware datetime.
 
-    - "YYYY-MM-DD": that day at DATE_ONLY_TIME, local.
-    - "YYYY-MM-DDTHH:MM[:SS]": local wall-clock time.
+    - "YYYY-MM-DD": that day at DATE_ONLY_TIME in GARMIN_TZ or UTC.
+    - "YYYY-MM-DDTHH:MM[:SS]": wall-clock time in GARMIN_TZ or UTC.
     - A timestamp with an offset (or "Z") keeps its offset.
-    - None: now, if GARMIN_TZ is set; otherwise None (let garminconnect
-      use the host's clock, as before).
-
-    "Local" is GARMIN_TZ when set, else the host's zone.
+    - None or an empty string: now in GARMIN_TZ or UTC.
     """
-    tz = user_timezone()
+    tz = user_timezone() or datetime.timezone.utc
     if value is None or not str(value).strip():
-        return datetime.datetime.now(tz) if tz else None
+        return datetime.datetime.now(tz)
 
     text = str(value).strip().replace("Z", "+00:00")
     try:
@@ -61,7 +59,7 @@ def resolve_local_time(value: Optional[str]) -> Optional[datetime.datetime]:
         ) from e
 
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=tz) if tz else dt.astimezone()
+        dt = dt.replace(tzinfo=tz)
     return dt
 
 
@@ -71,7 +69,17 @@ def to_host_naive(dt: datetime.datetime) -> datetime.datetime:
     garminconnect's FIT encoders read naive datetimes with time.mktime (the
     host's zone) and drop any tzinfo, so hand them host-local wall-clock time.
     """
-    return dt.astimezone().replace(tzinfo=None)
+    host_time = dt.astimezone().replace(tzinfo=None, microsecond=0)
+    # The library reparses the ISO string, which loses datetime.fold. During
+    # a host DST rollback, mktime may choose the other occurrence of the same
+    # wall time. Refuse the write if it would encode a different instant.
+    reparsed = datetime.datetime.fromisoformat(host_time.isoformat(timespec="seconds"))
+    if time.mktime(reparsed.timetuple()) != dt.replace(microsecond=0).timestamp():
+        raise ValueError(
+            "Cannot encode this timestamp unambiguously in the server's time zone; "
+            "run the server with TZ=UTC and retry"
+        )
+    return host_time
 
 
 def format_epoch_ms(epoch_ms: float) -> str:

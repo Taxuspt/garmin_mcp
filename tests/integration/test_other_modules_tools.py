@@ -769,8 +769,11 @@ def app_with_data_management(mock_garmin_client):
 
 
 @pytest.mark.asyncio
-async def test_add_body_composition_tool(app_with_data_management, mock_garmin_client):
+async def test_add_body_composition_tool(app_with_data_management, mock_garmin_client, monkeypatch):
     """Test add_body_composition tool"""
+    from datetime import datetime, timezone
+
+    monkeypatch.delenv("GARMIN_TZ", raising=False)
     add_response = {"status": "success", "message": "Body composition added"}
     mock_garmin_client.add_body_composition.return_value = add_response
     result = await app_with_data_management.call_tool(
@@ -778,9 +781,11 @@ async def test_add_body_composition_tool(app_with_data_management, mock_garmin_c
         {"date": "2024-01-15", "weight": 70.0, "percent_fat": 15.0}
     )
     assert result is not None
-    # A date alone is recorded at 12:00 local (here the host's zone).
+    # A date alone represents noon UTC when GARMIN_TZ is not set. The FIT
+    # library requires the same instant expressed as a host-local naive time.
+    host_time = datetime(2024, 1, 15, 12, tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
     mock_garmin_client.add_body_composition.assert_called_once_with(
-        "2024-01-15T12:00:00",
+        host_time.isoformat(timespec="seconds"),
         weight=70.0,
         percent_fat=15.0,
         percent_hydration=None,
@@ -826,8 +831,12 @@ async def test_body_composition_documents_mass_and_energy_units(app_with_data_ma
 
 
 @pytest.mark.asyncio
-async def test_set_blood_pressure_tool(app_with_data_management, mock_garmin_client):
+async def test_set_blood_pressure_tool(app_with_data_management, mock_garmin_client, monkeypatch):
     """Test set_blood_pressure tool"""
+    from datetime import datetime, timezone
+
+    monkeypatch.delenv("GARMIN_TZ", raising=False)
+    before = datetime.now(timezone.utc).replace(microsecond=0)
     add_response = {"status": "success", "message": "Blood pressure added"}
     mock_garmin_client.set_blood_pressure.return_value = add_response
     result = await app_with_data_management.call_tool(
@@ -835,7 +844,14 @@ async def test_set_blood_pressure_tool(app_with_data_management, mock_garmin_cli
         {"systolic": 120, "diastolic": 80, "pulse": 65}
     )
     assert result is not None
-    mock_garmin_client.set_blood_pressure.assert_called_once_with(120, 80, 65, notes=None)
+    after = datetime.now(timezone.utc).replace(microsecond=0)
+    mock_garmin_client.set_blood_pressure.assert_called_once()
+    args, kwargs = mock_garmin_client.set_blood_pressure.call_args
+    assert args == (120, 80, 65)
+    assert kwargs["notes"] is None
+    sent = datetime.fromisoformat(kwargs["timestamp"])
+    assert sent.utcoffset().total_seconds() == 0
+    assert before <= sent <= after
 
 
 @pytest.mark.asyncio
