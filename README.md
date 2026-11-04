@@ -587,9 +587,12 @@ Your Garmin Connect credentials are read from environment variables:
 - `GARMIN_PASSWORD_FILE`: Path to a file containing your Garmin Connect password
 - `GARMIN_IS_CN`: Set to `true` to use Garmin Connect China (garmin.cn) instead of the international version (default: `false`)
 - `GARMIN_FIT_DOWNLOAD_DIR`: Default directory for downloaded activity files. When set, skips the first-run setup prompt in `download_activity_file`.
+- `GARMIN_TZ`: Your IANA time zone (e.g. `America/Los_Angeles`). `add_body_composition` and `set_blood_pressure` interpret timestamps without an offset in this zone; otherwise they use UTC, independent of the server's zone. A date-only body composition entry uses noon in this zone or UTC. An explicit offset (e.g. `2026-11-02T18:36:00-05:00`) takes precedence. Set `GARMIN_TZ` or provide an offset to preserve your local wall time and calendar day; noon UTC can be a different day in some time zones. With no timestamp, blood pressure uses the current time in `GARMIN_TZ` or UTC. `get_device_last_used` reports an offset and uses this zone if set, otherwise the server's zone.
 - `GARMIN_FIT_CONFIG`: Path to the persisted download-directory config file (default: `~/.garminconnect_fit_config.json`).
 
 File-based secrets are useful in certain environments, such as inside a Docker container. Note that you cannot set both `GARMIN_EMAIL` and `GARMIN_EMAIL_FILE`, similarly you cannot set both `GARMIN_PASSWORD` and `GARMIN_PASSWORD_FILE`.
+
+`add_body_composition` uses the host's time zone internally for FIT encoding. During a host daylight-saving rollback, an instant can map to a repeated wall time; if the encoder would choose the wrong occurrence, the tool rejects the write. Set the server's `TZ=UTC` and retry. A local timestamp without an offset during a rollback is interpreted as the first occurrence in `GARMIN_TZ`; supply an explicit offset to select the intended occurrence.
 
 ### Transport
 

@@ -10,6 +10,7 @@ services:
       - GARMIN_EMAIL=${GARMIN_EMAIL}
       - GARMIN_PASSWORD=${GARMIN_PASSWORD}
       # - GARMIN_IS_CN=true  # Uncomment to use Garmin Connect China (garmin.cn)
+      # - GARMIN_TZ=America/Los_Angeles  # Your time zone; the container runs in UTC
       # Serve over HTTP instead of stdio, protected by a shared secret that the
       # client must send as "Authorization: Bearer <token>" (generate one with
       # `openssl rand -hex 32`). Also uncomment the `ports:` block below.
