@@ -6,6 +6,15 @@ This Model Context Protocol (MCP) server connects to Garmin Connect and exposes 
 
 Garmin's API is accessed via the awesome [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library.
 
+Requires **Python 3.12+** and uses **`garminconnect==0.3.19`**. This baseline includes
+the China-region authentication fixes missing from 0.3.2 (see [#257](https://github.com/Taxuspt/garmin_mcp/issues/257)
+and [#345](https://github.com/Taxuspt/garmin_mcp/issues/345)). Upgrade Python before
+updating an existing Python 3.10 or 3.11 installation.
+For Garmin Connect China, run `garmin-mcp-auth --is-cn` and set
+`GARMIN_IS_CN=true` in the MCP server environment as well.
+The upgraded library uses the Garmin profile time zone for default dates and
+timestamps supplied without a time zone.
+
 ## Features
 
 - List recent activities with pagination support
@@ -25,7 +34,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 ### Tool Coverage
 
-This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
+This MCP server implements **110+ tools** using the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library:
 
 - ✅ Activity Management (21 tools) - includes write tools for type, description, event type, perceived effort, feel, and exercise sets
 - ✅ Health & Wellness (34 tools) - includes custom lightweight summary tools
@@ -501,6 +510,10 @@ directory, selected with the `GARMINTOKENS` environment variable.
 `GARMINTOKENS` defaults to `~/.garminconnect`. Point it somewhere else and the
 server reads and writes tokens there instead, leaving the default store
 untouched.
+
+The upgraded library rejects token paths through symlinks owned by a non-root
+user. If a symlinked token path is rejected, point `GARMINTOKENS` at the real
+directory instead.
 
 #### Step 1: Authenticate each account into its own directory
 

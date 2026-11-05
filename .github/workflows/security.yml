@@ -27,7 +27,7 @@ jobs:
         uv sync
         uv pip list
         echo "Checking for known security vulnerabilities..."
-        # Note: Add pip-audit or safety scan here if desired
+        uv run --with pip-audit pip-audit
 
     - name: Verify lock file is up to date
       run: |
