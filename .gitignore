@@ -12,6 +12,7 @@ build/
 # Virtual environments
 .env
 .venv/
+.uv-cache/
 *.log
 .DS_Store
 .claude.md

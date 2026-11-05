@@ -1,8 +1,6 @@
 # Use Python 3.12 slim image for smaller size
 FROM python:3.12-slim
 
-# Note: .dockerignore is symlinked to .gitignore for unified exclusion rules
-
 # Set working directory
 WORKDIR /app
 

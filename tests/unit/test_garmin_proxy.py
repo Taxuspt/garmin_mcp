@@ -9,7 +9,7 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
-from garmin_mcp import _GarminProxy
+from garmin_mcp import _GarminProxy, _resolve_call_timeout, _DEFAULT_CALL_TIMEOUT
 
 
 class TestGarminProxy:
@@ -37,17 +37,25 @@ class TestGarminProxy:
     def test_auth_error_message_is_actionable(self):
         proxy = self._proxy(get_activities=GarminConnectAuthenticationError("expired"))
         exc = pytest.raises(GarminConnectAuthenticationError, proxy.get_activities)
+        assert str(exc.value).startswith("Garmin authentication failed: expired.")
         assert "Re-run 'garmin-mcp-auth'" in str(exc.value)
 
     def test_rate_limit_error_message_is_actionable(self):
         proxy = self._proxy(get_activities=GarminConnectTooManyRequestsError("429"))
         exc = pytest.raises(GarminConnectTooManyRequestsError, proxy.get_activities)
+        assert str(exc.value).startswith("Garmin rate limit hit: 429.")
         assert "Wait a few minutes" in str(exc.value)
 
     def test_connection_error_message_is_actionable(self):
         proxy = self._proxy(get_steps_data=GarminConnectConnectionError("timeout"))
         exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
+        assert str(exc.value).startswith("Garmin Connect request failed: timeout.")
         assert "unreachable" in str(exc.value)
+
+    def test_empty_original_message_still_gets_hint(self):
+        proxy = self._proxy(get_steps_data=GarminConnectConnectionError())
+        exc = pytest.raises(GarminConnectConnectionError, proxy.get_steps_data)
+        assert str(exc.value).startswith("Garmin Connect request failed: unknown error. ")
 
     def test_unknown_exception_is_re_raised_unchanged(self):
         proxy = self._proxy(get_activities=ValueError("unexpected"))
@@ -60,3 +68,107 @@ class TestGarminProxy:
         proxy = _GarminProxy(client)
         proxy.get_activities(0, 10, activityType="running")
         client.get_activities.assert_called_once_with(0, 10, activityType="running")
+
+    def test_slow_call_times_out_with_actionable_message(self):
+        """A call that stalls past the timeout raises a clear, retry-able error (issue #248)."""
+        import threading
+
+        blocked = threading.Event()
+        client = Mock()
+        # Simulate a hung Garmin request: block until released by the test.
+        client.get_activities.side_effect = lambda *a, **k: blocked.wait(30)
+        proxy = _GarminProxy(client, timeout=0.05)
+        try:
+            with pytest.raises(TimeoutError) as exc:
+                proxy.get_activities()
+            assert "did not return within" in str(exc.value)
+            assert "GARMIN_MCP_CALL_TIMEOUT" in str(exc.value)
+        finally:
+            blocked.set()  # release the abandoned worker thread
+
+    def test_fast_call_returns_before_timeout(self):
+        """A normal call completes and returns through the timeout wrapper."""
+        client = Mock()
+        client.get_full_name.return_value = "Alice"
+        proxy = _GarminProxy(client, timeout=5)
+        assert proxy.get_full_name() == "Alice"
+
+    def test_timeout_zero_disables_bound(self):
+        """timeout=0 bypasses the executor and calls the client inline."""
+        client = Mock()
+        client.get_full_name.return_value = "Zed"
+        proxy = _GarminProxy(client, timeout=0)
+        assert proxy.get_full_name() == "Zed"
+
+    def test_known_exception_still_translated_through_timeout_wrapper(self):
+        """Error translation survives the worker-thread hop (future re-raises)."""
+        proxy = self._proxy(get_activities=GarminConnectAuthenticationError("expired"))
+        with pytest.raises(GarminConnectAuthenticationError) as exc:
+            proxy.get_activities()
+        assert "Re-run 'garmin-mcp-auth'" in str(exc.value)
+
+
+class TestResolveCallTimeout:
+    """Tests for GARMIN_MCP_CALL_TIMEOUT parsing."""
+
+    def test_absent_uses_default(self, monkeypatch):
+        monkeypatch.delenv("GARMIN_MCP_CALL_TIMEOUT", raising=False)
+        assert _resolve_call_timeout() == _DEFAULT_CALL_TIMEOUT
+
+    def test_blank_uses_default(self, monkeypatch):
+        monkeypatch.setenv("GARMIN_MCP_CALL_TIMEOUT", "   ")
+        assert _resolve_call_timeout() == _DEFAULT_CALL_TIMEOUT
+
+    def test_valid_value_is_used(self, monkeypatch):
+        monkeypatch.setenv("GARMIN_MCP_CALL_TIMEOUT", "5")
+        assert _resolve_call_timeout() == 5.0
+
+    def test_zero_disables(self, monkeypatch):
+        monkeypatch.setenv("GARMIN_MCP_CALL_TIMEOUT", "0")
+        assert _resolve_call_timeout() == 0.0
+
+    def test_negative_disables(self, monkeypatch):
+        monkeypatch.setenv("GARMIN_MCP_CALL_TIMEOUT", "-1")
+        assert _resolve_call_timeout() == 0.0
+
+    def test_invalid_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("GARMIN_MCP_CALL_TIMEOUT", "bogus")
+        assert _resolve_call_timeout() == _DEFAULT_CALL_TIMEOUT
+
+
+@pytest.mark.parametrize("status, hint", [
+    (401, "Re-run 'garmin-mcp-auth'"),
+    (429, "Wait a few minutes"),
+    (400, "Check the request arguments"),
+    (403, "Check the request arguments"),
+    (404, "Check the request arguments"),
+    (500, "server error"),
+])
+def test_proxy_classifies_real_library_http_error_shape(status, hint):
+    """Run the real Garmin.connectapi wrapper with its HTTP client mocked."""
+    from garminconnect import Garmin
+
+    garmin = Garmin.__new__(Garmin)
+    garmin.client = Mock()
+    garmin.client.connectapi.side_effect = GarminConnectConnectionError(
+        f"API Error {status} - rejected"
+    )
+    proxy = _GarminProxy(garmin, timeout=0)
+    with pytest.raises(GarminConnectConnectionError) as caught:
+        proxy.connectapi("/test")
+    assert hint in str(caught.value)
+    assert "check your network" not in str(caught.value)
+    assert f"API Error {status}" in str(caught.value)
+
+
+def test_proxy_translates_direct_http_client_writes():
+    """A raw Client attribute is non-callable and used directly by write tools."""
+    from types import SimpleNamespace
+
+    http_client = SimpleNamespace(put=Mock(side_effect=GarminConnectConnectionError(
+        "API Error 401 - expired"
+    )))
+    proxy = _GarminProxy(SimpleNamespace(client=http_client), timeout=0)
+    with pytest.raises(GarminConnectConnectionError, match="Re-run 'garmin-mcp-auth'"):
+        proxy.client.put("connectapi", "/test", json={"x": 1}, api=True)
+    http_client.put.assert_called_once_with("connectapi", "/test", json={"x": 1}, api=True)

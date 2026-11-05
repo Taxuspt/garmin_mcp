@@ -4,6 +4,7 @@ Integration tests for high-level workout builder tools (workout_builders.py).
 import json
 
 import pytest
+from garminconnect import GarminConnectConnectionError
 from mcp.server.fastmcp import FastMCP
 from unittest.mock import MagicMock
 
@@ -28,6 +29,136 @@ def app_with_builders(mock_garmin_client):
     app = FastMCP("Test Workout Builders")
     app = workout_builders.register_tools(app)
     return app
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name,arguments,field", [
+    ("create_run_workout", {"run_seconds": 0}, "run_seconds"),
+    ("create_run_workout", {"run_seconds": -1}, "run_seconds"),
+    ("create_run_workout", {"warmup_min": -1}, "warmup_min"),
+    ("create_run_workout", {"cooldown_min": -1}, "cooldown_min"),
+    ("create_run_interval_workout", {"warmup_min": -1}, "warmup_min"),
+    ("create_run_interval_workout", {"cooldown_min": -1}, "cooldown_min"),
+    ("create_walk_run_workout", {"run_seconds": 0}, "run_seconds"),
+    ("create_walk_run_workout", {"walk_seconds": 0}, "walk_seconds"),
+    ("create_walk_run_workout", {"repeats": 0}, "repeats"),
+    ("create_walk_run_workout", {"warmup_min": -1}, "warmup_min"),
+    ("create_walk_run_workout", {"cooldown_min": -1}, "cooldown_min"),
+    ("create_z2_walk_workout", {"duration_min": 0}, "duration_min"),
+    ("create_z2_walk_workout", {"duration_min": -1}, "duration_min"),
+    ("create_strength_workout", {"exercises": [{"name": "Squat", "sets": 0}]}, "sets"),
+    ("create_strength_workout", {"exercises": [{"name": "Squat", "sets": -1}]}, "sets"),
+    ("create_strength_workout", {"exercises": [{"name": "Squat", "reps": 0}]}, "reps"),
+    ("create_strength_workout", {"exercises": [{"name": "Squat", "reps": -1}]}, "reps"),
+    ("create_strength_workout", {"exercises": [{"name": "Squat", "rest_seconds": -1}]}, "rest_seconds"),
+])
+async def test_builders_reject_invalid_counts_and_durations_before_upload(
+    app_with_builders, mock_garmin_client, tool_name, arguments, field
+):
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 123}
+    defaults = {
+        "create_run_workout": {"run_seconds": 300, "warmup_min": 5, "cooldown_min": 5},
+        "create_run_interval_workout": {
+            "repeats": 3, "rep_seconds": 60, "recovery_seconds": 60,
+            "warmup_min": 5, "cooldown_min": 5,
+        },
+        "create_walk_run_workout": {
+            "run_seconds": 60, "walk_seconds": 60, "repeats": 3,
+            "warmup_min": 5, "cooldown_min": 5,
+        },
+        "create_z2_walk_workout": {"duration_min": 30, "hr_min": 110, "hr_max": 130},
+        "create_strength_workout": {"exercises": [{"name": "Squat", "reps": 5}]},
+    }
+
+    result = await app_with_builders.call_tool(
+        tool_name, {"name": "Invalid workout", **defaults[tool_name], **arguments}
+    )
+
+    assert "Error creating" in result[0][0].text
+    assert field in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bounds", [
+    {"recovery_hr_min": 120}, {"recovery_hr_max": 140},
+    {"recovery_hr_min": 140, "recovery_hr_max": 120},
+    {"recovery_hr_min": 120, "recovery_hr_max": 140},
+])
+async def test_zero_recovery_rejects_unused_hr_bounds(app_with_builders, mock_garmin_client, bounds):
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 123}
+    result = await app_with_builders.call_tool("create_run_interval_workout", {
+        "name": "Strides", "repeats": 6, "rep_seconds": 20,
+        "recovery_seconds": 0, "warmup_min": 10, "cooldown_min": 5, **bounds,
+    })
+
+    assert "Error creating run interval workout" in result[0][0].text
+    assert "recovery_hr_" in result[0][0].text
+    mock_garmin_client.upload_workout.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workout_id", [None, "abc", 0, -1])
+async def test_schedule_week_invalid_id_names_field_and_continues(
+    app_with_builders, mock_garmin_client, workout_id
+):
+    response = MagicMock(status_code=200)
+    mock_garmin_client.client.post.return_value = response
+
+    result = await app_with_builders.call_tool("schedule_week", {"week": [
+        {"date": "2026-10-20", "workout_id": workout_id},
+        {"date": "2026-10-21", "workout_id": 123},
+    ]})
+
+    entries = json.loads(result[0][0].text)["scheduled"]
+    assert entries[0]["status"] == "failed"
+    assert "workout_id" in entries[0]["message"]
+    assert entries[1]["status"] == "scheduled"
+    mock_garmin_client.client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [201, 202, 204])
+async def test_schedule_week_accepts_success_statuses(app_with_builders, mock_garmin_client, status_code):
+    response = MagicMock(status_code=status_code)
+    response.json.return_value = {}
+    mock_garmin_client.client.post.return_value = response
+
+    result = await app_with_builders.call_tool("schedule_week", {
+        "week": [{"date": "2026-10-20", "workout_id": 123}]
+    })
+
+    entry = json.loads(result[0][0].text)["scheduled"][0]
+    assert entry["status"] == "scheduled"
+
+
+@pytest.mark.asyncio
+async def test_schedule_week_keeps_returned_calendar_entry_id(app_with_builders, mock_garmin_client):
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"workoutScheduleId": 456, "workoutId": 123}
+    mock_garmin_client.client.post.return_value = response
+
+    result = await app_with_builders.call_tool("schedule_week", {
+        "week": [{"date": "2026-10-20", "workout_id": 123}]
+    })
+
+    entry = json.loads(result[0][0].text)["scheduled"][0]
+    assert entry["status"] == "scheduled"
+    assert entry["scheduled_workout_id"] == 456
+
+
+@pytest.mark.asyncio
+async def test_schedule_week_empty_success_body_still_succeeds(app_with_builders, mock_garmin_client):
+    response = MagicMock(status_code=200)
+    response.json.side_effect = ValueError("No JSON body")
+    mock_garmin_client.client.post.return_value = response
+
+    result = await app_with_builders.call_tool("schedule_week", {
+        "week": [{"date": "2026-10-20", "workout_id": 123}]
+    })
+
+    entry = json.loads(result[0][0].text)["scheduled"][0]
+    assert entry["status"] == "scheduled"
 
 
 @pytest.mark.asyncio
@@ -141,6 +272,91 @@ async def test_schedule_week_partial_idempotency(
 
 
 @pytest.mark.asyncio
+async def test_schedule_week_keeps_results_when_an_item_fails(
+    app_with_builders, mock_garmin_client
+):
+    """A failing item must not discard the items already scheduled around it.
+
+    garminconnect 0.3.2 raises GarminConnectConnectionError for HTTP >= 400
+    instead of returning the response, so a 404 arrives as an exception.
+    """
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    mock_garmin_client.client.post.side_effect = [
+        ok_response,
+        GarminConnectConnectionError("API Error 404 - workout not found"),
+        ok_response,
+    ]
+
+    result = await app_with_builders.call_tool(
+        "schedule_week",
+        {
+            "week": [
+                {"date": "2026-05-12", "workout_id": 111},
+                {"date": "2026-05-13", "workout_id": 222},
+                {"date": "2026-05-14", "workout_id": 333},
+            ]
+        },
+    )
+
+    payload = json.loads(result[0][0].text)
+    scheduled = payload["scheduled"]
+    assert [s["status"] for s in scheduled] == ["scheduled", "error", "scheduled"]
+    assert scheduled[1]["workout_id"] == 222
+    assert "API Error 404" in scheduled[1]["message"]
+    assert mock_garmin_client.client.post.call_count == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_date", ["10/14/2026", "2026-02-30"])
+async def test_schedule_week_rejects_invalid_date(
+    app_with_builders, mock_garmin_client, bad_date
+):
+    """An invalid date is reported for that item and never POSTed to Garmin."""
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    mock_garmin_client.client.post.return_value = ok_response
+
+    result = await app_with_builders.call_tool(
+        "schedule_week",
+        {"week": [{"date": bad_date, "workout_id": 111}]},
+    )
+
+    payload = json.loads(result[0][0].text)
+    assert payload["scheduled"][0]["status"] == "failed"
+    assert "YYYY-MM-DD" in payload["scheduled"][0]["message"]
+    mock_garmin_client.client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_schedule_week_missing_date_does_not_abort_batch(
+    app_with_builders, mock_garmin_client
+):
+    """An entry without a date fails on its own; the rest of the week still runs."""
+    ok_response = MagicMock()
+    ok_response.status_code = 200
+    mock_garmin_client.client.post.return_value = ok_response
+
+    result = await app_with_builders.call_tool(
+        "schedule_week",
+        {
+            "week": [
+                {"workout_id": 111},
+                {"date": "2026-05-14", "workout_id": 222},
+            ]
+        },
+    )
+
+    payload = json.loads(result[0][0].text)
+    scheduled = payload["scheduled"]
+    assert scheduled[0]["status"] == "failed"
+    assert scheduled[1]["status"] == "scheduled"
+    mock_garmin_client.client.post.assert_called_once_with(
+        "connectapi", "workout-service/schedule/222", json={"date": "2026-05-14"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_create_run_workout_success(app_with_builders, mock_garmin_client):
     """create_run_workout uploads the workout and returns the workout_id."""
     mock_garmin_client.upload_workout.return_value = {
@@ -167,6 +383,38 @@ async def test_create_run_workout_success(app_with_builders, mock_garmin_client)
 
 
 @pytest.mark.asyncio
+async def test_create_run_workout_custom_hr_range(app_with_builders, mock_garmin_client):
+    """hr_min/hr_max on the tool call produce a custom bpm-range target, not a zoneNumber."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 1111111111,
+        "workoutName": "Base run - 7/20",
+    }
+
+    result = await app_with_builders.call_tool(
+        "create_run_workout",
+        {
+            "name": "Base run - 7/20",
+            "run_seconds": 1440,
+            "warmup_min": 5,
+            "cooldown_min": 5,
+            "hr_min": 136,
+            "hr_max": 148,
+        },
+    )
+
+    assert result is not None
+    payload = json.loads(result[0][0].text)
+    assert payload["status"] == "success"
+
+    uploaded_json = mock_garmin_client.upload_workout.call_args[0][0]
+    interval_step = uploaded_json["workoutSegments"][0]["workoutSteps"][1]
+    assert interval_step["targetType"]["workoutTargetTypeKey"] == "heart.rate.zone"
+    assert interval_step["targetValueOne"] == 136.0
+    assert interval_step["targetValueTwo"] == 148.0
+    assert "zoneNumber" not in interval_step
+
+
+@pytest.mark.asyncio
 async def test_create_run_workout_exception(app_with_builders, mock_garmin_client):
     """create_run_workout returns an error string when the API raises an exception."""
     mock_garmin_client.upload_workout.side_effect = Exception("Upload failed")
@@ -184,3 +432,87 @@ async def test_create_run_workout_exception(app_with_builders, mock_garmin_clien
     assert result is not None
     assert "Error" in result[0][0].text
     assert "Upload failed" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_run_interval_workout_success(app_with_builders, mock_garmin_client):
+    """create_run_interval_workout uploads the workout and returns the workout_id."""
+    mock_garmin_client.upload_workout.return_value = {
+        "workoutId": 2222222222,
+        "workoutName": "Threshold 3x6min",
+    }
+
+    result = await app_with_builders.call_tool(
+        "create_run_interval_workout",
+        {
+            "name": "Threshold 3x6min",
+            "repeats": 3,
+            "rep_seconds": 360,
+            "recovery_seconds": 180,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+            "hr_min": 172,
+            "hr_max": 180,
+        },
+    )
+
+    assert result is not None
+    payload = json.loads(result[0][0].text)
+    assert payload["status"] == "success"
+    assert payload["workout_id"] == 2222222222
+    mock_garmin_client.upload_workout.assert_called_once()
+
+    uploaded_json = mock_garmin_client.upload_workout.call_args[0][0]
+    steps = uploaded_json["workoutSegments"][0]["workoutSteps"]
+    assert steps[0]["stepType"]["stepTypeKey"] == "warmup"
+    assert steps[1]["type"] == "RepeatGroupDTO"
+    assert steps[1]["numberOfIterations"] == 3
+    assert steps[2]["stepType"]["stepTypeKey"] == "cooldown"
+
+
+@pytest.mark.asyncio
+async def test_create_run_interval_workout_exception(app_with_builders, mock_garmin_client):
+    """create_run_interval_workout returns an error string when the API raises an exception."""
+    mock_garmin_client.upload_workout.side_effect = Exception("Upload failed")
+
+    result = await app_with_builders.call_tool(
+        "create_run_interval_workout",
+        {
+            "name": "Threshold 3x6min",
+            "repeats": 3,
+            "rep_seconds": 360,
+            "recovery_seconds": 180,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+        },
+    )
+
+    assert result is not None
+    assert "Error" in result[0][0].text
+    assert "Upload failed" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_run_interval_workout_rejects_single_recovery_bound(
+    app_with_builders, mock_garmin_client
+):
+    """A lone recovery_hr_min is an error, not silently dropped from the upload."""
+    result = await app_with_builders.call_tool(
+        "create_run_interval_workout",
+        {
+            "name": "Threshold 3x6min",
+            "repeats": 3,
+            "rep_seconds": 360,
+            "recovery_seconds": 180,
+            "warmup_min": 12,
+            "cooldown_min": 8,
+            "hr_min": 172,
+            "hr_max": 180,
+            "recovery_hr_min": 120,
+        },
+    )
+
+    text = result[0][0].text
+    assert "Error creating run interval workout" in text
+    assert "recovery_hr_min and recovery_hr_max must both be provided together" in text
+    mock_garmin_client.upload_workout.assert_not_called()

@@ -3,30 +3,72 @@ Gear management functions for Garmin Connect MCP Server
 """
 
 import json
+import logging
 from typing import Any, Dict, List, Optional, Union
 
 # The garmin_client will be set by the main file
 garmin_client = None
+logger = logging.getLogger(__name__)
 
-# Activity type mappings for gear defaults
-# This is extrapolated from data and might not be complete or 100% accurate
+# Activity type mappings for gear defaults: Garmin activity typeId -> typeKey,
+# as returned by get_activity_types, for the types gear is usually a default
+# for. Any other typeId is reported as activity_<typeId>.
 ACTIVITY_TYPE_MAPPING = {
-    1: "Running",
-    2: "Cycling",
-    3: "Swimming",
-    4: "Fitness",
-    5: "Walking",
-    6: "Hiking",
-    7: "Strength",
-    8: "Other",
+    1: "running",
+    2: "cycling",
+    3: "hiking",
+    4: "other",
+    5: "mountain_biking",
+    6: "trail_running",
+    7: "street_running",
+    8: "track_running",
+    9: "walking",
+    10: "road_biking",
+    13: "strength_training",
+    15: "casual_walking",
+    16: "speed_walking",
+    18: "treadmill_running",
+    19: "cyclocross",
+    20: "downhill_biking",
+    21: "track_cycling",
+    22: "recumbent_cycling",
+    25: "indoor_cycling",
+    26: "swimming",
+    27: "lap_swimming",
+    28: "open_water_swimming",
+    143: "gravel_cycling",
+    152: "virtual_ride",
+    153: "virtual_run",
+    154: "obstacle_run",
+    156: "indoor_running",
+    175: "e_bike_mountain",
+    176: "e_bike_fitness",
+    181: "ultra_run",
 }
 
+GEAR_V2_LIST_ENDPOINT = "/gear-service/gear/v2/list"
 
-def _parse_iso_date(iso_string: str) -> str:
-    """Extract date from ISO datetime string"""
+
+def _parse_iso_date(iso_string: Optional[str]) -> Optional[str]:
+    """Extract a date from an optional ISO datetime string."""
     if not iso_string:
         return None
     return iso_string.split("T")[0] if "T" in iso_string else iso_string
+
+
+def _normalize_gear_uuid(uuid: Optional[str]) -> Optional[str]:
+    """Normalize UUIDs returned in hyphenated and unhyphenated forms."""
+    if not isinstance(uuid, str):
+        return None
+    return uuid.replace("-", "").lower()
+
+
+def _is_missing_gear(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "gear" in message
+        and ("doesn't exist" in message or "not found" in message or "404" in message)
+    )
 
 
 def configure(client):
@@ -42,8 +84,13 @@ def register_tools(app):
     async def get_gear(include_stats: bool = True) -> str:
         """Get all gear registered with the user account
 
-        Returns complete gear inventory including usage statistics and default
-        activity associations. No parameters required - user profile is fetched automatically.
+        Returns complete gear inventory including free-text notes, usage statistics,
+        and default activity associations. The notes field is null when unavailable.
+        defaults maps each activity type (Garmin typeKey, e.g. "running") to the
+        names of its default gear.
+        A gear item's stats_error reports a failed usage-statistics request;
+        a null total_distance_km means Garmin did not provide a distance.
+        No parameters required - user profile is fetched automatically.
 
         Args:
             include_stats: Include usage statistics for each gear item (default True).
@@ -60,6 +107,28 @@ def register_tools(app):
             gear_list = garmin_client.get_gear(user_profile_id)
             if not gear_list:
                 return "No gear found."
+
+            # Notes are only exposed by Garmin's v2 gear endpoint. Its UUIDs are
+            # hyphenated, unlike the legacy endpoint used for the existing fields.
+            notes_by_uuid: Dict[str, Optional[str]] = {}
+            try:
+                gear_v2_list = garmin_client.connectapi(GEAR_V2_LIST_ENDPOINT) or []
+                if not isinstance(gear_v2_list, list):
+                    logger.debug(
+                        "Unexpected Garmin v2 gear response type: %s",
+                        type(gear_v2_list).__name__,
+                    )
+                    gear_v2_list = []
+                for gear_v2 in gear_v2_list:
+                    if not isinstance(gear_v2, dict):
+                        continue
+                    normalized_v2_uuid = _normalize_gear_uuid(gear_v2.get("uuid"))
+                    if normalized_v2_uuid:
+                        notes_by_uuid[normalized_v2_uuid] = gear_v2.get("notes")
+            except Exception as exc:
+                logger.debug(
+                    "Garmin v2 gear list unavailable: %s", exc, exc_info=True
+                )
 
             # 3. Get defaults to map gear -> activity types
             defaults_list = garmin_client.get_gear_defaults(user_profile_id) or []
@@ -96,6 +165,9 @@ def register_tools(app):
                     "status": status,
                     "date_begin": _parse_iso_date(g.get("dateBegin")),
                     "date_end": _parse_iso_date(g.get("dateEnd")),
+                    "notes": notes_by_uuid.get(
+                        _normalize_gear_uuid(uuid), g.get("notes")
+                    ),
                 }
 
                 # Add max distance in km if set
@@ -111,15 +183,17 @@ def register_tools(app):
                 if include_stats:
                     try:
                         stats = garmin_client.get_gear_stats(uuid)
+                    except Exception as exc:
+                        gear_item["stats_error"] = str(exc)
+                    else:
                         if stats:
+                            distance = stats.get("totalDistance")
                             gear_item["stats"] = {
                                 "total_activities": stats.get("totalActivities"),
                                 "total_distance_km": round(
-                                    stats.get("totalDistance", 0) / 1000, 1
-                                ),
+                                    distance / 1000, 1
+                                ) if distance is not None else None,
                             }
-                    except Exception:
-                        pass  # Stats unavailable for this gear
 
                 curated_gear.append(gear_item)
 
@@ -131,14 +205,15 @@ def register_tools(app):
             # Re-sort to ensure active comes first
             curated_gear.sort(key=lambda x: x["status"] != "active")
 
-            # Build defaults summary (activity -> gear name)
-            defaults_summary = {}
+            # Build defaults summary (activity -> gear names; an activity type
+            # can have several default gear items, and displayName is null for
+            # gear without a nickname)
+            defaults_summary: Dict[str, List[str]] = {}
             for uuid, activities in defaults_by_uuid.items():
-                gear_name = next(
-                    (g["name"] for g in curated_gear if g["uuid"] == uuid), None
-                )
+                gear = next((g for g in curated_gear if g["uuid"] == uuid), {})
+                gear_name = gear.get("name") or gear.get("full_name") or uuid
                 for activity in activities:
-                    defaults_summary[activity] = gear_name
+                    defaults_summary.setdefault(activity, []).append(gear_name)
 
             return json.dumps(
                 {
@@ -176,6 +251,11 @@ def register_tools(app):
                 indent=2,
             )
         except Exception as e:
+            if _is_missing_gear(e):
+                return (
+                    f"No gear association changed; gear {gear_uuid} was not found "
+                    f"for activity {activity_id}."
+                )
             return f"Error adding gear to activity: {str(e)}"
 
     @app.tool()
@@ -201,6 +281,11 @@ def register_tools(app):
                 indent=2,
             )
         except Exception as e:
+            if _is_missing_gear(e):
+                return (
+                    f"No gear association changed; gear {gear_uuid} was not found "
+                    f"for activity {activity_id}."
+                )
             return f"Error removing gear from activity: {str(e)}"
 
     return app

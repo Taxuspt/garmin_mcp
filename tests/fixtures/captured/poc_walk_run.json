@@ -34,11 +34,21 @@
         {
           "type": "RepeatGroupDTO",
           "stepOrder": 2,
+          "stepType": {
+            "stepTypeId": 6,
+            "stepTypeKey": "repeat"
+          },
           "numberOfIterations": 7,
+          "smartRepeat": false,
+          "endCondition": {
+            "conditionTypeId": 7,
+            "conditionTypeKey": "iterations"
+          },
+          "endConditionValue": 7.0,
           "workoutSteps": [
             {
               "type": "ExecutableStepDTO",
-              "stepOrder": 1,
+              "stepOrder": 3,
               "stepType": {
                 "stepTypeId": 3,
                 "stepTypeKey": "interval"
@@ -57,7 +67,7 @@
             },
             {
               "type": "ExecutableStepDTO",
-              "stepOrder": 2,
+              "stepOrder": 4,
               "stepType": {
                 "stepTypeId": 4,
                 "stepTypeKey": "recovery"
@@ -78,7 +88,7 @@
         },
         {
           "type": "ExecutableStepDTO",
-          "stepOrder": 3,
+          "stepOrder": 5,
           "stepType": {
             "stepTypeId": 2,
             "stepTypeKey": "cooldown"

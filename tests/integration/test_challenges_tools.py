@@ -3,6 +3,9 @@ Integration tests for challenges module MCP tools
 
 Tests all 9 challenges and badges tools using FastMCP integration with mocked Garmin API responses.
 """
+import json
+import time
+
 import pytest
 from unittest.mock import Mock
 from mcp.server.fastmcp import FastMCP
@@ -22,6 +25,26 @@ def app_with_challenges(mock_garmin_client):
     app = FastMCP("Test Challenges")
     app = challenges.register_tools(app)
     return app
+
+
+@pytest.mark.asyncio
+async def test_completed_badge_challenge_description_matches_library_endpoint(
+    app_with_challenges, mock_garmin_client
+):
+    """The LLM contract must distinguish completed history from active challenges."""
+    from garminconnect import Garmin
+
+    client = Garmin()
+    client.connectapi = Mock(return_value=[])
+    mock_garmin_client.get_badge_challenges.side_effect = client.get_badge_challenges
+    await app_with_challenges.call_tool("get_badge_challenges", {})
+    client.connectapi.assert_called_once_with(
+        "/badgechallenge-service/badgeChallenge/completed",
+        params={"start": "1", "limit": "20"},
+    )
+    tool = next(tool for tool in await app_with_challenges.list_tools() if tool.name == "get_badge_challenges")
+    assert "completed and in-progress" not in tool.description
+    assert "get_non_completed_badge_challenges" in tool.description
 
 
 @pytest.mark.asyncio
@@ -77,6 +100,50 @@ async def test_get_goals_future(app_with_challenges, mock_garmin_client):
 
 
 @pytest.mark.asyncio
+async def test_get_goals_returns_connect_ui_cycling_goal(
+    app_with_challenges, mock_garmin_client
+):
+    """Connect UI goals need Sec-Fetch-Site: same-origin and a 1-based start."""
+    connect_ui_goal = {
+        "id": 1,
+        "name": "GCC 2026",
+        "type": "distance_accumulation",
+        "distanceInMeters": 160934.0,
+        "startDate": "2026-09-01",
+        "endDate": "2026-09-30",
+        "activityType": "cycling",
+        "period": "one_month",
+        "progress": {"percent": 17, "distanceInMeters": 28089.0},
+        "remaining": {"percent": 83, "days": 13, "distanceInMeters": 132845.0},
+        "active": True,
+        "completed": False,
+    }
+    mock_garmin_client.garmin_connect_goals_url = "/goal-service/goal/goals"
+    mock_garmin_client.get_goals.return_value = []
+
+    def connectapi(url, params=None, headers=None):
+        params = params or {}
+        if (headers or {}).get("Sec-Fetch-Site") != "same-origin":
+            return []
+        if params.get("start") == "0" or params.get("status") != "active":
+            return []
+        return [connect_ui_goal]
+
+    mock_garmin_client.connectapi.side_effect = connectapi
+
+    result = await app_with_challenges.call_tool(
+        "get_goals",
+        {"goal_type": "active"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data[0]["name"] == "GCC 2026"
+    assert data[0]["activity_type"] == "cycling"
+    assert data[0]["progress_percent"] == 17
+    mock_garmin_client.get_goals.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_personal_record_tool(app_with_challenges, mock_garmin_client):
     """Test get_personal_record tool returns personal records"""
     # Setup mock
@@ -89,8 +156,50 @@ async def test_get_personal_record_tool(app_with_challenges, mock_garmin_client)
     )
 
     # Verify
-    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data == [
+        {
+            "record_type": "Fastest 5K",
+            "type_id": 3,
+            "value": "20:00",
+            "raw_value": 1200.0,
+            # The local date, not the GMT one (2024-01-15)
+            "date": "2024-01-14",
+            "activity_id": 12345678901,
+        },
+        {
+            "record_type": "Most Steps Day",
+            "type_id": 12,
+            "value": "25,000",
+            "raw_value": 25000.0,
+            "date": "2024-01-10",
+        },
+    ]
     mock_garmin_client.get_personal_record.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_personal_record_date_falls_back_to_gmt_in_utc(
+    app_with_challenges, mock_garmin_client, monkeypatch
+):
+    """Without the local formatted timestamp, the date comes from the GMT
+    epoch read as UTC -- not shifted by the server's own timezone."""
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is unavailable on this platform")
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    try:
+        record = {**MOCK_PERSONAL_RECORD[0]}
+        del record["prStartTimeLocalFormatted"]
+        mock_garmin_client.get_personal_record.return_value = [record]
+
+        result = await app_with_challenges.call_tool("get_personal_record", {})
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+    data = json.loads(result[0][0].text)
+    assert data[0]["date"] == "2024-01-15"
 
 
 @pytest.mark.asyncio
@@ -267,15 +376,17 @@ async def test_get_race_predictions_tool(app_with_challenges, mock_garmin_client
 @pytest.mark.asyncio
 async def test_get_inprogress_virtual_challenges_tool(app_with_challenges, mock_garmin_client):
     """Test get_inprogress_virtual_challenges tool"""
-    # Setup mock
+    # Match the payload shape returned by Garmin for an active expedition.
     virtual_challenges = [
         {
             "uuid": "GHI789",
-            "name": "Virtual NYC Marathon",
-            "startDate": "2024-01-01T00:00:00.0",
-            "endDate": "2024-01-31T23:59:59.0",
-            "progress": 28000.0,
-            "target": 42195.0,
+            "badgeChallengeName": "Camino de Santiago",
+            "startDate": None,
+            "endDate": None,
+            "badgeUnitId": 1,
+            "badgeProgressValue": 159.0,
+            "badgeTargetValue": 784000.0,
+            "userJoined": True,
         }
     ]
     mock_garmin_client.get_inprogress_virtual_challenges.return_value = virtual_challenges
@@ -289,6 +400,157 @@ async def test_get_inprogress_virtual_challenges_tool(app_with_challenges, mock_
     # Verify
     assert result is not None
     mock_garmin_client.get_inprogress_virtual_challenges.assert_called_once_with(1, 20)
+    payload = json.loads(result[0][0].text)
+    assert payload == {
+        "total": 1,
+        "challenges": [
+            {
+                "name": "Camino de Santiago",
+                "uuid": "GHI789",
+                "start_date": None,
+                "end_date": None,
+                "progress_meters": 159.0,
+                "target_meters": 784000.0,
+                "progress_km": "0.16 km",
+                "target_km": "784.00 km",
+                "progress_percent": "0.0%",
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("legacy_fields", "expected_name", "expected_progress", "expected_percent"),
+    [
+        (
+            {
+                "name": "Legacy Expedition",
+                "progress": 28000.0,
+                "target": 42195.0,
+            },
+            "Legacy Expedition",
+            28000.0,
+            "66.4%",
+        ),
+        (
+            {
+                "challengeName": "Alternate Legacy Expedition",
+                "progressValue": 0.0,
+                "targetValue": 42195.0,
+            },
+            "Alternate Legacy Expedition",
+            0.0,
+            "0.0%",
+        ),
+    ],
+)
+async def test_get_inprogress_virtual_challenges_legacy_fields(
+    app_with_challenges,
+    mock_garmin_client,
+    legacy_fields,
+    expected_name,
+    expected_progress,
+    expected_percent,
+):
+    """Legacy virtual-challenge field names remain supported."""
+    mock_garmin_client.get_inprogress_virtual_challenges.return_value = [
+        {
+            "uuid": "LEGACY123",
+            "startDate": "2024-01-01T00:00:00.0",
+            "endDate": "2024-01-31T23:59:59.0",
+            **legacy_fields,
+        }
+    ]
+
+    result = await app_with_challenges.call_tool(
+        "get_inprogress_virtual_challenges",
+        {},
+    )
+
+    payload = json.loads(result[0][0].text)
+    assert payload["challenges"][0] == {
+        "name": expected_name,
+        "uuid": "LEGACY123",
+        "start_date": "2024-01-01",
+        "end_date": "2024-01-31",
+        "progress_meters": expected_progress,
+        "target_meters": 42195.0,
+        "progress_km": f"{expected_progress / 1000:.2f} km",
+        "target_km": "42.20 km",
+        "progress_percent": expected_percent,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("unit_id", "progress", "target", "formatted_progress", "formatted_target"),
+    [
+        (2, 120.0, 1000.0, "120 m", "1000 m"),
+        (5, 120000.0, 200000.0, "120,000", "200,000"),
+        (7, 3600.0, 7200.0, "1:00:00", "2:00:00"),
+    ],
+)
+async def test_get_inprogress_virtual_challenges_non_distance_units(
+    app_with_challenges,
+    mock_garmin_client,
+    unit_id,
+    progress,
+    target,
+    formatted_progress,
+    formatted_target,
+):
+    """Non-distance virtual challenges are not labeled as meters or kilometers."""
+    mock_garmin_client.get_inprogress_virtual_challenges.return_value = [
+        {
+            "uuid": "NON_DISTANCE",
+            "badgeChallengeName": "Non-distance Expedition",
+            "badgeUnitId": unit_id,
+            "badgeProgressValue": progress,
+            "badgeTargetValue": target,
+        }
+    ]
+
+    result = await app_with_challenges.call_tool(
+        "get_inprogress_virtual_challenges",
+        {},
+    )
+
+    payload = json.loads(result[0][0].text)
+    challenge = payload["challenges"][0]
+    assert challenge["progress"] == formatted_progress
+    assert challenge["target"] == formatted_target
+    assert "progress_meters" not in challenge
+    assert "target_meters" not in challenge
+    assert "progress_km" not in challenge
+    assert "target_km" not in challenge
+
+
+@pytest.mark.asyncio
+async def test_get_inprogress_virtual_challenges_skips_zero_target(
+    app_with_challenges, mock_garmin_client
+):
+    """A zero target does not produce a partial progress block."""
+    mock_garmin_client.get_inprogress_virtual_challenges.return_value = [
+        {
+            "uuid": "ZERO_TARGET",
+            "badgeChallengeName": "",
+            "name": "Fallback Name",
+            "badgeUnitId": 1,
+            "badgeProgressValue": 0.0,
+            "badgeTargetValue": 0.0,
+        }
+    ]
+
+    result = await app_with_challenges.call_tool(
+        "get_inprogress_virtual_challenges",
+        {},
+    )
+
+    payload = json.loads(result[0][0].text)
+    challenge = payload["challenges"][0]
+    assert challenge["name"] == "Fallback Name"
+    assert set(challenge) == {"name", "uuid", "start_date", "end_date"}
 
 
 # Error handling tests

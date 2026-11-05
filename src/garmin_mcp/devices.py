@@ -186,13 +186,12 @@ def register_tools(app):
                 return "No primary training device found."
 
             # Extract primary device ID
-            primary_device = data.get("PrimaryTrainingDevice", {})
+            primary_device = data.get("PrimaryTrainingDevice") or {}
             primary_device_id = primary_device.get("deviceId")
 
             # Get primary training devices list
-            primary_devices = data.get("PrimaryTrainingDevices", {}).get(
-                "deviceWeights", []
-            )
+            primary_training_devices = data.get("PrimaryTrainingDevices") or {}
+            primary_devices = primary_training_devices.get("deviceWeights") or []
 
             curated = {
                 "primary_device_id": primary_device_id,
@@ -215,7 +214,7 @@ def register_tools(app):
                 curated["training_device_count"] = len(devices_list)
 
             # Add wearable device count
-            wearable_data = data.get("WearableDevices", {})
+            wearable_data = data.get("WearableDevices") or {}
             if wearable_data.get("wearableDeviceCount"):
                 curated["wearable_device_count"] = wearable_data.get(
                     "wearableDeviceCount"
@@ -226,36 +225,58 @@ def register_tools(app):
             return f"Error retrieving primary training device: {str(e)}"
 
     @app.tool()
-    async def get_device_solar_data(device_id: str, date: str) -> str:
+    async def get_device_solar_data(device_id: Union[int, str], date: str) -> str:
         """Get solar data for a specific device
 
-        Returns solar charging data for devices with solar panels (e.g., Instinct Solar,
-        Fenix Solar). Only applicable to solar-capable devices.
+        Returns a per-day summary of solar charging for devices with solar panels
+        (e.g., Instinct Solar, Fenix Solar): activity time gained from solar, and
+        the average/peak solar utilization and minutes with solar input across the
+        day's per-minute readings. Only applicable to solar-capable devices.
 
         Args:
             device_id: Device ID (can be obtained from get_devices)
             date: Date in YYYY-MM-DD format
         """
+        no_solar = (
+            f"No solar data available for device ID {device_id} on {date}. "
+            "This device may not have solar capabilities."
+        )
         try:
             solar_data = garmin_client.get_device_solar_data(device_id, date)
             if not solar_data:
                 return f"No solar data found for device ID {device_id} on {date}."
 
             # Check if there's actual data in the response
-            daily_data = solar_data.get("solarDailyDataDTOs", [])
+            daily_data = solar_data.get("solarDailyDataDTOs") or []
             if not daily_data:
-                return f"No solar data available for device ID {device_id} on {date}. This device may not have solar capabilities."
+                return no_solar
 
-            # Curate solar data from the daily DTOs
+            # Curate solar data from the daily DTOs. solarInputReadings is a
+            # per-minute series (~1440 entries a day), so summarise it rather
+            # than returning it.
             curated_days = []
             for day_data in daily_data:
+                readings = day_data.get("solarInputReadings") or []
+                utilization = [
+                    r["solarUtilization"]
+                    for r in readings
+                    if r.get("solarUtilization") is not None
+                ]
+                gained_ms = day_data.get("totalActivityTimeGainedMs")
                 curated_day = {
-                    "date": day_data.get("calendarDate"),
-                    "solar_intensity_avg": day_data.get("solarIntensityAvg"),
-                    "solar_intensity_max": day_data.get("solarIntensityMax"),
-                    "battery_charged_percent": day_data.get("batteryCharged"),
-                    "battery_used_percent": day_data.get("batteryUsed"),
-                    "battery_net_percent": day_data.get("batteryNet"),
+                    "date": day_data.get("localConnectDate"),
+                    "activity_time_gained_minutes": (
+                        round(gained_ms / 60000, 1) if gained_ms is not None else None
+                    ),
+                    "solar_utilization_avg_pct": (
+                        round(sum(utilization) / len(utilization), 2)
+                        if utilization
+                        else None
+                    ),
+                    "solar_utilization_max_pct": max(utilization) if utilization else None,
+                    "minutes_with_solar_input": (
+                        sum(1 for u in utilization if u > 0) if utilization else None
+                    ),
                 }
                 # Remove None values
                 curated_day = {k: v for k, v in curated_day.items() if v is not None}
@@ -265,6 +286,10 @@ def register_tools(app):
                 {"device_id": device_id, "solar_data": curated_days}, indent=2
             )
         except Exception as e:
+            # garminconnect raises this when the response has no
+            # deviceSolarInput, which is what a non-solar device returns.
+            if "No device solar input data received" in str(e):
+                return no_solar
             return f"Error retrieving solar data: {str(e)}"
 
     def _format_alarm_time(minutes: int) -> str:
@@ -328,5 +353,81 @@ def register_tools(app):
             )
         except Exception as e:
             return f"Error retrieving device alarms: {str(e)}"
+
+    @app.tool()
+    async def push_workout_to_device(
+        workout_id: int, device_id: Optional[int] = None
+    ) -> str:
+        """Send a workout from the workout library to a Garmin device
+
+        Queues the workout in Garmin Connect's device message queue, the same
+        as "Send to Device" in the Garmin Connect app. The watch picks it up
+        at its next sync with Garmin Connect (phone app or Wi-Fi), so it does
+        not appear on the watch immediately. Scheduling a workout does not
+        need this: scheduled workouts reach the watch's calendar on their own.
+
+        Each call queues another copy, so do not push the same workout twice.
+
+        Args:
+            workout_id: ID of the workout to send (from get_workouts or upload_workout)
+            device_id: Device ID (optional; defaults to the most recently used
+                device; can be obtained from get_devices or get_device_last_used)
+        """
+        try:
+            if device_id is None:
+                last_used = garmin_client.get_device_last_used()
+                device_id = (last_used or {}).get("userDeviceId")
+                if not device_id:
+                    return json.dumps({
+                        "status": "failed",
+                        "workout_id": workout_id,
+                        "message": (
+                            "No default device found. Pass device_id explicitly "
+                            "(see get_devices)."
+                        ),
+                    }, indent=2)
+
+            # Garmin's message queue shows this name on the device.
+            workout = garmin_client.get_workout_by_id(workout_id) or {}
+            workout_name = workout.get("workoutName") or f"Workout {workout_id}"
+
+            payload = [{
+                "deviceId": device_id,
+                "messageUrl": f"workout-service/workout/FIT/{workout_id}",
+                "messageType": "workouts",
+                "groupName": None,
+                "messageName": workout_name,
+                "priority": 1,
+                "fileType": "FIT",
+                "metaDataId": workout_id,
+            }]
+            url = "device-service/devicemessage/messages"
+            response = garmin_client.client.post("connectapi", url, json=payload)
+
+            if response.status_code in (200, 204):
+                return json.dumps({
+                    "status": "success",
+                    "workout_id": workout_id,
+                    "workout_name": workout_name,
+                    "device_id": device_id,
+                    "message": (
+                        f"Queued workout {workout_id} for device {device_id}; "
+                        "it arrives on the device at its next sync"
+                    ),
+                }, indent=2)
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "device_id": device_id,
+                "http_status": response.status_code,
+                "message": f"Failed to push workout: HTTP {response.status_code}",
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "device_id": device_id,
+                "message": f"Failed to push workout: {str(e)}",
+            }, indent=2)
 
     return app

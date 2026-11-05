@@ -49,13 +49,18 @@ MOCK_ACTIVITY_DETAILS = {
     "maxHR": 165,
     "calories": 350,
     "summaryDTO": {
-        "totalDistance": 5000.0,
-        "totalCalories": 350,
-        "avgHR": 145,
-        "maxHR": 165
+        "startTimeLocal": "2024-01-15 07:00:00",
+        "startTimeGMT": "2024-01-15 07:00:00",
+        "distance": 5000.0,
+        "duration": 1800.0,
+        "calories": 350,
+        "averageHR": 145,
+        "maxHR": 165,
+        "elevationGain": 50.5,
     },
     "metadataDTO": {
-        "deviceName": "Garmin Forerunner 945"
+        "deviceName": "Garmin Forerunner 945",
+        "lapCount": 2,
     }
 }
 
@@ -207,15 +212,55 @@ MOCK_DAILY_STEPS = [
     }
 ]
 
-MOCK_TRAINING_READINESS = {
-    "trainingReadinessLevel": 75,
-    "trainingReadinessLevelKey": "GOOD",
-    "sleepScore": 85,
-    "hrvStatus": "BALANCED",
-    "bodyBatteryLevel": 75,
-    "restingHeartRate": 55,
-    "recentExerciseLoad": 250
-}
+# get_training_readiness returns a list of snapshots for the day (one per
+# reset: after waking, after an exercise, ...), not a single dict.
+MOCK_TRAINING_READINESS = [
+    {
+        "calendarDate": "2024-01-15",
+        "timestamp": "2024-01-15T14:05:00.0",
+        "timestampLocal": "2024-01-15T06:05:00.0",
+        "inputContext": "AFTER_WAKEUP_RESET",
+        "level": "MODERATE",
+        "score": 62,
+        "feedbackShort": "WELL_RECOVERED",
+        "sleepScore": 81,
+        "sleepScoreFactorPercent": 78,
+        "sleepScoreFactorFeedback": "GOOD",
+        "recoveryTime": 330,
+        "recoveryTimeChangePhrase": "NO_CHANGE_SLEEP",
+        "recoveryTimeFactorPercent": 90,
+        "recoveryTimeFactorFeedback": "GOOD",
+        "acwrFactorPercent": 95,
+        "acwrFactorFeedback": "VERY_GOOD",
+        "acuteLoad": 310,
+        "hrvFactorPercent": 70,
+        "hrvFactorFeedback": "GOOD",
+        "hrvWeeklyAverage": 58,
+        "stressHistoryFactorPercent": 80,
+        "stressHistoryFactorFeedback": "GOOD",
+        "sleepHistoryFactorPercent": 65,
+        "sleepHistoryFactorFeedback": "MODERATE",
+    },
+    {
+        "calendarDate": "2024-01-15",
+        "timestamp": "2024-01-15T19:40:00.0",
+        "timestampLocal": "2024-01-15T11:40:00.0",
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "level": "LOW",
+        "score": 38,
+        "feedbackShort": "TAKE_IT_EASY",
+        "recoveryTime": 1080,
+        "recoveryTimeChangePhrase": "INCREASED_EXERCISE",
+        "recoveryTimeFactorPercent": 40,
+        "recoveryTimeFactorFeedback": "POOR",
+        "acwrFactorPercent": 85,
+        "acwrFactorFeedback": "GOOD",
+        "acuteLoad": 395,
+        "hrvFactorPercent": 70,
+        "hrvFactorFeedback": "GOOD",
+        "hrvWeeklyAverage": 58,
+    },
+]
 
 MOCK_BODY_BATTERY = [
     {
@@ -439,15 +484,40 @@ MOCK_GOALS = {
     ]
 }
 
-MOCK_PERSONAL_RECORD = {
-    "personalRecords": [
-        {
-            "recordType": "FASTEST_5K",
-            "recordValue": 1200.0,  # 20 minutes
-            "recordDate": "2024-01-15"
-        }
-    ]
-}
+# get_personal_record returns a list of records, not a dict
+MOCK_PERSONAL_RECORD = [
+    {
+        "id": 1001,
+        "typeId": 3,  # Fastest 5K
+        "status": "ACCEPTED",
+        "activityId": 12345678901,
+        "activityName": "Evening Run",
+        "activityType": "running",
+        "value": 1200.0,  # 20 minutes
+        # Set late on Jan 14 local time, which is already Jan 15 in GMT
+        "prStartTimeGmt": 1705304700000,
+        "prStartTimeGmtFormatted": "2024-01-15T07:45:00.0",
+        "prStartTimeLocal": 1705275900000,
+        "prStartTimeLocalFormatted": "2024-01-14T23:45:00.0",
+        "prTypeLabelKey": None,
+        "poolLengthUnit": None,
+    },
+    {
+        "id": 1002,
+        "typeId": 12,  # Most Steps Day
+        "status": "ACCEPTED",
+        "activityId": None,
+        "activityName": None,
+        "activityType": None,
+        "value": 25000.0,
+        "prStartTimeGmt": 1704873600000,
+        "prStartTimeGmtFormatted": "2024-01-10T08:00:00.0",
+        "prStartTimeLocal": 1704844800000,
+        "prStartTimeLocalFormatted": "2024-01-10T00:00:00.0",
+        "prTypeLabelKey": None,
+        "poolLengthUnit": None,
+    },
+]
 
 MOCK_BADGES = [
     {
@@ -486,6 +556,45 @@ MOCK_DEVICE_LAST_USED = {
     "lastUsedDeviceApplicationKey": "123456789",
     "lastUsedDeviceUploadTime": 1706457600000,
     "imageUrl": "https://example.com/device.png",
+}
+
+# get_device_solar_data returns resp["deviceSolarInput"]: one DTO per day with a
+# per-minute solarInputReadings series (~1440 entries; shortened here). Shape
+# from a live Instinct 2X Solar (upstream PR #247); values are made up.
+MOCK_DEVICE_SOLAR_DATA = {
+    "solarDailyDataDTOs": [
+        {
+            "localConnectDate": "2024-01-15",
+            "deviceId": 123456789,
+            "totalActivityTimeGainedMs": 1800000,
+            "solarInputReadings": [
+                {
+                    "readingTimestampGmt": "2024-01-15T09:00:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:00:00.0",
+                    "solarUtilization": 0.0,
+                    "activityTimeGainedMs": 0,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:01:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:01:00.0",
+                    "solarUtilization": 40.0,
+                    "activityTimeGainedMs": 12000,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:02:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:02:00.0",
+                    "solarUtilization": 100.0,
+                    "activityTimeGainedMs": 30000,
+                },
+                {
+                    "readingTimestampGmt": "2024-01-15T09:03:00.0",
+                    "readingTimestampLocal": "2024-01-15T10:03:00.0",
+                    "solarUtilization": 20.0,
+                    "activityTimeGainedMs": 6000,
+                },
+            ],
+        }
+    ]
 }
 
 # Weight Management - API returns nested structure
@@ -592,6 +701,19 @@ MOCK_GEAR = [
         "dateEnd": "2024-04-01T19:14:05.0",
         "maximumMeters": 700000.0,
         "notified": True,
+    },
+]
+
+# Gear notes are exposed by Garmin's v2 endpoint, whose UUIDs are hyphenated.
+MOCK_GEAR_V2 = [
+    {
+        "uuid": "8ABFC40D-71FB-4860-BCE1-9072B6C79644",
+        "name": "Nimbus 25",
+        "notes": "Rotation shoe; blue laces.",
+    },
+    {
+        "uuid": "6f27ed27-3977-49ac-9f6f-450e039c2424",
+        "name": "Nimbus 24",
     },
 ]
 
@@ -832,19 +954,9 @@ MOCK_WEEKLY_INTENSITY_MINUTES = [
     },
 ]
 
-MOCK_MORNING_TRAINING_READINESS = {
-    "readinessScore": 75,
-    "readinessLevel": "GOOD",
-    "recoveryTime": 12,
-    "hrvStatus": "BALANCED",
-    "sleepQuality": "GOOD",
-    "sleepScore": 82,
-    "restingHeartRate": 55,
-    "hrvBaseline": 65,
-    "hrvLastNight": 68,
-    "bodyBattery": 85,
-    "stressLevel": 25,
-}
+# get_morning_training_readiness returns the AFTER_WAKEUP_RESET entry of the
+# get_training_readiness list as-is, not a differently-shaped summary.
+MOCK_MORNING_TRAINING_READINESS = MOCK_TRAINING_READINESS[0]
 
 # Activity Management
 MOCK_ACTIVITY_COUNT = 523
@@ -924,12 +1036,14 @@ MOCK_ENDURANCE_SCORE = {
 }
 
 # Training - Lactate Threshold
+# Speeds from a real Garmin response (2026-10-04); Garmin Connect shows them as
+# 4:17 min/km (0.3888878) and 4:15 min/km (0.39166557).
 # Response format for latest=True
 MOCK_LACTATE_THRESHOLD = {
     "speed_and_heart_rate": {
         "userProfilePK": 12345678,
         "calendarDate": "2024-01-15T10:30:00.000",
-        "speed": 0.32222132,
+        "speed": 0.3888878,
         "heartRate": 169,
         "heartRateCycling": None,
     },
@@ -945,14 +1059,15 @@ MOCK_LACTATE_THRESHOLD = {
     },
 }
 
-# Response format for latest=False (date range)
+# Response format for latest=False (date range). garminconnect assembles this
+# dict itself, with snake_case keys: {"speed", "heart_rate", "power"}.
 MOCK_LACTATE_THRESHOLD_RANGE = {
     "speed": [
-        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.29444, "updatedDate": "2024-01-08"},
-        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.30555, "updatedDate": "2024-01-12"},
-        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.31666, "updatedDate": "2024-01-15"},
+        {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-08"},
+        {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 0.39166557, "updatedDate": "2024-01-12"},
+        {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 0.3888878, "updatedDate": "2024-01-15"},
     ],
-    "heartRate": [
+    "heart_rate": [
         {"from": "2024-01-08", "until": "2024-01-08", "series": "running", "value": 165, "updatedDate": "2024-01-08"},
         {"from": "2024-01-12", "until": "2024-01-12", "series": "running", "value": 167, "updatedDate": "2024-01-12"},
         {"from": "2024-01-15", "until": "2024-01-15", "series": "running", "value": 169, "updatedDate": "2024-01-15"},
@@ -972,3 +1087,61 @@ MOCK_CYCLING_FTP = {
     "functionalThresholdPower": 294,
     "biometricSourceType": "CHANGE_LOG",
 }
+
+# Training - Running Tolerance
+# All three load fields are in meters despite the name — acuteImpactLoad is an
+# intensity-adjusted distance-equivalent, not an arbitrary load score.
+MOCK_RUNNING_TOLERANCE_DAILY = [
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15",
+        "acuteImpactLoad": 25000,
+        "acuteDistance": 22000,
+        "acuteTolerance": 34000,
+        "runningToleranceFeedBackPhrase": "MEDIUM_LOAD",
+    }
+]
+
+# Deliberately out of chronological order — the real API returns daily
+# aggregation this way, so the trend tool must sort it itself.
+MOCK_RUNNING_TOLERANCE_DAILY_TREND = [
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-16",
+        "acuteImpactLoad": 26000,
+        "acuteDistance": 23000,
+        "acuteTolerance": 34500,
+        "runningToleranceFeedBackPhrase": "MEDIUM_LOAD",
+    },
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15",
+        "acuteImpactLoad": 25000,
+        "acuteDistance": 22000,
+        "acuteTolerance": 34000,
+        "runningToleranceFeedBackPhrase": "MEDIUM_LOAD",
+    },
+]
+
+MOCK_RUNNING_TOLERANCE_WEEKLY = [
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-08",
+        "totalImpactLoad": 26000,
+        "totalDistance": 24000.0,
+        "tolerance": 33000,
+        "startOfWeek": "2024-01-02",
+        "endOfWeek": "2024-01-08",
+        "weekIndex": 1900,
+    },
+    {
+        "userProfilePK": 12345678,
+        "calendarDate": "2024-01-15",
+        "totalImpactLoad": 28000,
+        "totalDistance": 26000.0,
+        "tolerance": 34000,
+        "startOfWeek": "2024-01-09",
+        "endOfWeek": "2024-01-15",
+        "weekIndex": 1901,
+    },
+]

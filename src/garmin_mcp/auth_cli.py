@@ -14,20 +14,16 @@ import requests
 from garminconnect import Garmin, GarminConnectAuthenticationError, GarminConnectConnectionError, GarminConnectTooManyRequestsError
 
 from garmin_mcp.token_utils import (
+    TOKEN_FILE_NAME,
+    inspect_token_store,
     get_token_path,
     get_token_base64_path,
     token_exists,
     validate_tokens,
     get_token_info,
+    resolve_token_path,
+    secure_token_dir as _secure_token_dir,
 )
-
-
-def _secure_token_dir(path: str) -> None:
-    """Set owner-only permissions on a token directory and all files inside it."""
-    os.chmod(path, 0o700)
-    for entry in os.scandir(path):
-        if entry.is_file():
-            os.chmod(entry.path, 0o600)
 
 
 def get_mfa() -> str:
@@ -93,7 +89,7 @@ def _verify_saved_tokens(token_path: str, is_cn: bool = False) -> tuple[bool, st
     silent "logged in as None" into a real failure.
 
     Returns:
-        (True, full_name) on success, or (False, error_summary) on failure.
+        (True, account_name) on success, or (False, error_summary) on failure.
     """
     import io
 
@@ -103,10 +99,10 @@ def _verify_saved_tokens(token_path: str, is_cn: bool = False) -> tuple[bool, st
     sys.stderr = io.StringIO()
     try:
         garmin = Garmin(is_cn=is_cn)
+        # login() raises unless it can fetch the profile, so getting past it
+        # means the tokens work. The profile's fullName may still be empty.
         garmin.login(token_path)
-        name = garmin.get_full_name()
-        if not name:
-            return False, "session is not authenticated (no profile returned)"
+        name = garmin.get_full_name() or garmin.display_name or "your Garmin account"
         return True, name
     except Exception as e:
         return False, str(e).split(":")[0].strip() or e.__class__.__name__
@@ -127,6 +123,9 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         bool: True if authentication succeeded, False otherwise
     """
     import io
+
+    token_path = resolve_token_path(token_path)
+    token_base64_path = resolve_token_path(token_base64_path)
 
     # Check if tokens already exist and are valid
     if not force_reauth and token_exists(token_path):
@@ -163,7 +162,10 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
     try:
         garmin = Garmin(email=email, password=password, is_cn=is_cn, prompt_mfa=get_mfa, return_on_mfa=True)
-        result1, result2 = garmin.login()
+        # Exchange the credentials on the client directly. Garmin.login() with
+        # no tokenstore falls back to $GARMINTOKENS and, if tokens load from
+        # there, uses them instead of these credentials.
+        result1, result2 = garmin.client.login(email, password, return_on_mfa=True)
 
         if result1 == "needs_mfa":
             mfa_code = get_mfa()
@@ -171,20 +173,28 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
 
         # Save tokens to directory
         garmin.client.dump(token_path)
-        expanded_token_path = os.path.expanduser(token_path)
-        _secure_token_dir(expanded_token_path)
-        print(f"\n✓ OAuth tokens saved to: {expanded_token_path}")
+        _secure_token_dir(token_path)
+        print(f"\n✓ OAuth tokens saved to: {token_path}")
 
-        # Save tokens as base64
-        token_json_path = os.path.join(expanded_token_path, "garmin_tokens.json")
-        expanded_base64_path = os.path.expanduser(token_base64_path)
-        with open(token_json_path, "r") as f:
-            token_data = f.read()
-        token_base64 = base64.b64encode(token_data.encode()).decode()
-        with open(expanded_base64_path, "w") as token_file:
-            token_file.write(token_base64)
-        os.chmod(expanded_base64_path, 0o600)
-        print(f"✓ OAuth tokens (base64) saved to: {expanded_base64_path}")
+        # The directory is the login source. An optional base64 export failure
+        # must not skip verification or invalidate the saved directory tokens.
+        try:
+            token_json_path = os.path.join(token_path, "garmin_tokens.json")
+            with open(token_json_path, "r") as f:
+                token_data = f.read()
+            token_base64 = base64.b64encode(token_data.encode()).decode()
+            with open(token_base64_path, "w") as token_file:
+                # A permission failure must occur before secrets are written.
+                os.chmod(token_base64_path, 0o600)
+                token_file.write(token_base64)
+        except OSError as e:
+            print(
+                f"WARNING: OAuth tokens were saved to '{token_path}', but the optional "
+                f"base64 export to '{token_base64_path}' failed: {e}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"✓ OAuth tokens (base64) saved to: {token_base64_path}")
 
         # Verify tokens work with an independent token-based login. The login
         # above runs with return_on_mfa=True, which skips profile loading, so a
@@ -193,9 +203,13 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         # printing "Logged in as: None" and exiting 0.
         is_valid, name_or_err = _verify_saved_tokens(token_path, is_cn)
         if not is_valid:
-            print(f"\n✗ Authentication failed: saved tokens do not authenticate", file=sys.stderr)
+            print(
+                f"\n✗ OAuth tokens were saved to '{token_path}', but loading the "
+                "profile/settings from the saved tokens failed.",
+                file=sys.stderr,
+            )
             print(f"  {name_or_err}", file=sys.stderr)
-            print("  Garmin may be rate-limiting your IP — wait a few minutes and retry.", file=sys.stderr)
+            print("  Token files were retained. Resolve the reported error and retry loading them.", file=sys.stderr)
             return False
 
         print(f"✓ Authentication successful!")
@@ -233,14 +247,10 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         return False
 
     except GarminConnectConnectionError as e:
-        error_msg = str(e)
-        print(f"\n✗ Authentication error", file=sys.stderr)
-        if "401" in error_msg or "403" in error_msg:
-            print("  Invalid credentials. Please check your email and password.", file=sys.stderr)
-        elif "500" in error_msg or "503" in error_msg:
-            print("  Garmin Connect service issue. Please try again later.", file=sys.stderr)
-        else:
-            print(f"  {error_msg.split(':')[0]}", file=sys.stderr)
+        # 0.3.2 stops with AuthenticationError for rejected credentials;
+        # connection errors preserve the exhausted login strategy's details.
+        print("\n✗ Authentication request failed", file=sys.stderr)
+        print(f"  {e}", file=sys.stderr)
         return False
 
     except requests.exceptions.HTTPError as e:
@@ -273,18 +283,19 @@ def authenticate(token_path: str, token_base64_path: str, force_reauth: bool = F
         return False
 
 
-def verify_tokens(token_path: str) -> bool:
+def verify_tokens(token_path: str, is_cn: bool = False) -> bool:
     """Verify existing tokens are valid.
 
     Args:
         token_path: Path to token directory
+        is_cn: Use Garmin Connect China (garmin.cn) instead of international
 
     Returns:
         bool: True if tokens are valid, False otherwise
     """
     print(f"\nVerifying tokens in '{token_path}'...")
 
-    info = get_token_info(token_path)
+    info = get_token_info(token_path, is_cn=is_cn)
 
     if not info["exists"]:
         print(f"✗ Tokens not found at: {info['expanded_path']}")
@@ -302,6 +313,68 @@ def verify_tokens(token_path: str) -> bool:
         return False
 
 
+def diagnose_tokens(token_path: str | None, is_cn: bool) -> bool:
+    """Print where tokens are looked up, what is on disk, and whether they work.
+
+    For "garmin-mcp-auth succeeded but the server still cannot log in": the
+    usual cause is the MCP client starting the server with a different
+    GARMINTOKENS (or HOME) than the shell that ran garmin-mcp-auth, so the
+    two resolve to different directories.
+
+    Returns:
+        bool: True when a token file is present and authenticates.
+    """
+    info = inspect_token_store(token_path)
+    base64_path = get_token_base64_path()
+
+    print("\nToken diagnostics")
+    print(f"  GARMINTOKENS         : {os.getenv('GARMINTOKENS') or '(not set)'}")
+    print(f"  --token-path         : {token_path or '(not given)'}")
+    print(f"  Token directory      : {info['path']}")
+    print(f"    chosen             : {info['source']}")
+    if not info["exists"]:
+        print("    state              : MISSING")
+    elif not info["is_dir"]:
+        print(f"    state              : a file, not a directory (mode {info['mode']})")
+    else:
+        print(f"    state              : exists (mode {info['mode']})")
+    if info["has_token_file"]:
+        token_state = "present"
+        if info["token_file_error"]:
+            token_state += f", but {info['token_file_error']}"
+    else:
+        token_state = "MISSING"
+    print(f"  {TOKEN_FILE_NAME:<21}: {token_state}")
+    others = [name for name in info["files"] if name != TOKEN_FILE_NAME]
+    if others:
+        print(f"  Other files          : {', '.join(others)}")
+    base64_state = "present" if os.path.exists(base64_path) else "missing"
+    print(
+        f"  Base64 copy          : {base64_path} ({base64_state}; written for other "
+        "garminconnect tools, the server does not read it)"
+    )
+    region = "garmin.cn" if is_cn else "garmin.com"
+    print(f"  Region               : {region} (GARMIN_IS_CN={os.getenv('GARMIN_IS_CN') or '(not set)'})")
+    print(f"  The MCP server loads tokens only from {TOKEN_FILE_NAME} in the directory above.")
+
+    if not info["has_token_file"] or info["token_file_error"]:
+        print("\n✗ The server cannot load tokens from this directory.")
+        print("  Run 'garmin-mcp-auth' (or --force-reauth), then start the server with the same")
+        print("  GARMINTOKENS, or none, so both resolve to the directory above.")
+        return False
+
+    print("\nChecking the tokens against Garmin Connect...")
+    is_valid, error_msg = validate_tokens(info["path"], is_cn=is_cn)
+    if is_valid:
+        print("✓ Tokens authenticate. If the server still fails, it is started with a")
+        print("  different GARMINTOKENS or HOME than this shell; compare with the path above.")
+        return True
+
+    print(f"✗ Tokens are present but do not authenticate: {error_msg}")
+    print("  Run 'garmin-mcp-auth --force-reauth'.")
+    return False
+
+
 def main():
     """Main entry point for the authentication CLI tool."""
     parser = argparse.ArgumentParser(
@@ -317,6 +390,9 @@ Examples:
 
   # Verify existing tokens
   garmin-mcp-auth --verify
+
+  # Show where tokens are looked up, what is there, and whether they work
+  garmin-mcp-auth --diagnose
 
   # Force re-authentication
   garmin-mcp-auth --force-reauth
@@ -337,6 +413,15 @@ Examples:
         "--verify",
         action="store_true",
         help="Verify existing tokens without re-authenticating"
+    )
+
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help=(
+            "Print the resolved token paths, what is on disk, and whether the "
+            "tokens authenticate; use when the server cannot find or use tokens"
+        ),
     )
 
     parser.add_argument(
@@ -370,9 +455,14 @@ Examples:
         print("Region: China (garmin.cn)")
     print("=" * 60)
 
+    # Diagnose mode: explain what the server will find at the token path
+    if args.diagnose:
+        success = diagnose_tokens(args.token_path, is_cn)
+        sys.exit(0 if success else 1)
+
     # Verify mode
     if args.verify:
-        success = verify_tokens(token_path)
+        success = verify_tokens(token_path, is_cn)
         sys.exit(0 if success else 1)
 
     # Authenticate mode

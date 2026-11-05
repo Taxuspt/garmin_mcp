@@ -2,6 +2,7 @@
 Data management functions for Garmin Connect MCP Server
 """
 import json
+import math
 import datetime
 from typing import Any, Dict, List, Optional, Union
 
@@ -41,17 +42,30 @@ def register_tools(app):
             weight: Weight in kg
             percent_fat: Body fat percentage
             percent_hydration: Hydration percentage
-            visceral_fat_mass: Visceral fat mass
-            bone_mass: Bone mass
-            muscle_mass: Muscle mass
-            basal_met: Basal metabolic rate
-            active_met: Active metabolic rate
+            visceral_fat_mass: Visceral fat mass in kg (not grams)
+            bone_mass: Bone mass in kg (not grams)
+            muscle_mass: Muscle mass in kg (not grams)
+            basal_met: Basal metabolic rate in kcal/day
+            active_met: Active metabolic rate in kcal/day
             physique_rating: Physique rating
             metabolic_age: Metabolic age
             visceral_fat_rating: Visceral fat rating
             bmi: Body Mass Index
         """
         try:
+            # garminconnect 0.3.2 writes these as FIT uint16 values scaled by
+            # 100. 0xFFFF is the invalid-value sentinel, not a numeric mass.
+            for field, value in {
+                "weight": weight, "visceral_fat_mass": visceral_fat_mass,
+                "bone_mass": bone_mass, "muscle_mass": muscle_mass,
+            }.items():
+                if value is not None and (
+                    not math.isfinite(value) or not 0 <= value < 655.35
+                ):
+                    raise ValueError(
+                        f"{field} must be a finite value in kg (not grams), "
+                        "at least 0 and below 655.35 for FIT encoding"
+                    )
             result = garmin_client.add_body_composition(
                 date,
                 weight=weight,

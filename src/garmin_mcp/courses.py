@@ -1,27 +1,22 @@
 """
 Course management functions for Garmin Connect MCP Server.
 
-Adds support for uploading GPX files as Garmin Connect Courses. The underlying
-Garmin Connect endpoint is undocumented; this module reverse-engineers the
-two-step flow used by the web UI:
-
-    1) POST /course-service/course/import   (multipart upload of the GPX)
-       -> returns a parsed course skeleton with geoPoints but no distance
-          / bounding box / start point
-
-    2) POST /course-service/course          (JSON, the actual save)
-       -> server enriches with elevation gain/loss from terrain DB and
-          returns the saved course with a courseId.
-
-Both calls require the same OAuth2 bearer the rest of the MCP already uses.
+Adds support for uploading GPX files as Garmin Connect Courses, listing courses,
+getting detailed course waypoints/metadata, downloading course GPX files, and deleting courses.
 """
 
+import datetime
+from decimal import Decimal
 import io
 import json
 import math
 import os
 import pathlib
+import sys
 from typing import Any, Dict, Optional
+from xml.sax.saxutils import escape
+
+from garmin_mcp.activity_analysis import _resolve_download_dir
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -31,6 +26,11 @@ def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
     garmin_client = client
+
+
+def _gpx_decimal(value: Any) -> str:
+    """GPX uses xsd:decimal; expand exponent notation without rounding."""
+    return format(Decimal(str(value)), "f")
 
 
 _EARTH_RADIUS_M = 6371000.0
@@ -49,11 +49,12 @@ def _initial_bearing(p1: Dict[str, float], p2: Dict[str, float]) -> float:
     dlon = math.radians(p2["longitude"] - p1["longitude"])
     x = math.sin(dlon) * math.cos(lat2)
     y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
-    return (math.degrees(math.atan2(x, y)) + 360) % 360
+    initial_bearing = math.atan2(x, y)
+    initial_bearing = math.degrees(initial_bearing)
+    return (initial_bearing + 360) % 360
 
 
-# Map common activity keys to the Garmin activity type id Garmin's course
-# service understands. The id list is small and stable.
+# Garmin Connect activity typeIds (see get_activity_types).
 _ACTIVITY_TYPE_IDS = {
     "running": 1,
     "cycling": 2,
@@ -62,30 +63,25 @@ _ACTIVITY_TYPE_IDS = {
     "trail_running": 6,
     "mountain_biking": 5,
     "road_biking": 10,
-    "gravel_cycling": 4,
+    "gravel_cycling": 143,
 }
 
 
 def _build_course_payload(
-    parsed: Dict[str, Any],
+    parsed_skeleton: Dict[str, Any],
     course_name: str,
     activity_type_id: int,
-    description: Optional[str],
+    description: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Construct the create-course JSON body from the /import response."""
+    geo_points = parsed_skeleton.get("geoPoints", [])
+    if not geo_points:
+        raise ValueError("GPX parsed skeleton contains no geoPoints")
 
-    geo_points = list(parsed.get("geoPoints") or [])
-    if len(geo_points) < 2:
-        raise ValueError("Parsed course has fewer than 2 geo points; GPX is empty or invalid")
-
-    # Compute cumulative distance per point + total
     total_distance = 0.0
-    for i, p in enumerate(geo_points):
-        if i == 0:
-            p["distance"] = 0.0
-        else:
-            total_distance += _haversine(geo_points[i - 1], p)
-            p["distance"] = total_distance
+    for i in range(1, len(geo_points)):
+        total_distance += _haversine(geo_points[i - 1], geo_points[i])
+
+    for p in geo_points:
         if p.get("elevation") is None:
             p["elevation"] = 0.0
 
@@ -138,32 +134,74 @@ def _build_course_payload(
         "virtualPartnerId": None,
         "includeLaps": False,
         "elapsedSeconds": None,
-        "speedMeterPerSecond": None,
-        "courseLines": [
-            {
-                "courseId": None,
-                "sortOrder": 1,
-                "numberOfPoints": len(geo_points),
-                "distanceInMeters": total_distance,
-                "bearing": bearing,
-                "points": geo_points,
-                "coordinateSystem": "WGS84",
-                "originalCoordinateSystem": "WGS84",
-            }
-        ],
-        "coordinateSystem": "WGS84",
-        "targetCoordinateSystem": "WGS84",
-        "originalCoordinateSystem": "WGS84",
-        "consumer": None,
-        "elevationSource": 3,
-        "hasPaceBand": False,
-        "hasPowerGuide": False,
-        "favorite": False,
-        "startNote": None,
-        "finishNote": None,
-        "cutoffDuration": None,
+        "startBearing": bearing,
+        "endBearing": None,
         "geoPoints": geo_points,
     }
+
+
+def _resolve_gpx_output_path(course_id: int, output_path: Optional[str] = None) -> str:
+    """Resolve the destination file path for downloading a course GPX.
+
+    A directory output_path gets {course_id}.gpx; a file output_path must end
+    in .gpx so the tool cannot overwrite arbitrary files. Without output_path,
+    use the same directory as download_activity_file (GARMIN_FIT_DOWNLOAD_DIR,
+    then the one saved by set_fit_download_dir), falling back to ./courses.
+    """
+    if output_path:
+        p = os.path.abspath(os.path.expanduser(output_path))
+        if os.path.isdir(p) or output_path.endswith("/") or output_path.endswith("\\"):
+            return os.path.join(p, f"{course_id}.gpx")
+        if not p.lower().endswith(".gpx"):
+            raise ValueError(
+                f"output_path must be a directory or a .gpx file, got: {output_path}"
+            )
+        return p
+
+    base_dir = _resolve_download_dir(None) or os.path.abspath("./courses")
+    return os.path.join(base_dir, f"{course_id}.gpx")
+
+
+def _course_preview(client: Any, course_id: int) -> Dict[str, Any]:
+    """Build a compact preview of a course before deleting it."""
+    preview: Dict[str, Any] = {"course_id": course_id}
+
+    course = None
+    try:
+        course = client.client.connectapi(f"/course-service/course/{course_id}")
+    except Exception:
+        course = None
+
+    if not (isinstance(course, dict) and course):
+        # Fall back to the course list if the details call fails.
+        try:
+            items = client.client.connectapi("/course-service/course")
+        except Exception:
+            items = None
+        if not isinstance(items, list):
+            return preview
+        course = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict) and str(item.get("courseId")) == str(course_id)
+            ),
+            None,
+        )
+        if course is None:
+            return preview
+
+    activity_type = course.get("activityType")
+    activity_type = activity_type if isinstance(activity_type, dict) else {}
+    preview.update(
+        {
+            "name": course.get("courseName"),
+            "activity": activity_type.get("typeKey"),
+            "distance_m": course.get("distanceInMeters") or course.get("distanceMeter"),
+            "created": course.get("createdDateFormatted"),
+        }
+    )
+    return {key: value for key, value in preview.items() if value is not None}
 
 
 def register_tools(app):
@@ -200,6 +238,128 @@ def register_tools(app):
             return f"Error listing courses: {str(e)}"
 
     @app.tool()
+    async def get_course_details(course_id: int) -> str:
+        """Get full details of a Garmin Connect course by ID.
+
+        Returns course metadata, elevation gain/loss, total distance,
+        and all custom course waypoints (shops, water, food, campgrounds, hazards).
+
+        Args:
+            course_id: ID of the course (from get_courses).
+        """
+        try:
+            data = garmin_client.client.connectapi(f"/course-service/course/{course_id}")
+            if not isinstance(data, dict):
+                return json.dumps(data, indent=2)
+
+            course_points = [
+                {
+                    "name": cp.get("name"),
+                    "type": cp.get("pointType"),
+                    "lat": cp.get("lat"),
+                    "lon": cp.get("lon"),
+                    "distance_m": cp.get("distance"),
+                }
+                for cp in (data.get("coursePoints") or [])
+            ]
+            geo_points = data.get("geoPoints") or []
+
+            result = {
+                "course_id": data.get("courseId"),
+                "name": data.get("courseName"),
+                "distance_m": data.get("distanceInMeters") or data.get("distanceMeter"),
+                "elevation_gain_m": data.get("elevationGainInMeters") or data.get("elevationGainMeter"),
+                "elevation_loss_m": data.get("elevationLossInMeters") or data.get("elevationLossMeter"),
+                "activity": (data.get("activityType") or {}).get("typeKey"),
+                "waypoints_count": len(course_points),
+                "waypoints": course_points,
+                "geo_points_count": len(geo_points),
+                "url": f"https://connect.{garmin_client.client.domain}/modern/course/{course_id}",
+            }
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return f"Error fetching course details: {str(e)}"
+
+    @app.tool()
+    async def download_course_gpx(
+        course_id: int,
+        output_path: Optional[str] = None,
+    ) -> str:
+        """Download a Garmin Connect course as a GPX file.
+
+        The GPX is rebuilt from the course's track points (lat/lon/elevation)
+        and course points (as waypoints); it is not the originally uploaded file.
+
+        Args:
+            course_id: ID of the course to download.
+            output_path: Optional destination directory (saved as {course_id}.gpx)
+                or file path ending in .gpx; any other file path is rejected.
+                Defaults to the download_activity_file directory
+                (GARMIN_FIT_DOWNLOAD_DIR, then set_fit_download_dir), else
+                ./courses/{course_id}.gpx.
+        """
+        try:
+            target_path = _resolve_gpx_output_path(course_id, output_path)
+
+            data = garmin_client.client.connectapi(f"/course-service/course/{course_id}")
+            if not isinstance(data, dict) or not data.get("geoPoints"):
+                return f"Error: course {course_id} not found or missing geoPoints."
+
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+            name = data.get("courseName") or f"Garmin Course {course_id}"
+            geo_points = data.get("geoPoints") or []
+            course_points = data.get("coursePoints") or []
+
+            lines = [
+                "<?xml version='1.0' encoding='UTF-8'?>",
+                "<gpx version='1.1' creator='GarminConnectMCP' xmlns='http://www.topografix.com/GPX/1/1'>",
+                "  <metadata>",
+                f"    <name>{escape(name)}</name>",
+                "  </metadata>",
+            ]
+            for cp in course_points:
+                lat, lon = cp.get("lat"), cp.get("lon")
+                if lat is not None and lon is not None:
+                    cp_name = cp.get("name") or cp.get("pointType") or "Waypoint"
+                    cp_type = cp.get("pointType") or "GENERIC"
+                    lines.append(f"  <wpt lat='{_gpx_decimal(lat)}' lon='{_gpx_decimal(lon)}'>")
+                    lines.append(f"    <name>{escape(cp_name)}</name>")
+                    lines.append(f"    <type>{escape(cp_type)}</type>")
+                    lines.append("  </wpt>")
+
+            lines.append("  <trk>")
+            lines.append(f"    <name>{escape(name)}</name>")
+            lines.append("    <trkseg>")
+            for p in geo_points:
+                lat = p.get("latitude")
+                lon = p.get("longitude")
+                ele = p.get("elevation")
+                if lat is not None and lon is not None:
+                    ele_tag = f"<ele>{_gpx_decimal(ele)}</ele>" if ele is not None else ""
+                    lines.append(f"      <trkpt lat='{_gpx_decimal(lat)}' lon='{_gpx_decimal(lon)}'>{ele_tag}</trkpt>")
+            lines.append("    </trkseg>")
+            lines.append("  </trk>")
+            lines.append("</gpx>")
+
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+
+            return json.dumps(
+                {
+                    "status": "success",
+                    "course_id": course_id,
+                    "name": name,
+                    "gpx_path": target_path,
+                    "waypoints_count": len(course_points),
+                    "track_points_count": len(geo_points),
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error downloading course GPX: {str(e)}"
+
+    @app.tool()
     async def upload_course(
         gpx_path: str,
         course_name: Optional[str] = None,
@@ -214,10 +374,11 @@ def register_tools(app):
         Args:
             gpx_path: Absolute path to the .gpx file on disk.
             course_name: Override the course name. Defaults to the name parsed
-                from the GPX file.
+                from the GPX file. Max 128 characters; Garmin rejects longer.
             activity_type: One of running, cycling, hiking, walking, trail_running,
                 mountain_biking, road_biking, gravel_cycling. Defaults to running.
             description: Optional description shown on the course detail page.
+                Max 512 characters; Garmin rejects longer.
         """
         try:
             _p = pathlib.Path(gpx_path)
@@ -244,7 +405,7 @@ def register_tools(app):
                 files={
                     "file": (
                         os.path.basename(gpx_path),
-                        gpx_bytes,
+                        io.BytesIO(gpx_bytes),
                         "application/gpx+xml",
                     )
                 },
@@ -286,20 +447,45 @@ def register_tools(app):
             return f"Error uploading course: {str(e)}"
 
     @app.tool()
-    async def delete_course(course_id: int) -> str:
+    async def delete_course(course_id: int, confirm: bool = False) -> str:
         """Delete a course from Garmin Connect.
+
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the course, then call again with confirm=true to delete it.
 
         Args:
             course_id: ID of the course to delete (get IDs from get_courses).
+            confirm: Must be true to actually delete. Default false returns a preview.
         """
         try:
+            preview = _course_preview(garmin_client, course_id)
+            if not confirm:
+                return json.dumps(
+                    {
+                        "status": "needs_confirmation",
+                        "course": preview,
+                        "message": (
+                            "This permanently deletes the course from Garmin Connect "
+                            "and cannot be undone. Call again with confirm=true to proceed."
+                        ),
+                    },
+                    indent=2,
+                )
+
             garmin_client.client.delete(
                 "connectapi", f"/course-service/course/{course_id}"
+            )
+            print(
+                "delete_course: deleted course "
+                f"{course_id} name={preview.get('name')!r} "
+                f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                file=sys.stderr,
             )
             return json.dumps(
                 {
                     "status": "success",
                     "course_id": course_id,
+                    "course": preview,
                     "message": f"Course {course_id} deleted",
                 },
                 indent=2,

@@ -52,6 +52,24 @@ async def test_get_activities_by_date_tool(app_with_activity_management, mock_ga
 
 
 @pytest.mark.asyncio
+async def test_get_activities_by_date_handles_null_activity_type(
+    app_with_activity_management, mock_garmin_client
+):
+    """Older or partial activity records can contain activityType=null."""
+    mock_garmin_client.connectapi.return_value = [
+        {"activityId": 123, "activityName": "Untyped activity", "activityType": None}
+    ]
+
+    result = await app_with_activity_management.call_tool(
+        "get_activities_by_date",
+        {"start_date": "2024-01-08", "end_date": "2024-01-15"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["activities"] == [{"id": 123, "name": "Untyped activity"}]
+
+
+@pytest.mark.asyncio
 async def test_get_activities_by_date_with_type(app_with_activity_management, mock_garmin_client):
     """Test get_activities_by_date tool with activity type filter"""
     filtered_activities = [MOCK_ACTIVITIES[0]]  # Only running activities
@@ -79,7 +97,9 @@ async def test_get_activities_by_date_with_type(app_with_activity_management, mo
 async def test_get_activities_fordate_tool(app_with_activity_management, mock_garmin_client):
     """Test get_activities_fordate tool returns activities for specific date"""
     # Setup mock
-    mock_garmin_client.get_activities_fordate.return_value = [MOCK_ACTIVITIES[0]]
+    mock_garmin_client.get_activities_fordate.return_value = {
+        "ActivitiesForDay": {"payload": [MOCK_ACTIVITIES[0]]},
+    }
 
     # Call tool
     result = await app_with_activity_management.call_tool(
@@ -88,7 +108,10 @@ async def test_get_activities_fordate_tool(app_with_activity_management, mock_ga
     )
 
     # Verify
-    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data["count"] == 1
+    assert data["activities"][0]["id"] == 12345678901
+    assert data["activities"][0]["event_type"] == "race"
     mock_garmin_client.get_activities_fordate.assert_called_once_with("2024-01-15")
 
 
@@ -106,8 +129,35 @@ async def test_get_activity_tool(app_with_activity_management, mock_garmin_clien
     )
 
     # Verify
-    assert result is not None
+    data = json.loads(result[0][0].text)
+    assert data["distance_meters"] == 5000.0
+    assert data["duration_seconds"] == 1800.0
+    assert data["calories"] == 350
+    assert data["avg_hr_bpm"] == 145
+    assert data["elevation_gain_meters"] == 50.5
+    assert data["lap_count"] == 2
     mock_garmin_client.get_activity.assert_called_once_with(activity_id)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_handles_null_nested_sections(
+    app_with_activity_management, mock_garmin_client
+):
+    """Partial activity payloads should still produce a minimal summary."""
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 123,
+        "summaryDTO": None,
+        "activityTypeDTO": None,
+        "metadataDTO": None,
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity",
+        {"activity_id": 123},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data == {"id": 123}
 
 
 @pytest.mark.asyncio
@@ -418,6 +468,8 @@ async def test_get_activity_splits_includes_swim_lengths(app_with_activity_manag
     data = json.loads(result[0][0].text)
     assert data["activity_id"] == 22526515067
     assert data["lap_count"] == 1
+    assert data["laps"][0]["start_time_gmt"] == "2026-04-14T17:19:08.0"
+    assert "start_time" not in data["laps"][0]
     assert data["laps"][0]["avg_swim_cadence"] == 22.0
     assert data["laps"][0]["active_length_count"] == 92
     assert data["laps"][0]["total_strokes"] == 1104
@@ -431,6 +483,8 @@ async def test_get_activity_splits_includes_swim_lengths(app_with_activity_manag
     assert data["laps"][0]["workout_step_index"] == 0
     assert len(data["laps"][0]["lengths"]) == 2
     assert data["laps"][0]["lengths"][0]["length_number"] == 1
+    assert data["laps"][0]["lengths"][0]["start_time_gmt"] == "2026-04-14T17:19:08.0"
+    assert "start_time" not in data["laps"][0]["lengths"][0]
     assert data["laps"][0]["lengths"][0]["distance_meters"] == 22.0
     assert data["laps"][0]["lengths"][0]["duration_seconds"] == 31.0
     assert data["laps"][0]["lengths"][0]["stroke"] == "FREESTYLE"
@@ -483,31 +537,54 @@ async def test_get_activity_split_summaries_tool(app_with_activity_management, m
 
 
 @pytest.mark.asyncio
-async def test_get_activity_weather_tool(app_with_activity_management, mock_garmin_client):
-    """Test get_activity_weather tool returns weather data"""
-    # Setup mock
-    weather_data = {
-        "temp": 18.0,
-        "apparentTemp": 16.0,
-        "dewPoint": 10.0,
-        "relativeHumidity": 65,
-        "windSpeed": 5.0,
-        "windDirection": 180,
-        "latitude": 40.7128,
-        "longitude": -74.0060
+async def test_get_activity_weather_metric_converts_to_celsius(
+    app_with_activity_management, mock_garmin_client
+):
+    """Garmin returns Fahrenheit; a metric account must see Celsius."""
+    import json as json_module
+
+    # Raw Garmin payload is Fahrenheit (no unit field), e.g. 57 F for Erfurt.
+    mock_garmin_client.get_activity_weather.return_value = {
+        "temp": 57, "apparentTemp": 57, "dewPoint": 50, "relativeHumidity": 77,
+        "windSpeed": 8,
     }
-    mock_garmin_client.get_activity_weather.return_value = weather_data
+    mock_garmin_client.get_unit_system.return_value = "metric"
 
-    # Call tool
-    activity_id = 12345678901
     result = await app_with_activity_management.call_tool(
-        "get_activity_weather",
-        {"activity_id": activity_id}
+        "get_activity_weather", {"activity_id": 23651251274}
     )
+    data = json_module.loads(result[0][0].text)
+    assert data["temperature_unit"] == "C"
+    assert data["temperature"] == 13.9   # 57 F -> 13.9 C, not the raw 57
+    assert data["apparent_temperature"] == 13.9
+    assert data["dew_point"] == 10.0      # 50 F -> 10 C
+    # Wind is already metric — labeled km/h, NOT converted.
+    assert data["wind_speed"] == 8
+    assert data["wind_speed_unit"] == "km/h"
 
-    # Verify
-    assert result is not None
-    mock_garmin_client.get_activity_weather.assert_called_once_with(activity_id)
+
+@pytest.mark.asyncio
+async def test_get_activity_weather_statute_us_keeps_fahrenheit(
+    app_with_activity_management, mock_garmin_client
+):
+    """A statute_us account keeps the raw Fahrenheit values."""
+    import json as json_module
+
+    mock_garmin_client.get_activity_weather.return_value = {
+        "temp": 57, "dewPoint": 50, "windSpeed": 8,
+    }
+    mock_garmin_client.get_unit_system.return_value = "statute_us"
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity_weather", {"activity_id": 1}
+    )
+    data = json_module.loads(result[0][0].text)
+    assert data["temperature_unit"] == "F"
+    assert data["temperature"] == 57      # unchanged
+    assert data["dew_point"] == 50
+    assert data["wind_speed"] == 8
+    assert data["wind_speed_unit"] == "mph"
+    mock_garmin_client.get_activity_weather.assert_called_once_with(1)
 
 
 @pytest.mark.asyncio
@@ -586,6 +663,146 @@ async def test_get_activity_exercise_sets_tool(app_with_activity_management, moc
     # Verify
     assert result is not None
     mock_garmin_client.get_activity_exercise_sets.assert_called_once_with(activity_id)
+
+
+@pytest.mark.asyncio
+async def test_set_activity_exercise_sets_tool(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test set_activity_exercise_sets PUTs the full set list in Garmin's wire format"""
+    mock_garmin_client.garmin_connect_activity = "/activity-service/activity"
+    mock_garmin_client.client.put.return_value = None
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "sets": [
+                {"category": "deadlift", "exercise_name": "barbell_deadlift",
+                 "reps": 5, "weight_kg": 152.5, "duration_seconds": 40,
+                 "rest_seconds": 180},
+                {"category": "BENCH_PRESS", "reps": 8, "weight_lb": 135},
+                {"category": "PULL_UP", "exercise_name": "PULL_UP", "reps": 10},
+            ],
+        },
+    )
+
+    mock_garmin_client.client.put.assert_called_once_with(
+        "connectapi",
+        "/activity-service/activity/12345678901/exerciseSets",
+        json={
+            "activityId": 12345678901,
+            "exerciseSets": [
+                {"setType": "ACTIVE",
+                 "exercises": [{"category": "DEADLIFT", "name": "BARBELL_DEADLIFT",
+                                "probability": 100}],
+                 "repetitionCount": 5, "weight": 152500, "duration": 40},
+                {"setType": "REST", "exercises": [], "repetitionCount": None,
+                 "weight": -1, "duration": 180},
+                {"setType": "ACTIVE",
+                 "exercises": [{"category": "BENCH_PRESS", "name": None,
+                                "probability": 100}],
+                 "repetitionCount": 8, "weight": 61235, "duration": None},
+                {"setType": "ACTIVE",
+                 "exercises": [{"category": "PULL_UP", "name": None,
+                                "probability": 100}],
+                 "repetitionCount": 10, "weight": -1, "duration": None},
+            ],
+        },
+        api=True,
+    )
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["sets_written"] == 3
+
+
+@pytest.mark.asyncio
+async def test_set_activity_exercise_sets_keep_timing(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test keep_timing relabels recorded sets in place, keeping timing and rests"""
+    mock_garmin_client.garmin_connect_activity = "/activity-service/activity"
+    unknown = [{"category": "UNKNOWN", "name": None, "probability": 99.6}]
+    mock_garmin_client.get_activity_exercise_sets.return_value = {
+        "activityId": 12345678901,
+        "exerciseSets": [
+            {"setType": "ACTIVE", "exercises": unknown, "repetitionCount": 4,
+             "weight": 0.0, "duration": 192.1, "startTime": "2026-10-08T08:21:23.0",
+             "messageIndex": 0},
+            {"setType": "REST", "exercises": [], "repetitionCount": None,
+             "weight": None, "duration": 90.5, "startTime": "2026-10-08T08:24:35.0",
+             "messageIndex": 1},
+            {"setType": "ACTIVE", "exercises": unknown, "repetitionCount": 6,
+             "weight": 0.0, "duration": 130.0, "startTime": "2026-10-08T08:26:06.0",
+             "messageIndex": 2},
+        ],
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets",
+        {
+            "activity_id": 12345678901,
+            "keep_timing": True,
+            "sets": [
+                {"category": "DEADLIFT", "exercise_name": "RACK_PULL", "reps": 4,
+                 "weight_kg": 120, "duration_seconds": 999},
+                {"category": "SQUAT", "reps": 6},
+            ],
+        },
+    )
+
+    sent = mock_garmin_client.client.put.call_args.kwargs["json"]["exerciseSets"]
+    assert [s["setType"] for s in sent] == ["ACTIVE", "REST", "ACTIVE"]
+    assert [s["duration"] for s in sent] == [192.1, 90.5, 130.0]
+    assert sent[0]["startTime"] == "2026-10-08T08:21:23.0"
+    assert sent[0]["exercises"] == [
+        {"category": "DEADLIFT", "name": "RACK_PULL", "probability": 100}
+    ]
+    assert (sent[0]["repetitionCount"], sent[0]["weight"]) == (4, 120000)
+    assert (sent[2]["exercises"][0]["category"], sent[2]["weight"]) == ("SQUAT", -1)
+    assert json.loads(result[0][0].text)["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_activity_exercise_sets_keep_timing_rejects_count_mismatch(
+    app_with_activity_management, mock_garmin_client
+):
+    """Test keep_timing refuses to write when set counts differ"""
+    mock_garmin_client.get_activity_exercise_sets.return_value = {
+        "exerciseSets": [{"setType": "ACTIVE", "exercises": []}]
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets",
+        {"activity_id": 12345678901, "keep_timing": True,
+         "sets": [{"category": "SQUAT"}, {"category": "SQUAT"}]},
+    )
+
+    assert "has 1 active sets, got 2" in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sets, error",
+    [
+        ([], "sets cannot be empty"),
+        ([{"reps": 5}], "set 1: category is required"),
+        ([{"category": "SQUAT", "weight_kg": 100, "weight_lb": 220}],
+         "set 1: give weight_kg or weight_lb, not both"),
+        ([{"category": "SQUAT", "reps": 5.5}], "set 1: reps must be"),
+    ],
+)
+async def test_set_activity_exercise_sets_rejects_bad_input(
+    app_with_activity_management, mock_garmin_client, sets, error
+):
+    """Test set_activity_exercise_sets validates before writing anything"""
+    result = await app_with_activity_management.call_tool(
+        "set_activity_exercise_sets", {"activity_id": 12345678901, "sets": sets}
+    )
+
+    assert error in result[0][0].text
+    mock_garmin_client.client.put.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1044,4 +1261,186 @@ async def test_create_manual_activity_exception(app_with_activity_management, mo
         {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 60},
     )
     assert "Error" in result[0][0].text
+    assert "Garmin API error" in result[0][0].text
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_strips_type_before_payload_and_default_name(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 999}
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": " yoga ", "date": "2024-03-01", "duration_minutes": 30},
+    )
+
+    assert json.loads(result[0][0].text)["success"] is True
+    kwargs = mock_garmin_client.create_manual_activity.call_args.kwargs
+    assert kwargs["type_key"] == "yoga"
+    assert kwargs["activity_name"] == "Yoga"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [
+    {"date": "2024-02-30"},
+    {"date": "03/01/2024"},
+    {"date": "2024-3-1"},
+    {"start_time": "09:00:00"},
+    {"start_time": "9:00"},
+    {"start_time": "24:00"},
+    {"distance_km": -1},
+])
+async def test_create_manual_activity_rejects_invalid_timestamp_or_distance(
+    app_with_activity_management, mock_garmin_client, invalid
+):
+    mock_garmin_client.create_manual_activity.return_value = {"activityId": 999}
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 30, **invalid},
+    )
+
+    assert "Error" in result[0][0].text
+    assert next(iter(invalid)) in result[0][0].text
+    mock_garmin_client.create_manual_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,expected_committed", [
+    ("read_timeout", "unknown"),
+    ("server_error", "unknown"),
+    ("rejected", False),
+    ("connect_timeout", False),
+])
+async def test_create_manual_activity_reports_write_commit_uncertainty(
+    app_with_activity_management, mock_garmin_client, failure, expected_committed
+):
+    import requests
+    from garminconnect import GarminConnectConnectionError
+
+    errors = {
+        "read_timeout": requests.exceptions.ReadTimeout("read timed out"),
+        "server_error": GarminConnectConnectionError("HTTP error: API Error 503 - gateway"),
+        "rejected": GarminConnectConnectionError("HTTP error: API Error 400 - invalid request"),
+        "connect_timeout": requests.exceptions.ConnectTimeout("connection timed out"),
+    }
+    mock_garmin_client.create_manual_activity.side_effect = errors[failure]
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 30},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "error"
+    assert data["write_committed"] == expected_committed
+    if expected_committed == "unknown":
+        assert "before retrying" in data["hint"]
+    mock_garmin_client.create_manual_activity.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_create_manual_activity_reports_committed_write_if_response_cannot_serialize(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.create_manual_activity.return_value = object()
+    result = await app_with_activity_management.call_tool(
+        "create_manual_activity",
+        {"type_key": "yoga", "date": "2024-03-01", "duration_minutes": 30},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["write_committed"] is True
+    assert data["stage"] == "response_parse"
+
+
+@pytest.mark.asyncio
+async def test_get_activity_splits_wrapped_lap_distance_is_nulled(app_with_activity_management, mock_garmin_client):
+    """Garmin's splits API passes a wrapped negative lap distance through; null and flag it.
+
+    Live value: a zero-length fenix 8 lap recorded -4 cm, which the splits
+    API returns as distance 42949672.0.
+    """
+    import json
+
+    mock_garmin_client.get_activity_splits.return_value = {
+        "activityId": 24687347098,
+        "lapDTOs": [
+            {"lapIndex": 4, "distance": 680.96, "duration": 301.797},
+            {"lapIndex": 5, "distance": 42949672.0, "duration": 0.0},
+        ],
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "get_activity_splits", {"activity_id": 24687347098}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["laps"][0]["distance_meters"] == 680.96
+    assert "distance_invalid" not in data["laps"][0]
+    assert "distance_meters" not in data["laps"][1]
+    assert data["laps"][1]["distance_invalid"] is True
+    assert data["laps"][1]["duration_seconds"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_delete_activity_requires_confirmation(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 12345678901,
+        "activityName": "Morning Run",
+        "activityTypeDTO": {"typeKey": "running"},
+        "summaryDTO": {
+            "startTimeLocal": "2024-01-15 07:00:00",
+            "distance": 5000.0,
+            "duration": 1800.0,
+        },
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "delete_activity",
+        {"activity_id": 12345678901},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "needs_confirmation"
+    assert data["activity"]["name"] == "Morning Run"
+    mock_garmin_client.delete_activity.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_activity_with_confirm(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 12345678901,
+        "activityName": "Morning Run",
+        "activityTypeDTO": {"typeKey": "running"},
+        "summaryDTO": {"startTimeLocal": "2024-01-15 07:00:00"},
+    }
+    mock_garmin_client.delete_activity.return_value = None
+
+    result = await app_with_activity_management.call_tool(
+        "delete_activity",
+        {"activity_id": 12345678901, "confirm": True},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "deleted"
+    assert data["activity"]["activity_id"] == 12345678901
+    mock_garmin_client.delete_activity.assert_called_once_with(12345678901)
+
+
+@pytest.mark.asyncio
+async def test_delete_activity_exception(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.get_activity.return_value = {"activityName": "Morning Run"}
+    mock_garmin_client.delete_activity.side_effect = Exception("Garmin API error")
+
+    result = await app_with_activity_management.call_tool(
+        "delete_activity",
+        {"activity_id": 12345678901, "confirm": True},
+    )
+
+    assert "Error deleting activity" in result[0][0].text
     assert "Garmin API error" in result[0][0].text

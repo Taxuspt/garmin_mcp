@@ -3,7 +3,27 @@ Activity Management functions for Garmin Connect MCP Server
 """
 import json
 import datetime
+import sys
 from typing import Any, Dict, List, Optional, Union
+
+from garmin_mcp.write_errors import WriteTracker
+
+# FIT stores lap distance as uint32 centimetres. A device that writes a small
+# negative distance (seen on zero-length laps at a lap/stop boundary) wraps it
+# to just under 2**32 / 100 m, e.g. -4 cm -> 42,949,672.92 m. Garmin's own
+# splits API passes the wrapped value through unchanged.
+_UINT32_DISTANCE_WRAP_M = 2**32 / 100
+_MAX_WRAPPED_NEGATIVE_M = 1000.0
+
+
+def sanitize_lap_distance(value):
+    """Return ``value``, or None if it is a wrapped-around negative distance."""
+    if (
+        isinstance(value, (int, float))
+        and _UINT32_DISTANCE_WRAP_M - _MAX_WRAPPED_NEGATIVE_M <= value <= _UINT32_DISTANCE_WRAP_M
+    ):
+        return None
+    return value
 
 # The garmin_client will be set by the main file
 garmin_client = None
@@ -13,6 +33,61 @@ def configure(client):
     """Configure the module with the Garmin client instance"""
     global garmin_client
     garmin_client = client
+
+
+def _activity_preview(client: Any, activity_id: int) -> Dict[str, Any]:
+    """Build a compact preview of an activity before deleting it."""
+    preview: Dict[str, Any] = {"activity_id": activity_id}
+
+    activity = None
+    try:
+        activity = client.get_activity(activity_id)
+    except Exception:
+        activity = None
+
+    if isinstance(activity, dict) and activity:
+        summary = activity.get("summaryDTO")
+        summary = summary if isinstance(summary, dict) else {}
+        type_dto = activity.get("activityTypeDTO")
+        type_dto = type_dto if isinstance(type_dto, dict) else {}
+        preview.update(
+            {
+                "name": activity.get("activityName"),
+                "type": type_dto.get("typeKey"),
+                "start_time": summary.get("startTimeLocal") or activity.get("startTimeLocal"),
+                "distance_meters": summary.get("distance") or activity.get("distance"),
+                "duration_seconds": summary.get("duration") or activity.get("duration"),
+            }
+        )
+        return {key: value for key, value in preview.items() if value is not None}
+
+    get_activities = getattr(client, "get_activities", None)
+    if not callable(get_activities):
+        return preview
+    try:
+        items = get_activities(0, 50)
+    except Exception:
+        items = None
+    if not isinstance(items, list):
+        return preview
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("activityId")) != str(activity_id):
+            continue
+        type_info = item.get("activityType")
+        type_info = type_info if isinstance(type_info, dict) else {}
+        preview.update(
+            {
+                "name": item.get("activityName"),
+                "type": type_info.get("typeKey"),
+                "start_time": item.get("startTimeLocal"),
+                "distance_meters": item.get("distance"),
+                "duration_seconds": item.get("duration"),
+            }
+        )
+        break
+    return {key: value for key, value in preview.items() if value is not None}
 
 
 def _put_activity_update(activity_id: int, payload: Dict[str, Any]) -> Any:
@@ -41,6 +116,57 @@ def _update_activity_summary(activity_id: int, fields: Dict[str, Any]) -> Any:
     sidesteps it.
     """
     return _put_activity_update(activity_id, {"summaryDTO": fields})
+
+
+def _build_exercise_sets(sets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert friendly set dicts into Garmin's exerciseSets wire format.
+
+    Mirrors what the Garmin Connect web editor sends: weight in grams with -1
+    meaning unweighted, the exercise name nulled when it equals the category,
+    and rest as a separate REST set following the active set it belongs to.
+    """
+    out: List[Dict[str, Any]] = []
+    for i, s in enumerate(sets, start=1):
+        category = str(s.get("category") or "").strip().upper()
+        if not category:
+            raise ValueError(f"set {i}: category is required")
+        name = str(s.get("exercise_name") or "").strip().upper() or None
+
+        if s.get("weight_kg") is not None and s.get("weight_lb") is not None:
+            raise ValueError(f"set {i}: give weight_kg or weight_lb, not both")
+        if s.get("weight_kg") is not None:
+            kg = float(s["weight_kg"])
+        elif s.get("weight_lb") is not None:
+            kg = float(s["weight_lb"]) * 0.45359237
+        else:
+            kg = None
+        if kg is not None and kg < 0:
+            raise ValueError(f"set {i}: weight cannot be negative")
+
+        reps = s.get("reps")
+        if reps is not None and (int(reps) != reps or reps < 0):
+            raise ValueError(f"set {i}: reps must be a non-negative whole number")
+
+        out.append({
+            "setType": "ACTIVE",
+            "exercises": [{
+                "category": category,
+                "name": None if name == category else name,
+                "probability": 100,
+            }],
+            "repetitionCount": None if reps is None else int(reps),
+            "weight": -1 if kg is None else round(kg * 1000),
+            "duration": s.get("duration_seconds"),
+        })
+        if s.get("rest_seconds"):
+            out.append({
+                "setType": "REST",
+                "exercises": [],
+                "repetitionCount": None,
+                "weight": -1,
+                "duration": s["rest_seconds"],
+            })
+    return out
 
 
 def register_tools(app):
@@ -76,7 +202,9 @@ def register_tools(app):
                               filter for races with event_type == "race" rather
                               than excluding "training", since many non-race
                               activities appear as "uncategorized" not "training"
-          - field omitted   — activity pre-dates event type support in the API
+          - field absent    — API returned no eventType for this activity; not
+                              observed in practice in any activity back to 2012
+                              (oldest activities sampled on this account)
 
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -135,7 +263,7 @@ def register_tools(app):
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
-                    "type": a.get('activityType', {}).get('typeKey'),
+                    "type": (a.get('activityType') or {}).get('typeKey'),
                     "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
@@ -168,8 +296,8 @@ def register_tools(app):
                 return f"No activities found for {date}"
 
             # Extract just the activities, not the embedded HR data
-            activities_data = data.get('ActivitiesForDay', {})
-            payload = activities_data.get('payload', [])
+            activities_data = data.get('ActivitiesForDay') or {}
+            payload = activities_data.get('payload') or []
 
             if not payload:
                 return f"No activities found for {date}"
@@ -184,7 +312,7 @@ def register_tools(app):
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
-                    "type": a.get('activityType', {}).get('typeKey'),
+                    "type": (a.get('activityType') or {}).get('typeKey'),
                     "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
@@ -211,8 +339,7 @@ def register_tools(app):
         Returns a comprehensive summary including timing, distance, heart rate,
         elevation, training effect, and an event_type field. Common event_type
         values: "race", "training", "uncategorized" (no event type set by the
-        user). The field is omitted for very old activities that pre-date event
-        type support in the Garmin API.
+        user). The field is omitted when Garmin returns no eventTypeDTO.
 
         Args:
             activity_id: ID of the activity to retrieve
@@ -224,9 +351,9 @@ def register_tools(app):
                 return f"No activity found with ID {activity_id}"
 
             # Extract summary data
-            summary = activity.get('summaryDTO', {})
-            activity_type = activity.get('activityTypeDTO', {})
-            metadata = activity.get('metadataDTO', {})
+            summary = activity.get('summaryDTO') or {}
+            activity_type = activity.get('activityTypeDTO') or {}
+            metadata = activity.get('metadataDTO') or {}
 
             curated = {
                 "id": activity.get('activityId'),
@@ -313,7 +440,7 @@ def register_tools(app):
 
         Args:
             activity_id: ID of the activity to update
-            activity_name: New activity name
+            activity_name: New activity name. Max 200 characters; Garmin rejects longer.
         """
         try:
             activity_id = int(activity_id)
@@ -392,7 +519,9 @@ def register_tools(app):
 
         Args:
             activity_id: ID of the activity to update
-            description: New description text (empty string clears it)
+            description: New description text (empty string clears it).
+                Max 2000 characters; Garmin rejects longer.
+                Emoji and other non-BMP characters count as two.
         """
         try:
             activity_id = int(activity_id)
@@ -537,6 +666,8 @@ def register_tools(app):
     async def get_activity_splits(activity_id: Union[int, str]) -> str:
         """Get splits for an activity
 
+        Lap and nested length start_time_gmt timestamps are GMT (UTC).
+
         Args:
             activity_id: ID of the activity to retrieve splits for
         """
@@ -547,7 +678,7 @@ def register_tools(app):
                 return f"No splits found for activity with ID {activity_id}"
 
             # Curate the splits data
-            laps = splits.get('lapDTOs', [])
+            laps = splits.get('lapDTOs') or []
 
             curated = {
                 "activity_id": splits.get('activityId'),
@@ -558,7 +689,7 @@ def register_tools(app):
             for lap in laps:
                 lap_data = {
                     "lap_number": lap.get('lapIndex'),
-                    "start_time": lap.get('startTimeGMT'),
+                    "start_time_gmt": lap.get('startTimeGMT'),
                     "distance_meters": lap.get('distance'),
                     "duration_seconds": lap.get('duration'),
                     "moving_duration_seconds": lap.get('movingDuration'),
@@ -583,14 +714,17 @@ def register_tools(app):
                     "elevation_loss_meters": lap.get('elevationLoss'),
                     "workout_step_index": lap.get('wktStepIndex'),
                 }
+                if lap.get('distance') is not None and sanitize_lap_distance(lap.get('distance')) is None:
+                    lap_data["distance_meters"] = None
+                    lap_data["distance_invalid"] = True
 
-                length_dtos = lap.get('lengthDTOs', [])
+                length_dtos = lap.get('lengthDTOs') or []
                 if length_dtos:
                     lap_data["lengths"] = []
                     for length in length_dtos:
                         length_data = {
                             "length_number": length.get('lengthIndex'),
-                            "start_time": length.get('startTimeGMT'),
+                            "start_time_gmt": length.get('startTimeGMT'),
                             "distance_meters": length.get('distance'),
                             "duration_seconds": length.get('duration'),
                             "avg_speed_mps": length.get('averageSpeed'),
@@ -651,7 +785,17 @@ def register_tools(app):
 
     @app.tool()
     async def get_activity_weather(activity_id: Union[int, str]) -> str:
-        """Get weather data for an activity
+        """Get weather data for an activity.
+
+        Garmin's weather endpoint returns temperatures in Fahrenheit (from the
+        weather-station source) with no unit indicator, regardless of account
+        settings. This tool converts them to the account's display unit: metric
+        accounts get Celsius, statute_us accounts keep Fahrenheit. The
+        temperature_unit field ("F" or "C") states which unit was returned.
+
+        Wind speed, unlike temperature, is already returned in the account's
+        display unit (km/h for metric, mph for statute_us), so it is passed
+        through unconverted and labeled via the wind_speed_unit field.
 
         Args:
             activity_id: ID of the activity to retrieve weather data for
@@ -662,17 +806,61 @@ def register_tools(app):
             if not weather:
                 return f"No weather data found for activity with ID {activity_id}"
 
-            # Curate weather data
+            # Garmin's activity-weather endpoint returns temperatures in
+            # FAHRENHEIT (from the METAR/station source), regardless of the
+            # account's measurement system — the payload carries no unit field.
+            # (Confirmed: a metric account still gets °F here, e.g. temp 57.)
+            # So convert the raw Fahrenheit values to the account's display unit.
+            def _f_to_c(value):
+                return round((value - 32) * 5 / 9, 1) if value is not None else None
+
+            try:
+                unit_system = garmin_client.get_unit_system()
+            except Exception:
+                unit_system = None
+
+            raw_temp = weather.get('temp')
+            raw_apparent = weather.get('apparentTemp')
+            raw_dew = weather.get('dewPoint')
+
+            if unit_system is not None and unit_system != "statute_us":
+                # Metric (or non-US-statute) account → present in Celsius.
+                temp_unit = "C"
+                out_temp, out_apparent, out_dew = (
+                    _f_to_c(raw_temp), _f_to_c(raw_apparent), _f_to_c(raw_dew)
+                )
+            else:
+                # statute_us account (or unknown) → leave the raw Fahrenheit.
+                temp_unit = "F" if unit_system == "statute_us" else None
+                out_temp, out_apparent, out_dew = raw_temp, raw_apparent, raw_dew
+
+            # Wind, unlike temperature, IS already returned in the account's
+            # display unit (verified against a local weather station: metric
+            # accounts get km/h, not mph). So don't convert it — just label it.
+            wind_unit = "mph" if unit_system == "statute_us" else (
+                "km/h" if unit_system is not None else None
+            )
+
+            weather_type_dto = weather.get('weatherTypeDTO') or {}
+            station_dto = weather.get('weatherStationDTO') or {}
+
             curated = {
                 "activity_id": activity_id,
-                "temperature_celsius": weather.get('temp'),
-                "apparent_temperature_celsius": weather.get('apparentTemp'),
+                "temperature": out_temp,
+                "temperature_unit": temp_unit,
+                "apparent_temperature": out_apparent,
+                "dew_point": out_dew,
                 "humidity_percent": weather.get('relativeHumidity'),
-                "wind_speed_mps": weather.get('windSpeed'),
+                "wind_speed": weather.get('windSpeed'),
+                "wind_speed_unit": wind_unit,
                 "wind_direction_degrees": weather.get('windDirection'),
-                "weather_type": weather.get('weatherTypeDTO', {}).get('weatherTypeName'),
-                "weather_description": weather.get('weatherTypeDTO', {}).get('weatherTypeDesc'),
+                "wind_direction_compass": weather.get('windDirectionCompassPoint'),
+                "wind_gust": weather.get('windGust'),
+                "weather_type": weather_type_dto.get('weatherTypeName'),
+                "weather_description": weather_type_dto.get('desc') or weather_type_dto.get('weatherTypeDesc'),
                 "location": weather.get('issueLocation'),
+                "station_id": station_dto.get('id'),
+                "station_name": station_dto.get('name'),
                 "issue_time": weather.get('issueDate'),
             }
 
@@ -755,6 +943,95 @@ def register_tools(app):
             return f"Error retrieving activity exercise sets: {str(e)}"
 
     @app.tool()
+    async def set_activity_exercise_sets(
+        activity_id: Union[int, str],
+        sets: List[Dict[str, Any]],
+        keep_timing: bool = False,
+    ) -> str:
+        """Replace the exercise sets on a strength (or other rep-counting) activity.
+
+        Writes Garmin's structured per-set data, the same grid the Garmin Connect
+        "Edit sets" screen saves, so the sets feed Garmin's exercise history,
+        volume and muscle-map charts. This OVERWRITES every existing set,
+        including watch-detected sets and their recorded timing; to keep some,
+        read them with get_activity_exercise_sets and include them in the list.
+
+        When the watch already recorded the right sets but misidentified the
+        exercises, pass keep_timing=True: the existing sets keep their start
+        times, durations and rest periods, and only the exercise, reps and
+        weight are replaced, in order. The number of sets must match the
+        activity's recorded active sets, and duration_seconds/rest_seconds are
+        ignored.
+
+        Exercises must use Garmin's own keys. category is an exercise category
+        (e.g. DEADLIFT, BENCH_PRESS, PULL_UP, SQUAT) and exercise_name an
+        exercise within it (e.g. BARBELL_DEADLIFT, ROMANIAN_DEADLIFT). Garmin
+        rejects anything else with "Invalid Category" or "Invalid Sub-Category",
+        and rejects the whole request, so a typo leaves the activity unchanged.
+        Valid keys, grouped by category, are in
+        https://connect.garmin.com/web-data/exercises/Exercises.json
+
+        Args:
+            activity_id: ID of the activity to update
+            sets: Active sets in the order performed. Each is a dict with:
+                category (required): Garmin exercise category key
+                exercise_name: Garmin exercise key within the category; omit to
+                    record just the category
+                reps: Repetition count; omit for timed exercises
+                weight_kg or weight_lb: Load lifted; omit for bodyweight
+                duration_seconds: Time under work for the set
+                rest_seconds: Rest after this set, recorded as a REST set
+            keep_timing: Keep the recorded set timing and rest periods,
+                replacing only exercise, reps and weight (default False)
+        """
+        try:
+            activity_id = int(activity_id)
+            if not sets:
+                return "sets cannot be empty"
+            exercise_sets = _build_exercise_sets(sets)
+
+            if keep_timing:
+                existing = (
+                    garmin_client.get_activity_exercise_sets(activity_id) or {}
+                ).get("exerciseSets") or []
+                recorded = sum(s.get("setType") == "ACTIVE" for s in existing)
+                if recorded != len(sets):
+                    return (
+                        f"keep_timing needs one set per recorded set: activity "
+                        f"{activity_id} has {recorded} active sets, got {len(sets)}"
+                    )
+                new_active = iter(s for s in exercise_sets if s["setType"] == "ACTIVE")
+                for s in existing:
+                    if s.get("setType") == "ACTIVE":
+                        new = next(new_active)
+                        s.update(
+                            exercises=new["exercises"],
+                            repetitionCount=new["repetitionCount"],
+                            weight=new["weight"],
+                        )
+                exercise_sets = existing
+
+            url = f"{garmin_client.garmin_connect_activity}/{activity_id}/exerciseSets"
+            garmin_client.client.put(
+                "connectapi",
+                url,
+                json={"activityId": activity_id, "exerciseSets": exercise_sets},
+                api=True,
+            )
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "activity_id": activity_id,
+                    "sets_written": len(sets),
+                    "message": "Activity exercise sets successfully replaced",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error updating activity exercise sets: {str(e)}"
+
+    @app.tool()
     async def count_activities() -> str:
         """Get total count of activities in the user's Garmin account
 
@@ -812,7 +1089,7 @@ def register_tools(app):
                 activity = {
                     "id": a.get('activityId'),
                     "name": a.get('activityName'),
-                    "type": a.get('activityType', {}).get('typeKey'),
+                    "type": (a.get('activityType') or {}).get('typeKey'),
                     "event_type": (a.get('eventType') or {}).get('typeKey'),
                     "start_time": a.get('startTimeLocal'),
                     "distance_meters": a.get('distance'),
@@ -858,16 +1135,37 @@ def register_tools(app):
             activity_name: Optional title; defaults to the type_key if not provided
             distance_km: Distance in kilometres (default 0.0 for non-distance activities)
             time_zone: IANA time zone for the activity (default UTC)
+
+        If a write fails with write_committed="unknown", check whether the
+        activity exists before retrying to avoid creating a duplicate.
         """
+        tracker = WriteTracker("create_manual_activity", "Error creating manual activity")
         try:
-            if not type_key.strip():
+            type_key = type_key.strip()
+            if not type_key:
                 return "Error: type_key is required"
             if duration_minutes <= 0:
                 return "Error: duration_minutes must be greater than 0"
+            if distance_km < 0:
+                return "Error: distance_km must be non-negative"
+
+            try:
+                parsed_date = datetime.date.fromisoformat(date)
+                if parsed_date.isoformat() != date:
+                    raise ValueError
+            except ValueError:
+                return "Error: date must be a valid date in YYYY-MM-DD format"
+            try:
+                parsed_time = datetime.datetime.strptime(start_time, "%H:%M")
+                if parsed_time.strftime("%H:%M") != start_time:
+                    raise ValueError
+            except ValueError:
+                return "Error: start_time must be in HH:MM (24-hour) format"
 
             name = activity_name.strip() or type_key.replace("_", " ").title()
             start_datetime = f"{date}T{start_time}:00.000"
 
+            tracker.sending()
             result = garmin_client.create_manual_activity(
                 start_datetime=start_datetime,
                 time_zone=time_zone,
@@ -876,13 +1174,66 @@ def register_tools(app):
                 duration_min=duration_minutes,
                 activity_name=name,
             )
+            tracker.committed()
 
             return json.dumps({
                 "success": True,
                 "activity": result,
             }, indent=2)
         except Exception as e:
-            return f"Error creating manual activity: {str(e)}"
+            return tracker.error(e)
+
+    @app.tool()
+    async def delete_activity(
+        activity_id: Union[int, str], confirm: bool = False
+    ) -> str:
+        """Permanently delete an activity from Garmin Connect.
+
+        This cannot be undone. Call once with confirm=false (the default) to
+        preview the activity, then call again with confirm=true to delete it.
+        confirm=true is the scripting equivalent of a force flag.
+
+        Args:
+            activity_id: ID of the activity to delete
+            confirm: Must be true to actually delete. Default false returns a preview.
+        """
+        try:
+            activity_id = int(activity_id)
+        except (TypeError, ValueError):
+            return f"Invalid activity ID: {activity_id}"
+
+        try:
+            preview = _activity_preview(garmin_client, activity_id)
+            if not confirm:
+                return json.dumps(
+                    {
+                        "status": "needs_confirmation",
+                        "activity": preview,
+                        "message": (
+                            "This permanently deletes the activity from Garmin Connect "
+                            "and cannot be undone. Call again with confirm=true to proceed."
+                        ),
+                    },
+                    indent=2,
+                )
+
+            garmin_client.delete_activity(activity_id)
+            print(
+                "delete_activity: deleted activity "
+                f"{activity_id} name={preview.get('name')!r} "
+                f"at {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+                file=sys.stderr,
+            )
+            return json.dumps(
+                {
+                    "status": "deleted",
+                    "activity": preview,
+                    "message": f"Activity {activity_id} permanently deleted.",
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return f"Error deleting activity: {str(e)}"
 
     @app.tool()
     async def get_activity_types() -> str:

@@ -4,7 +4,11 @@ import os
 import pytest
 from unittest.mock import patch
 
-from garmin_mcp import _parse_transport_config, _VALID_TRANSPORTS
+from garmin_mcp import (
+    _parse_transport_config,
+    _resolve_stateless_http,
+    _VALID_TRANSPORTS,
+)
 
 
 class TestParseTransportConfig:
@@ -17,7 +21,7 @@ class TestParseTransportConfig:
             os.environ.pop("GARMIN_MCP_PORT", None)
             transport, host, port = _parse_transport_config()
         assert transport == "stdio"
-        assert host == "0.0.0.0"
+        assert host == "127.0.0.1"
         assert port == 8000
 
     @pytest.mark.parametrize("value", list(_VALID_TRANSPORTS))
@@ -55,3 +59,27 @@ class TestParseTransportConfig:
         with patch.dict(os.environ, {"GARMIN_MCP_PORT": "not-a-number"}):
             with pytest.raises(ValueError):
                 _parse_transport_config()
+
+
+class TestResolveStatelessHttp:
+    """Tests for _resolve_stateless_http."""
+
+    def test_default_is_stateful(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GARMIN_MCP_STATELESS_HTTP", None)
+            assert _resolve_stateless_http() is False
+
+    @pytest.mark.parametrize("value", ["true", "TRUE", "1", "yes", "on", " true "])
+    def test_truthy_values_enable(self, value):
+        with patch.dict(os.environ, {"GARMIN_MCP_STATELESS_HTTP": value}):
+            assert _resolve_stateless_http() is True
+
+    @pytest.mark.parametrize("value", ["", "false", "0", "no", "off", "False"])
+    def test_falsy_values_disable(self, value):
+        with patch.dict(os.environ, {"GARMIN_MCP_STATELESS_HTTP": value}):
+            assert _resolve_stateless_http() is False
+
+    def test_invalid_value_raises(self):
+        with patch.dict(os.environ, {"GARMIN_MCP_STATELESS_HTTP": "maybe"}):
+            with pytest.raises(ValueError, match="Invalid GARMIN_MCP_STATELESS_HTTP"):
+                _resolve_stateless_http()

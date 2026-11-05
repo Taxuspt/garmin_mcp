@@ -16,6 +16,7 @@ from garmin_mcp.auth_cli import (
     verify_tokens,
     main,
     _secure_token_dir,
+    _verify_saved_tokens,
 )
 
 
@@ -139,8 +140,8 @@ class TestAuthenticate:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -148,7 +149,9 @@ class TestAuthenticate:
                 result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=True)
 
         assert result is True
-        mock_garmin_instance.login.assert_called_once()
+        mock_garmin_instance.client.login.assert_called_once_with(
+            "test@example.com", "secret", return_on_mfa=True
+        )
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
@@ -161,8 +164,8 @@ class TestAuthenticate:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         token_data = '{"token": "test"}'
@@ -175,7 +178,9 @@ class TestAuthenticate:
                 result = authenticate(tmpdir, base64_path, force_reauth=False)
 
         assert result is True
-        mock_garmin_instance.login.assert_called_once()
+        mock_garmin_instance.client.login.assert_called_once_with(
+            "test@example.com", "secret", return_on_mfa=True
+        )
         mock_garmin_instance.client.dump.assert_called_once_with(tmpdir)
         # Tokens are verified by an independent token-based login
         mock_verify.assert_called_once()
@@ -183,6 +188,48 @@ class TestAuthenticate:
         m().write.assert_called_once_with(expected_b64)
         # Verify restrictive permissions were applied to the base64 file
         mock_chmod.assert_any_call(os.path.expanduser(base64_path), 0o600)
+
+    @patch("garmin_mcp.auth_cli.token_exists", return_value=False)
+    @patch(
+        "garmin_mcp.auth_cli.get_credentials",
+        return_value=("test@example.com", "secret"),
+    )
+    @patch("garmin_mcp.auth_cli.Garmin")
+    @patch(
+        "garmin_mcp.auth_cli._verify_saved_tokens",
+        return_value=(True, "Test User"),
+    )
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_authentication_resolves_home_in_token_paths(
+        self,
+        mock_chmod,
+        mock_verify,
+        mock_garmin,
+        _mock_get_creds,
+        mock_exists,
+        monkeypatch,
+        tmp_path,
+    ):
+        """The CLI writes and verifies tokens at the same resolved paths."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        mock_garmin.return_value.client.login.return_value = (None, None)
+
+        with patch("builtins.open", mock_open(read_data="{}")):
+            result = authenticate(
+                "${HOME}/.garminconnect",
+                "${HOME}/.garminconnect_base64",
+            )
+
+        expected_token_path = str(tmp_path / ".garminconnect")
+        expected_base64_path = str(tmp_path / ".garminconnect_base64")
+        assert result is True
+        mock_exists.assert_called_once_with(expected_token_path)
+        mock_garmin.return_value.client.dump.assert_called_once_with(
+            expected_token_path
+        )
+        mock_verify.assert_called_once_with(expected_token_path, False)
+        mock_chmod.assert_any_call(expected_base64_path, 0o600)
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.get_credentials")
@@ -197,8 +244,8 @@ class TestAuthenticate:
         mock_verify.return_value = (False, "session is not authenticated (no profile returned)")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -228,12 +275,70 @@ class TestAuthenticate:
 
         mock_exists.return_value = False
         mock_get_creds.return_value = ("test@example.com", "wrongpassword")
-        mock_garmin.return_value.login.side_effect = GarminConnectAuthenticationError("Invalid credentials")
+        mock_garmin.return_value.client.login.side_effect = GarminConnectAuthenticationError("Invalid credentials")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
 
         assert result is False
+
+    @patch("garmin_mcp.auth_cli.token_exists", return_value=False)
+    @patch("garmin_mcp.auth_cli.get_credentials", return_value=("test@example.com", "secret"))
+    @patch("garmin_mcp.auth_cli.Garmin")
+    @patch("garmin_mcp.auth_cli.os.chmod")
+    def test_profile_without_full_name_succeeds(self, mock_chmod, mock_garmin, mock_get_creds, mock_exists, capsys):
+        """Valid tokens for a profile with no full name must not be reported as failed."""
+        # Mock both entry points: the credential exchange and the token login
+        # used to verify the saved tokens.
+        mock_garmin.return_value.login.return_value = (None, None)
+        mock_garmin.return_value.client.login.return_value = (None, None)
+        mock_garmin.return_value.get_full_name.return_value = ""
+        mock_garmin.return_value.display_name = "abc123"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("builtins.open", mock_open(read_data="{}")):
+                result = authenticate(tmpdir, f"{tmpdir}/base64", force_reauth=False)
+
+        assert result is True
+        assert "Logged in as: abc123" in capsys.readouterr().out
+
+
+class TestVerifySavedTokens:
+    """Tests for _verify_saved_tokens, with Garmin mocked."""
+
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_full_name_is_reported(self, mock_garmin):
+        mock_garmin.return_value.get_full_name.return_value = "Jane Doe"
+
+        assert _verify_saved_tokens("/tokens") == (True, "Jane Doe")
+        mock_garmin.return_value.login.assert_called_once_with("/tokens")
+
+    @pytest.mark.parametrize("full_name", ["", None])
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_missing_full_name_falls_back_to_display_name(self, mock_garmin, full_name):
+        # login() raises unless the profile loads; the library then sets
+        # full_name to "" (or None) for profiles without a name.
+        mock_garmin.return_value.get_full_name.return_value = full_name
+        mock_garmin.return_value.display_name = "abc123"
+
+        assert _verify_saved_tokens("/tokens") == (True, "abc123")
+
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_no_name_at_all_still_verifies(self, mock_garmin):
+        mock_garmin.return_value.get_full_name.return_value = ""
+        mock_garmin.return_value.display_name = None
+
+        assert _verify_saved_tokens("/tokens") == (True, "your Garmin account")
+
+    @patch("garmin_mcp.auth_cli.Garmin")
+    def test_login_failure_is_reported(self, mock_garmin):
+        from garminconnect import GarminConnectAuthenticationError
+
+        mock_garmin.return_value.login.side_effect = GarminConnectAuthenticationError(
+            "Failed to retrieve social profile"
+        )
+
+        assert _verify_saved_tokens("/tokens") == (False, "Failed to retrieve social profile")
 
 
 class TestVerifyTokens:
@@ -404,8 +509,8 @@ class TestAuthenticateIsCn:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -433,8 +538,8 @@ class TestAuthenticateIsCn:
         mock_get_creds.return_value = ("test@example.com", "secret")
 
         mock_garmin_instance = Mock()
-        mock_garmin_instance.login = Mock(return_value=(None, None))
         mock_garmin_instance.client = Mock()
+        mock_garmin_instance.client.login.return_value = (None, None)
         mock_garmin.return_value = mock_garmin_instance
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -482,3 +587,115 @@ class TestSecureTokenDir:
         with tempfile.TemporaryDirectory() as tmpdir:
             _secure_token_dir(tmpdir)
             assert oct(os.stat(tmpdir).st_mode)[-3:] == "700"
+
+
+class TestDiagnoseTokens:
+    """--diagnose prints the resolved paths and the state of the store."""
+
+    @staticmethod
+    def _write_tokens(store):
+        store.mkdir(parents=True, exist_ok=True)
+        (store / "garmin_tokens.json").write_text(
+            '{"di_token": "a", "di_refresh_token": "b", "di_client_id": "c"}'
+        )
+
+    def test_missing_directory_fails_without_network(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        missing = tmp_path / "nope"
+        monkeypatch.setenv("GARMINTOKENS", str(missing))
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch("garmin_mcp.auth_cli.validate_tokens") as mock_validate:
+            result = diagnose_tokens(None, is_cn=False)
+
+        out = capsys.readouterr().out
+        assert result is False
+        mock_validate.assert_not_called()
+        assert f"GARMINTOKENS         : {missing}" in out
+        assert f"Token directory      : {missing}" in out
+        assert "state              : MISSING" in out
+        assert "garmin_tokens.json   : MISSING" in out
+        assert "the server does not read it" in out
+
+    def test_valid_tokens_report_success(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        store = tmp_path / "tokens"
+        self._write_tokens(store)
+        monkeypatch.delenv("GARMINTOKENS", raising=False)
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch("garmin_mcp.auth_cli.validate_tokens", return_value=(True, "")) as mock_validate:
+            result = diagnose_tokens(str(store), is_cn=True)
+
+        out = capsys.readouterr().out
+        assert result is True
+        mock_validate.assert_called_once_with(str(store), is_cn=True)
+        assert "garmin_tokens.json   : present" in out
+        assert "Region               : garmin.cn" in out
+        assert "✓ Tokens authenticate" in out
+
+    def test_rejected_tokens_report_reauth(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        store = tmp_path / "tokens"
+        self._write_tokens(store)
+        monkeypatch.setenv("GARMINTOKENS", str(tmp_path / "elsewhere"))
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch(
+            "garmin_mcp.auth_cli.validate_tokens",
+            return_value=(False, "Tokens expired or invalid"),
+        ):
+            result = diagnose_tokens(str(store), is_cn=False)
+
+        out = capsys.readouterr().out
+        assert result is False
+        assert "points elsewhere" in out
+        assert "do not authenticate: Tokens expired or invalid" in out
+        assert "--force-reauth" in out
+
+    def test_corrupt_token_file_is_reported(self, monkeypatch, tmp_path, capsys):
+        from garmin_mcp.auth_cli import diagnose_tokens
+
+        store = tmp_path / "tokens"
+        store.mkdir()
+        (store / "garmin_tokens.json").write_text("{nope")
+        (store / "oauth2_token.json").write_text("{}")
+        monkeypatch.setenv("GARMINTOKENS_BASE64", str(tmp_path / "b64"))
+        with patch("garmin_mcp.auth_cli.validate_tokens") as mock_validate:
+            result = diagnose_tokens(str(store), is_cn=False)
+
+        out = capsys.readouterr().out
+        assert result is False
+        mock_validate.assert_not_called()
+        assert "garmin_tokens.json   : present, but unreadable or not JSON" in out
+        assert "Other files          : oauth2_token.json" in out
+
+    @patch("sys.argv", ["garmin-mcp-auth", "--diagnose"])
+    @patch("garmin_mcp.auth_cli.diagnose_tokens", return_value=True)
+    @patch("garmin_mcp.auth_cli.verify_tokens")
+    @patch("garmin_mcp.auth_cli.authenticate")
+    def test_main_diagnose_mode(self, mock_authenticate, mock_verify, mock_diagnose):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 0
+        mock_diagnose.assert_called_once_with(None, False)
+        mock_verify.assert_not_called()
+        mock_authenticate.assert_not_called()
+
+    @patch("sys.argv", ["garmin-mcp-auth", "--diagnose", "--token-path", "/custom/path", "--is-cn"])
+    @patch("garmin_mcp.auth_cli.diagnose_tokens", return_value=False)
+    def test_main_diagnose_failure_exit_code(self, mock_diagnose):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 1
+        mock_diagnose.assert_called_once_with("/custom/path", True)
+
+    @patch("sys.argv", ["garmin-mcp-auth", "--verify", "--is-cn"])
+    @patch("garmin_mcp.auth_cli.verify_tokens", return_value=True)
+    def test_main_verify_passes_region(self, mock_verify):
+        with pytest.raises(SystemExit):
+            main()
+
+        assert mock_verify.call_args[0][1] is True
