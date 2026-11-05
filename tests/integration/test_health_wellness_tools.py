@@ -296,7 +296,7 @@ async def test_get_energy_balance_excludes_partial_and_no_data_days(
         _energy_balance_intake_resp([
             (complete_date, 2000, 5),
             (no_device_data_date, 2000, 5),
-            (today, 2000, 5),
+            (today, 400, 1),  # breakfast only; do not include in a daily mean
         ]),
         # no_device_data_date has no entry at all -- absent from Garmin's response
         _energy_balance_calories_resp([
@@ -312,9 +312,103 @@ async def test_get_energy_balance_excludes_partial_and_no_data_days(
     )
     data = json.loads(result[0][0].text)
 
+    assert data["intake"]["days_included"] == 2
+    assert data["intake"]["days_excluded_unlogged"] == 0
+    assert data["intake"]["days_excluded_partial"] == 1
+    assert data["intake"]["mean_calories_per_day"] == 2000.0
+    assert today not in data["intake"]["low_item_count_dates"]
     assert data["expenditure_garmin"]["days_included"] == 1
     assert data["expenditure_garmin"]["days_excluded"] == 2
     assert data["expenditure_garmin"]["mean_total_calories_per_day"] == 2600.0
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_partial_intake_does_not_bias_derived_tdee(
+    app_with_health_wellness, mock_garmin_client
+):
+    today = datetime.date.today()
+    start = today - datetime.timedelta(days=24)
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([
+            (start.isoformat(), 2000, 5),
+            (today.isoformat(), 400, 1),
+        ]),
+        _energy_balance_calories_resp([(start.isoformat(), 2500)]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {
+        "dateWeightList": [
+            {"calendarDate": start.isoformat(), "weight": 80000, "bodyFat": 20},
+            {"calendarDate": today.isoformat(), "weight": 80000, "bodyFat": 20},
+        ]
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance",
+        {"start_date": start.isoformat(), "end_date": today.isoformat()},
+    )
+    data = json.loads(result[0][0].text)
+    assert data["derived"]["composition_derived_tdee_kcal_per_day"] == 2000
+    assert data["derived"]["difference_kcal_per_day"] == 500
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_excludes_future_days_from_both_means(
+    app_with_health_wellness, mock_garmin_client
+):
+    today = datetime.date.today()
+    start = today - datetime.timedelta(days=2)
+    yesterday = today - datetime.timedelta(days=1)
+    tomorrow = today + datetime.timedelta(days=1)
+    end = today + datetime.timedelta(days=2)
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([
+            (start.isoformat(), 2000, 5),
+            (today.isoformat(), 400, 1),
+            (tomorrow.isoformat(), 9000, 1),
+        ]),
+        _energy_balance_calories_resp([
+            (start.isoformat(), 2500),
+            (yesterday.isoformat(), 2600),
+            (today.isoformat(), 300),
+            (tomorrow.isoformat(), 9000),
+        ]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance", {"start_date": start.isoformat(), "end_date": end.isoformat()}
+    )
+    data = json.loads(result[0][0].text)
+    intake = data["intake"]
+    assert intake["mean_calories_per_day"] == 2000
+    assert intake["days_included"] == 1
+    assert intake["days_excluded_unlogged"] == 1
+    assert intake["days_excluded_partial"] == 1
+    assert intake["days_excluded_future"] == 2
+    assert intake["low_item_count_dates"] == []
+    expenditure = data["expenditure_garmin"]
+    assert expenditure["mean_total_calories_per_day"] == 2550
+    assert expenditure["days_included"] == 2
+    assert expenditure["days_excluded"] == 3
+    assert expenditure["days_excluded_future"] == 2
+    assert expenditure["days_included"] + expenditure["days_excluded"] == data["days_requested"]
+
+
+@pytest.mark.asyncio
+async def test_get_energy_balance_future_only_does_not_treat_planned_data_as_usable(
+    app_with_health_wellness, mock_garmin_client
+):
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+    mock_garmin_client.connectapi.side_effect = [
+        _energy_balance_intake_resp([(tomorrow, 2000, 5)]),
+        _energy_balance_calories_resp([(tomorrow, 2500)]),
+    ]
+    mock_garmin_client.get_body_composition.return_value = {"dateWeightList": []}
+
+    result = await app_with_health_wellness.call_tool(
+        "get_energy_balance", {"start_date": tomorrow, "end_date": tomorrow}
+    )
+    assert "No usable data found" in result[0][0].text
 
 
 @pytest.mark.asyncio

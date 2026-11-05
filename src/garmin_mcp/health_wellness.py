@@ -719,21 +719,23 @@ def register_tools(app):
         carry little caloric weight, unlike true lean tissue), which biases
         the fat-free-mass term; see assumptions.note.
 
-        Exclusions applied automatically, matching get_nutrition_summary_between_dates
-        and get_stats_range:
-        - Intake: days with no logged food (item_count 0) are excluded from
-          the mean, not counted as zero. Days with a low but nonzero
-          item_count remain included (excluding them requires judgment this
+        Exclusions applied automatically:
+        - Intake: the current (partial) day, future days, and days with no
+          logged food (item_count 0) are excluded from the mean, not counted
+          as zero. Days with a low but nonzero item_count remain included (excluding them requires judgment this
           tool doesn't make unilaterally) but are called out in
           low_item_count_dates so low-confidence days are visible rather than
           silently blended into the mean. A window with many such days (or
           many item_count-0 days) biases composition_derived_tdee downward --
           check days_excluded_unlogged and low_item_count_dates before
           comparing two windows against each other.
-        - Expenditure: days with no device data, and the current (partial)
-          day, are excluded from the mean.
+        - Expenditure: days with no device data, the current (partial) day,
+          and future days are excluded from the mean. days_excluded includes
+          days_excluded_future, which is also reported separately.
         - Body composition: only scale readings with both weight and body-fat
           percentage are used (skips weight-only manual entries).
+
+        The current date is determined by the server's local time zone.
 
         Needs at least 2 qualifying body-composition readings to derive a
         trend, and to pass the span/leverage gate above to derive a TDEE from
@@ -769,11 +771,12 @@ def register_tools(app):
         except Exception as e:
             return f"Error retrieving energy balance data: {str(e)}"
 
-        today = datetime.date.today().isoformat()
+        today_date = datetime.date.today()
+        today = today_date.isoformat()
 
         logged_days = [
             (date_str, v["calories"]) for date_str, v in intake_by_date.items()
-            if v.get("item_count", 0) > 0 and v.get("calories") is not None
+            if date_str < today and v.get("item_count", 0) > 0 and v.get("calories") is not None
         ]
         intake_days_included = len(logged_days)
         mean_intake = (
@@ -781,12 +784,14 @@ def register_tools(app):
         )
         low_item_count_dates = sorted(
             date_str for date_str, v in intake_by_date.items()
-            if 0 < v.get("item_count", 0) < LOW_ITEM_COUNT_THRESHOLD
+            if date_str < today and 0 < v.get("item_count", 0) < LOW_ITEM_COUNT_THRESHOLD
         )
+        partial_intake_days = int(start <= today_date <= end)
+        future_days = max(0, (end - max(start, today_date + datetime.timedelta(days=1))).days + 1)
 
         expenditure_values = [
             v["totalCalories"] for date_str, v in expenditure_by_date.items()
-            if date_str != today and v.get("totalCalories") is not None
+            if date_str < today and v.get("totalCalories") is not None
         ]
         expenditure_days_included = len(expenditure_values)
         mean_expenditure = (
@@ -810,13 +815,16 @@ def register_tools(app):
             "intake": {
                 "mean_calories_per_day": round(mean_intake, 1) if mean_intake is not None else None,
                 "days_included": intake_days_included,
-                "days_excluded_unlogged": days_requested - intake_days_included,
+                "days_excluded_unlogged": days_requested - intake_days_included - partial_intake_days - future_days,
+                "days_excluded_partial": partial_intake_days,
+                "days_excluded_future": future_days,
                 "low_item_count_dates": low_item_count_dates,
             },
             "expenditure_garmin": {
                 "mean_total_calories_per_day": round(mean_expenditure, 1) if mean_expenditure is not None else None,
                 "days_included": expenditure_days_included,
                 "days_excluded": days_requested - expenditure_days_included,
+                "days_excluded_future": future_days,
             },
         }
 
