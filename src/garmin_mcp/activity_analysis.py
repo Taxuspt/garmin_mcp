@@ -1753,6 +1753,70 @@ def register_tools(app):
     """Register all activity analysis tools with the MCP server app"""
 
     @app.tool()
+    async def get_activity_resampled_stream(
+        activity_id: int,
+        fields: list[str] | None = None,
+        resolution: str = "30s",
+        time_basis: str = "active",
+        offset: int = 0,
+        page_size: int = 500,
+        expected_source_sha256: str | None = None,
+    ) -> str:
+        """Read time-weighted 5s/30s/60s bins from one original FIT activity.
+
+        fields: hr (bpm), power (W), speed (m/s), cadence (rpm), temperature (C),
+        grade (%), altitude/distance (m). Default: hr, power, speed. Means use
+        only observed intervals; altitude/distance use the last observed value.
+        Missing values stay absent, never zero-filled. Each bin reports observed
+        seconds per field. Active time excludes explicit FIT timer pauses;
+        elapsed time keeps them as uncovered time. Not a moving-time estimate.
+
+        No value crosses a pause. Gaps over 5s retain only one nominal sample
+        period, with the rest marked missing (a conservative heuristic, not proof
+        of sensor failure). Multi-session activities are refused, not merged.
+        Limit: 32 MiB decompressed FIT, 100k records, 1000 timer events, 7 days.
+
+        Pagination uses BIN offsets, not FIT message offsets. Keep fields,
+        resolution and time_basis unchanged between pages and pass the returned
+        source_sha256 as expected_source_sha256 to reject a changed download.
+        Each page downloads again; no disk cache or Garmin writes are performed.
+        Use get_activity_fit_messages for raw FIT messages and unknown fields.
+        """
+        import asyncio
+        from garmin_mcp import activity_timeline as streams
+
+        try:
+            if activity_id <= 0:
+                raise streams.ActivityStreamsError("invalid_activity_id", "activity_id must be positive")
+            selected = streams.validate_request(
+                fields if fields is not None else ["hr", "power", "speed"],
+                resolution, time_basis, offset, page_size,
+            )
+            if expected_source_sha256 is not None and (
+                len(expected_source_sha256) != 64 or
+                any(c not in "0123456789abcdef" for c in expected_source_sha256)
+            ):
+                raise streams.ActivityStreamsError("invalid_digest", "expected_source_sha256 must be a lowercase SHA-256 hex digest")
+            client = garmin_client
+
+            def read():
+                from garminconnect import Garmin
+                payload = client.download_activity(activity_id, dl_fmt=Garmin.ActivityDownloadFormat.ORIGINAL)
+                if not payload:
+                    raise streams.ActivityStreamsError("no_fit_data", "No FIT data returned for this activity")
+                timeline = streams.decode_fit_timeline(payload)
+                if expected_source_sha256 is not None and timeline.metadata["source_sha256"] != expected_source_sha256:
+                    raise streams.ActivityStreamsError("source_changed", "FIT source changed; restart pagination at offset 0")
+                return streams.stream_response(activity_id, timeline, selected, resolution,
+                                               time_basis, offset=offset, page_size=page_size)
+
+            return json.dumps(await asyncio.to_thread(read), allow_nan=False)
+        except streams.ActivityStreamsError as exc:
+            return json.dumps({"status": "error", "error": {"code": exc.code, "message": str(exc)}})
+        except Exception as exc:
+            return json.dumps({"status": "error", "error": {"code": "read_failed", "message": str(exc)}})
+
+    @app.tool()
     async def get_activity_fit_messages(
         activity_id: Union[int, str],
         message_types: Optional[List[str]] = None,

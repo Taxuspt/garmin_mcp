@@ -204,6 +204,10 @@
       "description": "Get power distribution across training zones for an activity."
     },
     {
+      "name": "get_activity_resampled_stream",
+      "description": "Read time-weighted 5s/30s/60s bins from one original FIT activity."
+    },
+    {
       "name": "get_activity_split_summaries",
       "description": "Get split summaries for an activity"
     },
