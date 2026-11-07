@@ -27,6 +27,9 @@ import requests
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 CLIENT_ID = "https://chatgpt.com/oauth/client.json"
+CLIENT_ID_RE = re.compile(
+    r"^https://chatgpt\.com/oauth/(?:[A-Za-z0-9_-]{8,64}/)?client\.json$"
+)
 JWKS_URL = "https://chatgpt.com/oauth/jwks.json"
 SCOPE = "garmin:all"
 PKCE_RE = re.compile(r"^[A-Za-z0-9._~-]{43,128}$")
@@ -39,7 +42,7 @@ CODE_LIFETIME = 300
 
 def _get_json(url: str) -> dict:
     """Fetch *only* the two pinned ChatGPT metadata URLs. Never follow redirects."""
-    if url not in (CLIENT_ID, JWKS_URL):
+    if url != JWKS_URL and not CLIENT_ID_RE.fullmatch(url):
         raise ValueError("Untrusted client metadata URL")
     response = requests.get(url, timeout=5, allow_redirects=False)
     response.raise_for_status()
@@ -107,7 +110,7 @@ class ChatGPTOAuth:
 
     def _cached_document(self, url: str, ttl: int) -> dict:
         now = time.time()
-        cached = self._metadata_cache if url == CLIENT_ID else self._jwks_cache
+        cached = self._jwks_cache if url == JWKS_URL else self._metadata_cache
         entry = cached.get(url)
         if entry and entry[0] > now:
             return entry[1]
@@ -115,10 +118,12 @@ class ChatGPTOAuth:
         cached[url] = (now + ttl, document)
         return document
 
-    def _client_metadata(self) -> dict:
-        data = self._cached_document(CLIENT_ID, 600)
+    def _client_metadata(self, client_id: str) -> dict:
+        if not CLIENT_ID_RE.fullmatch(client_id):
+            raise ValueError("Unsupported OAuth client")
+        data = self._cached_document(client_id, 600)
         if (
-            data.get("client_id") != CLIENT_ID
+            data.get("client_id") != client_id
             or "private_key_jwt" not in data.get("token_endpoint_auth_methods_supported", [])
             or data.get("jwks_uri") != JWKS_URL
         ):
@@ -133,7 +138,7 @@ class ChatGPTOAuth:
         scope = parameters.get("scope") or SCOPE
         state = parameters.get("state", "")
         if (
-            client_id != CLIENT_ID
+            not CLIENT_ID_RE.fullmatch(client_id)
             or parameters.get("response_type") != "code"
             or parameters.get("code_challenge_method") != "S256"
             or not CHALLENGE_RE.fullmatch(challenge)
@@ -142,7 +147,7 @@ class ChatGPTOAuth:
             or len(state) > 2048
         ):
             raise ValueError("Invalid OAuth authorization request")
-        allowed_redirects = self._client_metadata().get("redirect_uris", [])
+        allowed_redirects = self._client_metadata(client_id).get("redirect_uris", [])
         if redirect_uri not in allowed_redirects:
             raise ValueError("Redirect URI is not registered by ChatGPT")
         return {
@@ -174,16 +179,20 @@ class ChatGPTOAuth:
     def validate_access_token(self, token: str) -> bool:
         try:
             data = self._verify(token, "access", self.resource)
-            return data.get("client_id") == CLIENT_ID and data.get("scope") == SCOPE
+            return (
+                isinstance(data.get("client_id"), str)
+                and bool(CLIENT_ID_RE.fullmatch(data["client_id"]))
+                and data.get("scope") == SCOPE
+            )
         except (jwt.PyJWTError, ValueError, TypeError):
             return False
 
-    def _issue_tokens(self) -> JSONResponse:
+    def _issue_tokens(self, client_id: str = CLIENT_ID) -> JSONResponse:
         now = int(time.time())
         common = {
             "iss": self.issuer,
             "sub": "garmin-owner",
-            "client_id": CLIENT_ID,
+            "client_id": client_id,
             "scope": SCOPE,
             "iat": now,
         }
@@ -213,7 +222,8 @@ class ChatGPTOAuth:
         )
 
     def _verify_client_assertion(self, form) -> None:
-        if form.get("client_id") != CLIENT_ID:
+        client_id = form.get("client_id", "")
+        if not isinstance(client_id, str) or not CLIENT_ID_RE.fullmatch(client_id):
             raise ValueError("Unsupported OAuth client")
         if (
             form.get("client_assertion_type")
@@ -229,7 +239,7 @@ class ChatGPTOAuth:
         kid = header.get("kid")
         if not isinstance(kid, str) or len(kid) > 256:
             raise ValueError("Missing client assertion key ID")
-        self._client_metadata()
+        self._client_metadata(client_id)
         jwks = self._cached_document(JWKS_URL, 3600).get("keys", [])
         key_data = next(
             (
@@ -258,14 +268,14 @@ class ChatGPTOAuth:
             assertion,
             key,
             algorithms=["RS256"],
-            issuer=CLIENT_ID,
+            issuer=client_id,
             audience=[self.token_url, self.issuer],
             options={"require": ["iss", "sub", "aud", "iat", "exp", "jti"]},
             leeway=30,
         )
         now = int(time.time())
         if (
-            data.get("sub") != CLIENT_ID
+            data.get("sub") != client_id
             or int(data["exp"]) - int(data["iat"]) > 300
             or int(data["iat"]) > now + 30
         ):
@@ -277,7 +287,7 @@ class ChatGPTOAuth:
             key: until for key, until in self._used_client_assertions.items()
             if until > now
         }
-        replay_key = hashlib.sha256((CLIENT_ID + jti).encode()).hexdigest()
+        replay_key = hashlib.sha256((client_id + jti).encode()).hexdigest()
         if replay_key in self._used_client_assertions:
             raise ValueError("Replayed client assertion")
         self._used_client_assertions[replay_key] = int(data["exp"]) + 30
@@ -365,7 +375,10 @@ class ChatGPTOAuth:
             data = self._verify(request_token, "consent", self.authorize_url)
         except (jwt.PyJWTError, ValueError, TypeError):
             return _error("invalid_request")
-        if data.get("client_id") != CLIENT_ID or data.get("resource") != self.resource:
+        if (
+            not CLIENT_ID_RE.fullmatch(data.get("client_id", ""))
+            or data.get("resource") != self.resource
+        ):
             return _error("invalid_request")
         now = time.time()
         while self._failed_attempts and self._failed_attempts[0] < now - 300:
@@ -423,23 +436,26 @@ class ChatGPTOAuth:
             if (
                 not hmac.compare_digest(item["challenge"], challenge)
                 or item["redirect_uri"] != form.get("redirect_uri")
-                or item["client_id"] != CLIENT_ID
+                or item["client_id"] != form.get("client_id")
                 or item["resource"] != self.resource
             ):
                 return _error("invalid_grant")
-            return self._issue_tokens()
+            return self._issue_tokens(item["client_id"])
         if grant == "refresh_token":
             try:
                 data = self._verify(
                     str(form.get("refresh_token", "")), "refresh", self.token_url
                 )
-                if data.get("client_id") != CLIENT_ID or data.get("scope") != SCOPE:
+                if (
+                    data.get("client_id") != form.get("client_id")
+                    or data.get("scope") != SCOPE
+                ):
                     raise ValueError("Incorrect refresh token")
             except (jwt.PyJWTError, ValueError, TypeError):
                 return _error("invalid_grant")
             # Refresh tokens are tied to ChatGPT's verified private_key_jwt
             # identity, so no persistent token store is needed.
-            return self._issue_tokens()
+            return self._issue_tokens(data["client_id"])
         return _error("unsupported_grant_type")
 
     def register_routes(self, fastmcp):
