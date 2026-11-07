@@ -897,8 +897,24 @@ def main():
         from garmin_mcp import http_auth
 
         http_token = http_auth.resolve_http_token()
+
+        # Opt-in ChatGPT OAuth: static HTTP bearer tokens keep working.
+        from garmin_mcp.chatgpt_oauth import ChatGPTOAuth
+
+        try:
+            oauth = ChatGPTOAuth.from_env(http_token)
+        except ValueError as exc:
+            print(f"Invalid ChatGPT OAuth configuration: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if oauth:
+            if transport != "streamable-http":
+                print("ChatGPT OAuth requires streamable-http transport.", file=sys.stderr)
+                sys.exit(1)
+            oauth.register_routes(fastmcp)
+            print("ChatGPT OAuth enabled for the configured HTTPS origin.", file=sys.stderr)
+
         if http_token:
-            http_auth.install_http_bearer_auth(fastmcp, http_token)
+            http_auth.install_http_bearer_auth(fastmcp, http_token, oauth)
             print(
                 "HTTP requests must send 'Authorization: Bearer <GARMIN_MCP_HTTP_TOKEN>'; "
                 "/healthz and /readyz stay open.",
