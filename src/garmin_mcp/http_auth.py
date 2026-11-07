@@ -18,7 +18,11 @@ from starlette.responses import JSONResponse
 
 # Probes carry no Garmin data and are polled by orchestrators that usually
 # cannot attach headers.
-UNAUTHENTICATED_PATHS = frozenset({"/healthz", "/readyz"})
+UNAUTHENTICATED_PATHS = frozenset({
+    "/healthz",
+    "/readyz",
+
+})
 
 
 def resolve_http_token() -> str | None:
@@ -41,24 +45,44 @@ def is_loopback(host: str) -> bool:
 class BearerTokenGate:
     """ASGI wrapper that rejects HTTP requests without the shared bearer token."""
 
-    def __init__(self, app, token: str):
+    def __init__(self, app, token: str, oauth=None):
         self._app = app
         self._token = token.encode("utf-8")
+        self._oauth = oauth
 
     def authorized(self, scope) -> bool:
         for name, value in scope.get("headers") or ():
             if name.lower() != b"authorization":
                 continue
             scheme, _, credential = value.strip().partition(b" ")
-            return scheme.lower() == b"bearer" and hmac.compare_digest(
-                credential.strip(), self._token
-            )
+            if scheme.lower() != b"bearer":
+                return False
+            supplied = credential.strip()
+            if hmac.compare_digest(supplied, self._token):
+                return True
+            if self._oauth is None:
+                return False
+            try:
+                return self._oauth.validate_access_token(supplied.decode("ascii"))
+            except (UnicodeDecodeError, ValueError):
+                return False
         return False
 
     async def __call__(self, scope, receive, send):
+        extra_paths = (
+            {
+                "/.well-known/oauth-protected-resource",
+                "/.well-known/oauth-protected-resource/mcp",
+                "/.well-known/oauth-authorization-server",
+                "/oauth/authorize",
+                "/oauth/token",
+            }
+            if self._oauth else ()
+        )
         if (
             scope["type"] == "http"
             and scope.get("path") not in UNAUTHENTICATED_PATHS
+            and scope.get("path") not in extra_paths
             and not self.authorized(scope)
         ):
             response = JSONResponse(
@@ -67,20 +91,25 @@ class BearerTokenGate:
                     "detail": "Send 'Authorization: Bearer <GARMIN_MCP_HTTP_TOKEN>'.",
                 },
                 status_code=401,
-                headers={"WWW-Authenticate": 'Bearer realm="garmin-mcp"'},
+                headers={
+                    "WWW-Authenticate": (
+                        f'Bearer resource_metadata="{self._oauth.metadata_url}"'
+                        if self._oauth else 'Bearer realm="garmin-mcp"'
+                    )
+                },
             )
             await response(scope, receive, send)
             return
         await self._app(scope, receive, send)
 
 
-def install_http_bearer_auth(fastmcp, token: str) -> None:
+def install_http_bearer_auth(fastmcp, token: str, oauth=None) -> None:
     """Make fastmcp's HTTP apps require the bearer token on every request."""
     for builder_name in ("streamable_http_app", "sse_app"):
         builder = getattr(fastmcp, builder_name)
 
         def build(*args, _builder=builder, **kwargs):
-            return BearerTokenGate(_builder(*args, **kwargs), token)
+            return BearerTokenGate(_builder(*args, **kwargs), token, oauth)
 
         setattr(fastmcp, builder_name, build)
 
