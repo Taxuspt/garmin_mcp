@@ -25,6 +25,47 @@ def _validate_date(value: str, field: str = "date") -> str:
 # The garmin_client will be set by the main file
 garmin_client = None
 
+
+def _schedule_response_id(response: Any) -> Optional[str]:
+    """Preserve a calendar-entry ID when Garmin returns one, never a template ID.
+
+    Adapted from PR #295. Parsing is optional: a successful POST with no JSON
+    body remains successful. Only known response envelopes are traversed, not
+    arbitrary nested workout objects whose ``id`` could name a template.
+    """
+    try:
+        payload = response.json()
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+    def find(value, depth=0):
+        if depth > 8:
+            return None
+        if isinstance(value, list):
+            for item in value:
+                found = find(item, depth + 1)
+                if found is not None:
+                    return found
+            return None
+        if not isinstance(value, dict):
+            return None
+        keys = ["workoutScheduleId", "scheduledWorkoutId", "scheduled_workout_id", "scheduleId"]
+        if not any(key in value for key in ("workoutId", "workout_id")):
+            keys.append("id")
+        for key in keys:
+            candidate = value.get(key)
+            if isinstance(candidate, bool):
+                continue
+            if isinstance(candidate, int) or (isinstance(candidate, str) and candidate.strip()):
+                return str(candidate)
+        for key in ("data", "result"):
+            found = find(value.get(key), depth + 1)
+            if found is not None:
+                return found
+        return None
+
+    return find(payload)
+
 END_CONDITION_TYPE_IDS = {
     "lap.button": 1,
     "time": 2,
@@ -1379,6 +1420,8 @@ def register_tools(app):
 
         This adds an existing workout from your Garmin workout library
         to your Garmin Connect calendar on the specified date.
+        When Garmin includes a calendar-entry ID in the POST response,
+        it is returned as scheduled_workout_id (distinct from workout_id).
 
         Idempotent: if the workout is already scheduled for that date, this
         is a no-op that reports success without creating a duplicate entry.
@@ -1414,12 +1457,16 @@ def register_tools(app):
             response = garmin_client.client.post("connectapi", url, json={"date": calendar_date})
 
             if 200 <= response.status_code < 300:
-                return json.dumps({
+                entry = {
                     "status": "success",
                     "workout_id": workout_id,
                     "scheduled_date": calendar_date,
                     "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
-                }, indent=2)
+                }
+                scheduled_id = _schedule_response_id(response)
+                if scheduled_id is not None:
+                    entry["scheduled_workout_id"] = scheduled_id
+                return json.dumps(entry, indent=2)
             else:
                 return json.dumps({
                     "status": "failed",
@@ -1438,6 +1485,8 @@ def register_tools(app):
         This adds workouts to your Garmin Connect calendar in a single call.
         Each item can either reference an existing workout by ID, or provide
         inline workout_data to upload-and-schedule in one step.
+        Successful POST results include scheduled_workout_id when Garmin's
+        response supplies a calendar-entry ID; no extra request is made.
 
         Args:
             schedules: List of workout schedules, each with:
@@ -1541,6 +1590,9 @@ def register_tools(app):
                         "scheduled_date": calendar_date,
                         "message": f"Successfully scheduled workout {workout_id} for {calendar_date}"
                     }
+                    scheduled_id = _schedule_response_id(response)
+                    if scheduled_id is not None:
+                        entry["scheduled_workout_id"] = scheduled_id
                     if workout_name:
                         entry["workout_name"] = workout_name
                     results.append(entry)
