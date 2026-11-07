@@ -209,3 +209,31 @@ def test_access_signature_and_audience_checks(oauth):
     assert not instance.validate_access_token(wrong_audience)
     instance_after_restart = chatgpt_oauth.ChatGPTOAuth(ORIGIN, OWNER_PASSWORD, TOKEN)
     assert instance_after_restart.validate_access_token(token)
+
+def test_per_connector_client_ids_are_supported(monkeypatch):
+    client_id = "https://chatgpt.com/oauth/BpZIpxL-aggt/client.json"
+    redirect = "https://chatgpt.com/connector/oauth/BpZIpxL-aggt"
+
+    def metadata(url):
+        if url == client_id:
+            return {
+                "client_id": client_id,
+                "redirect_uris": [redirect],
+                "jwks_uri": chatgpt_oauth.JWKS_URL,
+                "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            }
+        raise AssertionError("Unexpected metadata request")
+
+    monkeypatch.setattr(chatgpt_oauth, "_get_json", metadata)
+    oauth = chatgpt_oauth.ChatGPTOAuth(ORIGIN, OWNER_PASSWORD, TOKEN)
+    params = _authorization_params()
+    params["client_id"] = client_id
+    params["redirect_uri"] = redirect
+
+    assert oauth._validate_authorize(params)["client_id"] == client_id
+    assert oauth.validate_access_token(
+        __import__("json").loads(oauth._issue_tokens(client_id).body)["access_token"]
+    )
+    params["client_id"] = "https://evil.example.com/oauth/client.json"
+    with pytest.raises(ValueError):
+        oauth._validate_authorize(params)
