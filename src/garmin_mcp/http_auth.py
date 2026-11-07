@@ -18,11 +18,7 @@ from starlette.responses import JSONResponse
 
 # Probes carry no Garmin data and are polled by orchestrators that usually
 # cannot attach headers.
-UNAUTHENTICATED_PATHS = frozenset({
-    "/healthz",
-    "/readyz",
-
-})
+UNAUTHENTICATED_PATHS = frozenset({"/healthz", "/readyz"})
 
 
 def resolve_http_token() -> str | None:
@@ -88,7 +84,11 @@ class BearerTokenGate:
             response = JSONResponse(
                 {
                     "error": "unauthorized",
-                    "detail": "Send 'Authorization: Bearer <GARMIN_MCP_HTTP_TOKEN>'.",
+                    "detail": (
+                        "OAuth authorization required."
+                        if self._oauth
+                        else "Send 'Authorization: Bearer <GARMIN_MCP_HTTP_TOKEN>'."
+                    ),
                 },
                 status_code=401,
                 headers={
@@ -104,7 +104,7 @@ class BearerTokenGate:
 
 
 def install_http_bearer_auth(fastmcp, token: str, oauth=None) -> None:
-    """Make fastmcp's HTTP apps require the bearer token on every request."""
+    """Require the legacy HTTP secret or a valid OAuth access token."""
     for builder_name in ("streamable_http_app", "sse_app"):
         builder = getattr(fastmcp, builder_name)
 
