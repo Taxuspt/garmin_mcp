@@ -127,6 +127,7 @@ ACTIVITIES_TOOLS = CORE_TOOLS | frozenset(
         "download_activity_file",
         "get_activity_fit_data",
         "get_activity_fit_messages",
+        "get_activity_resampled_stream",
         "get_power_duration_curve",
         "set_fit_download_dir",
         # gear_management

@@ -104,6 +104,7 @@ READ_ONLY_TOOLS = frozenset(
         "get_activity_exercise_sets",
         "get_activity_fit_data",
         "get_activity_fit_messages",
+        "get_activity_resampled_stream",
         "get_activity_gear",
         "get_activity_hr_in_timezones",
         "get_activity_power_in_timezones",

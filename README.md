@@ -43,7 +43,37 @@ This MCP server implements **110+ tools** covering ~90% of the [python-garmincon
 - ✅ Activity Analysis (2 tools) - FIT file parsing, Power Duration Curve; requires power meter and/or Di2
 - ✅ Activity File Downloads (2 tools) - download activity files in FIT, GPX, TCX, or CSV format
 
-> **Note:** Activity Analysis tools require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. The `fitparse` dependency is installed automatically.
+> **Note:** Power/DI2-specific analyses require a compatible power meter (e.g., Garmin Rally, Favero Assioma, PowerTap P1) and/or Shimano Di2 / SRAM eTap electronic shifting. HR-only resampling does not. The `fitparse` dependency is installed automatically.
+
+### Resampled FIT streams
+
+`get_activity_resampled_stream(activity_id, fields=["hr", "power", "speed"], resolution="30s")`
+returns time-weighted **5s, 30s or 60s bins**, rather than raw FIT messages. It is
+included in the `activities` tool profile. Available numeric fields are `hr`
+(bpm), `power` (W), `speed` (m/s), `cadence` (FIT rpm), `temperature` (C), `grade`
+(%), `altitude` and `distance` (m). Altitude/distance use the last observed value;
+other fields use duration-weighted means. No power meter is needed for HR-only
+streams.
+
+- `time_basis="active"` removes explicit FIT timer pauses; `"elapsed"` preserves
+  wall-clock bins. Neither infers moving time from speed.
+- Values never carry across pauses. Across gaps over 5s, only one nominal sample
+  period is credited; the remainder is missing. This is a conservative coverage
+  heuristic, not evidence that a sensor failed. Missing values are absent, not
+  zero. `field_coverage_s` reports each bin's observed seconds per field.
+- `offset` and `page_size` paginate **bins**, not FIT messages (500 bins maximum).
+  Keep the same fields/resolution/time basis and pass the returned `source_sha256`
+  as `expected_source_sha256` on later pages to reject changed FIT data. Every
+  page downloads and decodes again; there is no disk cache.
+- Processing is bounded to 32 MiB compressed/decompressed payloads, 100,000
+  records, 1,000 timer events and seven elapsed days. Multi-session/multisport FIT
+  files are refused rather than silently merged. Original FIT does not reflect
+  all later Garmin Connect edits.
+
+This is a read-only extraction from #295: no authentication or dependency changes,
+threshold inference, physiology database, training-plan writes, GPS export, raw
+field aliases or sensor-health analysis. Use `get_activity_fit_messages` for the
+raw message view; the resampling tool does not replace it.
 
 ### Gear Notes
 
