@@ -584,6 +584,10 @@
       "description": "Get all workouts with curated summary list"
     },
     {
+      "name": "list_physiology_observations",
+      "description": "Read user-supplied evidence from the configured LOCAL observation notebook."
+    },
+    {
       "name": "log_custom_food",
       "description": "Log a food item to a meal on a date"
     },
@@ -594,6 +598,10 @@
     {
       "name": "push_workout_to_device",
       "description": "Send a workout from the workout library to a Garmin device"
+    },
+    {
+      "name": "record_physiology_observation",
+      "description": "Preview or append user-supplied physiology evidence to an optional LOCAL notebook."
     },
     {
       "name": "remove_gear_from_activity",

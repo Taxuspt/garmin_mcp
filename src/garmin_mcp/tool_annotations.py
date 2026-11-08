@@ -30,6 +30,7 @@ ADDITIVE_TOOLS = frozenset(
         "log_food",
         "push_workout_to_device",
         "request_reload",
+        "record_physiology_observation",
         "schedule_week",
         "schedule_workout",
         "schedule_workouts",
@@ -84,10 +85,9 @@ IDEMPOTENT_TOOLS = frozenset(
 )
 
 
-# This is the only registered tool whose effect is strictly local. All other
-# tools either read from or write to Garmin Connect (including tools that also
-# write a local download file), so they cross an external-world boundary.
-LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir"})
+# These effects stay local; the others cross Garmin's API boundary.
+LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir", "record_physiology_observation",
+                              "list_physiology_observations"})
 
 
 # The explicit read-only set is kept as a complement rather than inferred at
@@ -96,6 +96,7 @@ LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir"})
 READ_ONLY_TOOLS = frozenset(
     {
         "count_activities",
+        "list_physiology_observations",
         "get_acclimation",
         "get_activities",
         "get_activities_by_date",

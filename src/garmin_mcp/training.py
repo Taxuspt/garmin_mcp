@@ -521,6 +521,74 @@ def register_tools(app):
     """Register all training-related tools with the MCP server app"""
 
     @app.tool()
+    async def record_physiology_observation(observation: dict, dry_run: bool = True) -> str:
+        """Preview or append user-supplied physiology evidence to an optional LOCAL notebook.
+
+        observation requires sport (cycling/running/swimming/other), metric
+        (vt1/vt2/lthr/ftp/max_hr/resting_hr), value, unit (W for ftp; bpm for
+        all others), observed_at (ISO timestamp with explicit offset), source.
+        Optional: method (default user_report), confidence (user supplied 0-1),
+        lower_bound/upper_bound (both or neither; must contain value).
+
+        dry_run defaults true and never creates storage. dry_run=false requires
+        server-configured GARMIN_DATA_DIR and appends an immutable row; repeated
+        commits create separate observations. Reads/invalid inputs create no DB.
+        Use a separate private directory per account/athlete: the notebook does
+        not infer identity or provide multi-tenant authentication. On POSIX,
+        existing directory/DB permissions must be owner-only; Windows uses ACLs.
+        Does not read/copy account credentials or contact Garmin. No estimation, active
+        threshold selection, zone/profile changes, or automatic training writes.
+        """
+        import asyncio
+        import sqlite3
+        from garmin_mcp import physiology_observations as observations
+
+        try:
+            normalized = observations.validate_observation(observation)
+            if dry_run:
+                return json.dumps({"status": "preview", "write_performed": False,
+                                   "observation": normalized}, allow_nan=False)
+            directory = observations.configured_directory()
+            if directory is None:
+                return json.dumps({"status": "disabled", "write_performed": False,
+                                   "message": "Configure a private GARMIN_DATA_DIR to enable local observations"})
+            stored = await asyncio.to_thread(observations.ObservationStore(directory).record, normalized)
+            return json.dumps({"status": "success", "write_performed": True,
+                               "observation": stored}, allow_nan=False)
+        except (ValueError, TypeError, OSError, sqlite3.Error) as exc:
+            return json.dumps({"status": "failed", "write_performed": False, "message": str(exc)})
+
+    @app.tool()
+    async def list_physiology_observations(
+        sport: str | None = None, metric: str | None = None, limit: int = 50, offset: int = 0
+    ) -> str:
+        """Read user-supplied evidence from the configured LOCAL observation notebook.
+
+        Optional exact sport/metric filters use record_physiology_observation's
+        vocabulary. limit 1-200, offset 0-1000000. Newest observed_at first,
+        then created_at and ID. Follow next_offset only while has_more is true;
+        new inserts can shift offset pages (not a frozen snapshot).
+        No database/directory is created by reads. Unset GARMIN_DATA_DIR returns
+        disabled. An unused directory returns an empty list. This reads no live
+        Garmin account and does not choose an active/authoritative threshold.
+        """
+        import asyncio
+        import sqlite3
+        from garmin_mcp import physiology_observations as observations
+
+        try:
+            observations.validate_query(sport, metric, limit, offset)
+            directory = observations.configured_directory()
+            if directory is None:
+                return json.dumps({"status": "disabled", "observations": [],
+                                   "message": "Local observations are not configured"})
+            result = await asyncio.to_thread(observations.ObservationStore(directory).list,
+                                             sport, metric, limit, offset)
+            return json.dumps(result, allow_nan=False)
+        except (ValueError, TypeError, OSError, sqlite3.Error) as exc:
+            return json.dumps({"status": "failed", "message": str(exc)})
+
+    @app.tool()
     async def get_progress_summary_between_dates(
         start_date: str, end_date: str, metric: str
     ) -> str:

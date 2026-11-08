@@ -170,6 +170,53 @@ Example — hand-pick tools without a profile:
 }
 ```
 
+## Optional local physiology notebook
+
+`record_physiology_observation(observation, dry_run=true)` previews a user-supplied
+observation without creating files. To enable explicit local commits, configure
+`GARMIN_DATA_DIR` in the **server's environment** to a dedicated private directory,
+then call with `dry_run=false`. No default directory is chosen. The server uses
+`observations.sqlite3` inside that directory; tools cannot choose arbitrary paths.
+`list_physiology_observations(sport, metric, limit=50, offset=0)` reads the notebook
+without creating missing storage. Both tools are in the `training` profile.
+
+```json
+{
+  "observation": {
+    "sport": "cycling", "metric": "ftp", "value": 220, "unit": "W",
+    "observed_at": "2024-01-01T12:00:00+08:00",
+    "source": "User-supplied field test", "method": "20-minute test"
+  },
+  "dry_run": true
+}
+```
+
+- Sports: `cycling`, `running`, `swimming`, `other`. Metrics: `vt1`, `vt2`, `lthr`,
+  `max_hr`, `resting_hr` in **bpm**, or `ftp` in **W**. VT1/VT2 here mean the heart
+  rate reported at that threshold, not watts or gas-exchange units. Units must
+  match explicitly. Timestamps require an offset and are stored in UTC.
+- `source` is required; `method` defaults to `user_report`. Optional `confidence`
+  (0–1) is also **user supplied**, never estimated by the tool. Optional
+  `lower_bound`/`upper_bound` must both be supplied and contain the numeric value.
+- The API is append-only: each commit creates a new ID, preserving earlier
+  observations. Retrying a commit is **not idempotent**. There is no delete,
+  correction-in-place, threshold activation, inference or Garmin profile sync.
+  This is not a tamper-proof audit system; the filesystem owner controls the DB.
+- Sport filters never substitute running for cycling. One configured directory
+  is one notebook: use a **separate directory per athlete/account**. The notebook
+  does not discover Garmin identity or implement tenant authentication. Readers
+  use bounded pages (limit 1–200, offset 0–1,000,000); inserts can shift offset
+  pages, so pagination is not a frozen snapshot.
+- Health evidence is stored as **unencrypted local SQLite**. On POSIX, newly
+  created directories use 0700 and DB files 0600; existing storage must be owned
+  by the service user with owner-only permissions. Insecure permissions and
+  symlink DB files are refused, not silently chmodded. On Windows, protect the
+  configured directory using its filesystem ACLs. Do not put credentials in free
+  text provenance fields. The tools do not copy Garmin credentials or call Garmin.
+- Future/unknown schema versions fail closed; no migration of #295's experimental
+  `physiology.sqlite3` database is attempted. No directory/database is created
+  by previews, reads or invalid observations.
+
 ## High-level workout tools
 
 These builder tools let an LLM create and schedule workouts without writing raw Garmin JSON.
