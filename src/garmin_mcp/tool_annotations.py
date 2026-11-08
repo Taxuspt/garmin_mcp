@@ -84,10 +84,9 @@ IDEMPOTENT_TOOLS = frozenset(
 )
 
 
-# This is the only registered tool whose effect is strictly local. All other
-# tools either read from or write to Garmin Connect (including tools that also
-# write a local download file), so they cross an external-world boundary.
-LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir"})
+# These tools operate entirely locally; all others cross Garmin's API boundary
+# (including tools that also write a local download file).
+LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir", "preview_cycling_workout"})
 
 
 # The explicit read-only set is kept as a complement rather than inferred at
@@ -96,6 +95,7 @@ LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir"})
 READ_ONLY_TOOLS = frozenset(
     {
         "count_activities",
+        "preview_cycling_workout",
         "get_acclimation",
         "get_activities",
         "get_activities_by_date",

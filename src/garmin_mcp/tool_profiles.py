@@ -160,6 +160,7 @@ WORKOUTS_TOOLS = CORE_TOOLS | frozenset(
         "upload_workout",
         "upload_workouts",
         # workout_builders
+        "preview_cycling_workout",
         "create_run_interval_workout",
         "create_run_workout",
         "create_strength_workout",
