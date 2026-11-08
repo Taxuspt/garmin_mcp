@@ -173,6 +173,8 @@ WORKOUTS_TOOLS = CORE_TOOLS | frozenset(
 
 TRAINING_TOOLS = CORE_TOOLS | frozenset(
     {
+        "record_physiology_observation",
+        "list_physiology_observations",
         # training
         "get_acclimation",
         "get_cycling_ftp",
