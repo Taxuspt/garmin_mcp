@@ -312,7 +312,7 @@ def register_tools(app):
         """Get per-day nutrition totals for every day in a date range.
 
         Returns one lightweight entry per day (date, calories, carbs, protein,
-        fat, item_count) instead of the full per-item food log that
+        fat, item_count, goals) instead of the full per-item food log that
         get_nutrition_daily_food_log returns for a single date. Use this for
         multi-day intake analysis (e.g. mean intake for a TDEE estimate)
         instead of calling get_nutrition_daily_food_log once per day.
@@ -323,6 +323,13 @@ def register_tools(app):
         only). Both cases read as low intake in the totals alone -- exclude
         low-item_count days explicitly before averaging intake or deriving
         TDEE; don't infer "unlogged" from a low calorie total.
+
+        Each day also carries that day's nutrition goals, when Garmin
+        returns them (it does even for unlogged days). calories / carbs /
+        protein / fat are the base goals from the nutrition settings, and
+        they change when the settings change, so read them per day. The
+        adjusted_* values are Garmin's activity-adjusted targets for that
+        day: the figures the Connect app compares intake against.
 
         Maximum range: 61 days per call (Garmin's own limit for this endpoint).
 
@@ -362,14 +369,27 @@ def register_tools(app):
                 len(meal.get("loggedFoods") or [])
                 for meal in (day.get("mealDetails") or [])
             )
-            daily.append({
+            entry = {
                 "date": day.get("mealDate"),
                 "calories": content.get("calories"),
                 "carbs": content.get("carbs"),
                 "protein": content.get("protein"),
                 "fat": content.get("fat"),
                 "item_count": item_count,
-            })
+            }
+            goals = day.get("dailyNutritionGoals")
+            if isinstance(goals, dict):
+                entry["goals"] = {
+                    "calories": goals.get("calories"),
+                    "adjusted_calories": goals.get("adjustedCalories"),
+                    "carbs": goals.get("carbs"),
+                    "adjusted_carbs": goals.get("adjustedCarbs"),
+                    "protein": goals.get("protein"),
+                    "adjusted_protein": goals.get("adjustedProtein"),
+                    "fat": goals.get("fat"),
+                    "adjusted_fat": goals.get("adjustedFat"),
+                }
+            daily.append(entry)
 
         return json.dumps({
             "start_date": start_date,

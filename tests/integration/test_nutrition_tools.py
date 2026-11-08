@@ -88,11 +88,24 @@ async def test_get_nutrition_summary_between_dates(app_with_nutrition, mock_garm
     actually returns: a logged day carries dailyNutritionContent and
     non-empty loggedFoods; a fully unlogged day has no dailyNutritionContent
     key at all (not null -- absent) and every meal's loggedFoods is [].
+    Every day, logged or not, carries dailyNutritionGoals (base and
+    activity-adjusted); values here are from the live account on
+    2026-10-13 (unlogged) and 2026-11-06 (logged).
     """
     mock_garmin_client.connectapi.return_value = {
         "dailyNutritionSummaries": [
             {
                 "mealDate": "2024-01-14",
+                "dailyNutritionGoals": {
+                    "calories": 2675,
+                    "adjustedCalories": 3081,
+                    "carbs": 268.0,
+                    "adjustedCarbs": 309.0,
+                    "fat": 101.0,
+                    "adjustedFat": 116.0,
+                    "protein": 174.0,
+                    "adjustedProtein": 200.0,
+                },
                 "mealDetails": [
                     {"mealName": "BREAKFAST", "loggedFoods": []},
                     {"mealName": "LUNCH", "loggedFoods": []},
@@ -100,6 +113,16 @@ async def test_get_nutrition_summary_between_dates(app_with_nutrition, mock_garm
             },
             {
                 "mealDate": "2024-01-15",
+                "dailyNutritionGoals": {
+                    "calories": 2675,
+                    "adjustedCalories": 3131,
+                    "carbs": 268.0,
+                    "adjustedCarbs": 314.0,
+                    "fat": 101.0,
+                    "adjustedFat": 118.0,
+                    "protein": 174.0,
+                    "adjustedProtein": 204.0,
+                },
                 "dailyNutritionContent": {
                     "calories": 1499,
                     "carbs": 107.0,
@@ -141,6 +164,38 @@ async def test_get_nutrition_summary_between_dates(app_with_nutrition, mock_garm
     assert logged["carbs"] == 107.0
     assert logged["protein"] == 142.0
     assert logged["fat"] == 63.0
+
+    # Goals survive on the unlogged day: they're the target, not intake.
+    assert unlogged["goals"]["calories"] == 2675
+    assert unlogged["goals"]["adjusted_calories"] == 3081
+    assert logged["goals"] == {
+        "calories": 2675,
+        "adjusted_calories": 3131,
+        "carbs": 268.0,
+        "adjusted_carbs": 314.0,
+        "protein": 174.0,
+        "adjusted_protein": 204.0,
+        "fat": 101.0,
+        "adjusted_fat": 118.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_nutrition_summary_between_dates_without_goals(
+    app_with_nutrition, mock_garmin_client
+):
+    """A day with no dailyNutritionGoals key gets no goals key, not zeros."""
+    mock_garmin_client.connectapi.return_value = {
+        "dailyNutritionSummaries": [
+            {"mealDate": "2024-01-14", "mealDetails": []},
+        ]
+    }
+    result = await app_with_nutrition.call_tool(
+        "get_nutrition_summary_between_dates",
+        {"start_date": "2024-01-14", "end_date": "2024-01-14"},
+    )
+    (day,) = json.loads(result[0][0].text)["days"]
+    assert "goals" not in day
 
 
 @pytest.mark.asyncio
