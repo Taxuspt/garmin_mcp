@@ -572,6 +572,39 @@ def register_tools(app):
     """Register all high-level workout builder tools with the MCP server app"""
 
     @app.tool()
+    async def preview_cycling_workout(
+        name: str, steps: list[dict], description: str | None = None
+    ) -> str:
+        """Build cycling workout JSON without contacting Garmin or writing anything.
+
+        Each executable step has type warmup/interval/work/recovery/cooldown
+        (default interval), exactly one of duration_seconds or distance_m, and
+        optionally one target: hr_zone (Z1-Z5 or 1-5), hr_min/hr_max (bpm pair),
+        or power_zone (1-7, named FTP zone). Omit targets for an open step.
+        Targets use the cycling sport's configured zones on upload; this tool
+        never reads or infers your FTP/HR zones. Absolute watt targets are not
+        supported. Unknown fields and conflicting targets are rejected.
+
+        Repeat example: {"type":"repeat", "repeats":3, "steps":[
+          {"duration_seconds":60,"power_zone":4},
+          {"type":"recovery","duration_seconds":120,"hr_zone":"Z2"}]}
+        Limits: 100 step definitions, 3 nested repeats, repeats 2-50, 1000
+        expanded executable steps. Repeat groups stay compact in the JSON.
+        Summary timed_duration_seconds counts only time-based steps and
+        distance_m only distance-based steps, including repeats; a mixed
+        workout's total duration cannot be inferred from this summary.
+
+        Returns workout_data for a SEPARATE, explicit upload_workout call.
+        Preview success is local validation, not device acceptance. It never
+        uploads, schedules, creates confirmation prompts or calls Garmin.
+        """
+        from garmin_mcp.cycling_workout import build_cycling_preview
+        try:
+            return json.dumps(build_cycling_preview(name, steps, description), allow_nan=False)
+        except (ValueError, TypeError) as exc:
+            return json.dumps({"status": "failed", "write_performed": False, "message": str(exc)})
+
+    @app.tool()
     async def create_walk_run_workout(
         name: str,
         run_seconds: int,

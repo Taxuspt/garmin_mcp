@@ -174,6 +174,47 @@ Example — hand-pick tools without a profile:
 
 These builder tools let an LLM create and schedule workouts without writing raw Garmin JSON.
 
+### `preview_cycling_workout` (offline, no writes)
+
+Build a cycling workout payload before deciding whether to upload it. Unlike the
+`create_*` tools below, this preview **never contacts Garmin, uploads, schedules,
+or changes a profile**. It is included in the `workouts` profile, not `minimal`.
+
+```json
+{
+  "name": "Cycling intervals",
+  "steps": [
+    {"type": "warmup", "duration_seconds": 300, "hr_zone": "Z2"},
+    {"type": "repeat", "repeats": 3, "steps": [
+      {"duration_seconds": 60, "power_zone": 4},
+      {"type": "recovery", "duration_seconds": 120, "hr_min": 110, "hr_max": 130}
+    ]},
+    {"type": "cooldown", "duration_seconds": 300}
+  ]
+}
+```
+
+Executable steps accept exactly one of `duration_seconds` or `distance_m` and
+optionally one target family: `hr_zone` (Z1–Z5 or 1–5), `hr_min`/`hr_max` (bpm),
+or `power_zone` (named FTP zone 1–7). Omit the target for an open step. Supported
+step types are `warmup`, `interval`/`work`, `recovery`, `cooldown`, and `repeat`.
+Zones refer to the cycling sport's existing Garmin configuration on upload; the
+preview does not infer or fetch FTP/HR-zone settings. Absolute watt ranges are
+intentionally unsupported, rather than selecting a disputed target mapping.
+
+The result contains `workout_data`, `write_performed: false`, and a summary of
+expanded executable steps, timed seconds and distance meters (including repeats).
+Timed seconds exclude distance-based steps; they are **not** an estimated total
+duration for a mixed workout. Repeat groups remain compact. The preview limits
+are 100 step definitions, three nested repeat groups, repeats 2–50, and 1,000
+expanded executable steps. Invalid/non-finite values and unknown fields are
+rejected. These are local preview limits, not asserted Garmin device limits.
+
+After reviewing it, pass **only** `workout_data` to a separate `upload_workout`
+call if you want to create it. Local preview/upload-schema validation does not
+prove device rendering or acceptance. Existing upload and scheduling tools retain
+their behavior; this preview does not add a new write path.
+
 ### `create_walk_run_workout`
 
 Creates a walk/run interval workout with optional heart-rate zone target.
