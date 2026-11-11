@@ -893,6 +893,59 @@ def _summarize_fit_heart_rate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     return summary
 
 
+def _fit_watch_utc_offset(fit_messages: List[Any]) -> Optional[datetime.timedelta]:
+    """The watch's UTC offset, from the activity message, or None.
+
+    FIT timestamps are UTC. The activity message also carries
+    local_timestamp, the watch's wall clock at the same instant, so their
+    difference is the offset the watch was using when the activity ended.
+    It is rounded to the minute and must be a real-world offset (within
+    -12:00..+14:00), otherwise it is treated as unknown.
+    """
+    for message in fit_messages:
+        if str(getattr(message, "name", None) or "") != "activity":
+            continue
+        values = _fit_message_values(message)
+        utc = values.get("timestamp")
+        local = values.get("local_timestamp")
+        if not isinstance(utc, datetime.datetime) or not isinstance(
+            local, datetime.datetime
+        ):
+            continue
+        if utc.tzinfo is not None or local.tzinfo is not None:
+            continue
+        minutes = round((local - utc).total_seconds() / 60)
+        if -12 * 60 <= minutes <= 14 * 60:
+            return datetime.timedelta(minutes=minutes)
+    return None
+
+
+def _format_utc_offset(offset: datetime.timedelta) -> str:
+    minutes = int(offset.total_seconds() // 60)
+    sign = "-" if minutes < 0 else "+"
+    hours, mins = divmod(abs(minutes), 60)
+    return f"{sign}{hours:02d}:{mins:02d}"
+
+
+def _fit_zoned_times(
+    name: str, value: Any, watch_offset: Optional[datetime.timedelta]
+) -> Dict[str, Any]:
+    """name_gmt (UTC) and, when the watch offset is known, name_local.
+
+    Both are ISO 8601 with an explicit offset. A value that isn't a naive
+    FIT datetime is passed through under name_gmt unchanged.
+    """
+    if not isinstance(value, datetime.datetime) or value.tzinfo is not None:
+        return {f"{name}_gmt": _json_safe_fit_value(value)}
+    utc = value.replace(tzinfo=datetime.timezone.utc)
+    times = {f"{name}_gmt": utc.isoformat()}
+    if watch_offset is not None:
+        times[f"{name}_local"] = utc.astimezone(
+            datetime.timezone(watch_offset)
+        ).isoformat()
+    return times
+
+
 def _summarize_fit_devices(
     fit_messages: List[Any], creator: Optional[Dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -974,12 +1027,14 @@ def _summarize_fit_devices(
             if values.get(name) is not None:
                 row[name].append(values[name])
 
+    watch_offset = _fit_watch_utc_offset(fit_messages)
+
     sensors = []
     for row in rows.values():
         timestamps = row.pop("timestamps")
         connects = [t for t in timestamps if t != end_timestamp]
-        row["first_seen"] = _json_safe_fit_value(timestamps[0])
-        row["last_seen"] = _json_safe_fit_value(timestamps[-1])
+        for name, value in (("first_seen", timestamps[0]), ("last_seen", timestamps[-1])):
+            row.update(_fit_zoned_times(name, value, watch_offset))
         row["connects"] = _count_fit_connects(connects)
         row["reconnects"] = max(row["connects"] - 1, 0)
         if end_timestamp is not None:
@@ -1020,6 +1075,8 @@ def _summarize_fit_devices(
             )
 
     summary: Dict[str, Any] = {"sensors": sensors}
+    if watch_offset is not None:
+        summary["watch_utc_offset"] = _format_utc_offset(watch_offset)
     if creator is not None:
         summary["creator"] = {
             **creator,
@@ -2605,7 +2662,10 @@ def register_tools(app):
         few seconds apart count once), and whether it was
         still connected at the end, plus heart_rate vs strap_heart_rate
         coverage. Rows are not merged; notes call out one serial on several
-        channels or one product under several serials.
+        channels or one product under several serials. Each row's
+        first_seen_gmt/last_seen_gmt are UTC; first_seen_local/last_seen_local
+        use the watch's own UTC offset (watch_utc_offset, from the activity
+        message) and are omitted when the file doesn't record it.
 
         Every response stays under about 1,000,000 characters. A page that
         would exceed it ends early with pagination.truncated_by_size=true and

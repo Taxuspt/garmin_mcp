@@ -1010,6 +1010,12 @@ async def test_get_activity_fit_messages_device_summary_counts_reconnects(
     assert any("Serial 83951642 reports on 2 channels" in n for n in data["notes"])
     assert any("HRM 600 reports 2 serial numbers" in n for n in data["notes"])
     assert data["field_aliases"]["device_info.battery_level"]["confidence"] == "fit_sdk"
+    # FIT times are UTC and say so. With no activity message there is no
+    # watch offset, so no local time is guessed.
+    assert ant["first_seen_gmt"] == "2026-10-26T13:11:43+00:00"
+    assert ant["last_seen_gmt"] == "2026-10-26T13:27:23+00:00"
+    assert "first_seen" not in ant and "first_seen_local" not in ant
+    assert "watch_utc_offset" not in data
 
 
 @pytest.mark.asyncio
@@ -1028,6 +1034,11 @@ async def test_get_activity_fit_messages_device_summary_merges_sensor_streams(
         _make_sensor_device_info("2026-11-01T17:26:00", 4, "bluetooth_low_energy", 0xE0000000, battery=79),
         _make_creator_device_info(software_version=24.14, ts="2026-11-01T17:28:59"),
         _make_sensor_device_info("2026-11-01T17:28:59", 4, "bluetooth_low_energy", 3611680303, battery=79),
+        # US Eastern changed to EST (-05:00) at 2026-11-01 06:00 UTC.
+        _make_generic_fit_message("activity", [
+            (253, "timestamp", datetime.datetime(2026, 11, 1, 17, 28, 59), None),
+            (5, "local_timestamp", datetime.datetime(2026, 11, 1, 12, 28, 59), None),
+        ]),
     ]
 
     text = await _call_fit_messages(
@@ -1042,6 +1053,30 @@ async def test_get_activity_fit_messages_device_summary_merges_sensor_streams(
     assert strap["connects"] == 2 and strap["reconnects"] == 1
     assert strap["present_at_end"] is True
     assert "notes" not in data
+    # The activity message gives the watch's offset, so local times appear.
+    assert data["watch_utc_offset"] == "-05:00"
+    assert strap["first_seen_gmt"] == "2026-11-01T17:23:58+00:00"
+    assert strap["first_seen_local"] == "2026-11-01T12:23:58-05:00"
+    assert strap["last_seen_gmt"] == "2026-11-01T17:28:59+00:00"
+    assert strap["last_seen_local"] == "2026-11-01T12:28:59-05:00"
+
+
+@pytest.mark.parametrize(
+    ("local", "expected"),
+    [
+        (datetime.datetime(2026, 7, 1, 15, 30), "+05:30"),
+        (datetime.datetime(2026, 7, 2, 10, 0), None),  # +24h: not an offset
+    ],
+)
+def test_fit_watch_utc_offset(local, expected):
+    from garmin_mcp.activity_analysis import _fit_watch_utc_offset, _format_utc_offset
+
+    activity = _make_generic_fit_message("activity", [
+        (253, "timestamp", datetime.datetime(2026, 7, 1, 10, 0), None),
+        (5, "local_timestamp", local, None),
+    ])
+    offset = _fit_watch_utc_offset([activity])
+    assert (offset and _format_utc_offset(offset)) == expected
 
 
 @pytest.mark.asyncio
