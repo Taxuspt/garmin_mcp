@@ -76,11 +76,45 @@ DESTRUCTIVE_TOOLS = frozenset(
 )
 
 
-# These tools are explicitly documented as safe to repeat with the same
-# arguments. Batch scheduling can also upload an inline workout, so it is
-# intentionally excluded even though its existing-workout path is guarded.
+# Write tools that are safe to repeat with the same arguments: a second call
+# leaves Garmin (or the local file) in the same state as the first. Setters,
+# deletes by id, links and unlinks, and downloads that overwrite the same file
+# belong here. Tools that add a new record on every call (add, create, log,
+# upload, push) do not. Batch scheduling can also upload an inline workout,
+# so it is intentionally excluded even though its existing-workout path is
+# guarded. Read-only tools are always idempotent and are not listed.
 IDEMPOTENT_TOOLS = frozenset(
-    {"reschedule_workout", "schedule_week", "schedule_workout"}
+    {
+        "add_gear_to_activity",
+        "delete_activity",
+        "delete_course",
+        "delete_custom_food",
+        "delete_food_log",
+        "delete_weigh_ins",
+        "delete_workout",
+        "delete_workouts",
+        "download_activity_file",
+        "download_course_gpx",
+        "download_workout",
+        "remove_gear_from_activity",
+        "request_reload",
+        "reschedule_workout",
+        "schedule_week",
+        "schedule_workout",
+        "set_activity_description",
+        "set_activity_event_type",
+        "set_activity_exercise_sets",
+        "set_activity_feel",
+        "set_activity_name",
+        "set_activity_type",
+        "set_fit_download_dir",
+        "set_heart_rate_zones",
+        "set_nutrition_daily_settings",
+        "set_perceived_effort",
+        "unschedule_workout",
+        "unschedule_workouts",
+        "update_custom_food",
+    }
 )
 
 
@@ -228,6 +262,6 @@ def annotations_for(name: str) -> ToolAnnotations | None:
     return ToolAnnotations(
         readOnlyHint=read_only,
         destructiveHint=destructive,
-        idempotentHint=name in IDEMPOTENT_TOOLS if not read_only else None,
+        idempotentHint=read_only or name in IDEMPOTENT_TOOLS,
         openWorldHint=name not in LOCAL_ONLY_TOOLS,
     )
