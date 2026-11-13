@@ -41,10 +41,25 @@ def test_annotations_use_conservative_open_world_defaults():
         "title": None,
         "readOnlyHint": True,
         "destructiveHint": False,
-        "idempotentHint": None,
+        "idempotentHint": True,
         "openWorldHint": True,
     }
     assert (
         tool_annotations.annotations_for("set_fit_download_dir").openWorldHint
         is False
     )
+
+
+def test_idempotent_hints_cover_reads_and_listed_writes():
+    writes = tool_annotations.ADDITIVE_TOOLS | tool_annotations.DESTRUCTIVE_TOOLS
+    assert tool_annotations.IDEMPOTENT_TOOLS <= writes
+
+    for name in tool_annotations.READ_ONLY_TOOLS:
+        assert tool_annotations.annotations_for(name).idempotentHint is True
+    for name in writes:
+        assert tool_annotations.annotations_for(name).idempotentHint is (
+            name in tool_annotations.IDEMPOTENT_TOOLS
+        )
+
+    assert tool_annotations.annotations_for("delete_workout").idempotentHint is True
+    assert tool_annotations.annotations_for("log_food").idempotentHint is False
