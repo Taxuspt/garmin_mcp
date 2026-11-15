@@ -163,6 +163,8 @@ WORKOUTS_TOOLS = CORE_TOOLS | frozenset(
         "create_run_interval_workout",
         "create_run_workout",
         "create_strength_workout",
+        "create_swim_workout",
+        "validate_workout_structure",
         "create_walk_run_workout",
         "create_z2_walk_workout",
         "schedule_week",

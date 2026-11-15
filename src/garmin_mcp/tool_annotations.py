@@ -24,6 +24,7 @@ ADDITIVE_TOOLS = frozenset(
         "create_run_interval_workout",
         "create_run_workout",
         "create_strength_workout",
+        "create_swim_workout",
         "create_walk_run_workout",
         "create_z2_walk_workout",
         "log_custom_food",
