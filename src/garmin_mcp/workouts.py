@@ -1719,4 +1719,126 @@ def register_tools(app):
             "results": results
         }, indent=2)
 
+    @app.tool()
+    async def update_workout(workout_id: int, workout_data: dict, confirm: bool = False) -> str:
+        """Update an existing workout in Garmin Connect in place
+
+        Replaces the workout's content while keeping its workout ID, so calendar
+        entries that schedule this workout stay valid and point at the new
+        version. Prefer this over delete_workout + upload_workout when changing
+        a workout.
+
+        IMPORTANT: Garmin replaces the WHOLE workout; it does not merge fields.
+        workout_data must be the complete workout (name, sportType and all
+        workoutSegments with all steps), not only the fields that change.
+        Anything left out is removed from the workout or rejected by Garmin.
+        Recommended flow:
+        1. Call get_workout_by_id(workout_id, raw=True) to get the full Garmin JSON.
+           The default (non-raw) output is a simplified summary and must not be
+           sent back.
+        2. Change the fields you need in that JSON and keep everything else as is.
+        3. Call update_workout(workout_id, workout_data) to preview, then again
+           with confirm=true to write the change.
+
+        workout_data uses the same DTO format and rules as upload_workout. The
+        most important ones:
+        - "ExecutableStepDTO" for regular steps, "RepeatGroupDTO" for repeat
+          groups with numberOfIterations and endCondition
+          {"conditionTypeId": 7, "conditionTypeKey": "iterations"}.
+        - stepOrder is one depth-first counter over the whole workout; do not
+          restart at 1 inside a repeat group.
+        - Named HR zone: targetType "heart.rate.zone" with zoneNumber (1-5).
+          Custom HR range: same targetType with targetValueOne/targetValueTwo
+          in bpm and no zoneNumber.
+        - Pace targets are speeds in meters per second, not min/km
+          (5:00/km = 3.333 m/s).
+        - Target values (targetValueOne, targetValueTwo, zoneNumber) are fields
+          on the step, next to targetType, not inside it.
+        - Target type and end condition IDs must match their keys (e.g.
+          workoutTargetTypeId 4 = "heart.rate.zone", conditionTypeId 2 = "time");
+          mismatches are rejected before anything is sent to Garmin.
+        See upload_workout for the full list of rules and examples.
+
+        workoutId in workout_data is always overwritten with workout_id.
+        Only workouts in your own library (numeric IDs from get_workouts) can
+        be updated; Garmin Coach / training plan workouts (UUIDs) cannot.
+
+        A watch only gets the changed workout after its next sync with Garmin
+        Connect; use push_workout_to_device to send it right away.
+
+        Args:
+            workout_id: ID of the workout to update (from get_workouts)
+            workout_data: Complete workout structure, usually the raw output of
+                get_workout_by_id with your changes applied
+            confirm: Must be true to actually update. Default false validates
+                workout_data and returns a preview without changing anything.
+        """
+        try:
+            # Check for invalid workout_id.
+            if workout_id <= 0:
+                return json.dumps(
+                    {
+                        "status": "failed",
+                        "workout_id": workout_id,
+                        "message": (
+                            "workout_id must be a positive integer."
+                        ),
+                    },
+                    indent=2,
+                )
+
+            # Same repairs and checks as upload_workout. They run before the
+            # confirmation step so invalid data is reported in the preview call
+            # and never reaches Garmin.
+            _normalize_workout_steps(workout_data)
+            _validate_end_condition_steps(workout_data)
+            _validate_target_type_steps(workout_data)
+
+            preview = _workout_preview(garmin_client, workout_id)
+            if not confirm:
+                return json.dumps(
+                    {
+                        "status": "needs_confirmation",
+                        "workout_id": workout_id,
+                        "workout": preview,
+                        "message": (
+                            "This updates the workout in Garmin Connect. "
+                            "Call again with confirm=true to proceed."
+                        ),
+                    },
+                    indent=2,
+                )
+
+            # garminconnect 0.3.2 has no update_workout method (it was added in
+            # later versions), so send the PUT ourselves. Garmin replaces the
+            # whole workout and expects the workoutId in the body to match the
+            # one in the URL.
+            url = f"workout-service/workout/{workout_id}"
+            body = {**workout_data, "workoutId": workout_id}
+            # With api=True the client returns the parsed JSON body (a dict, {}
+            # for HTTP 204), not a Response, so there is no status_code to
+            # check. HTTP errors (>= 400) are raised as exceptions and end up in
+            # the except block below.
+            garmin_client.client.put("connectapi", url, json=body, api=True)
+
+            old_name = preview.get("name")
+            new_name = workout_data.get("workoutName")
+            return json.dumps({
+                "status": "success",
+                "workout_id": workout_id,
+                "workout_name_new": new_name,
+                "workout_name_old": old_name,
+                "message": (
+                    f"Updated workout {workout_id} "
+                    f"previously {old_name!r}, "
+                    f"now {new_name!r}."
+                ),
+            }, indent=2)
+        except Exception as e:
+            return json.dumps({
+                "status": "failed",
+                "workout_id": workout_id,
+                "message": f"Failed to update workout: {str(e)}"
+            }, indent=2)
+            
     return app
