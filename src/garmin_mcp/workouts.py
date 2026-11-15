@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import datetime
+from garmin_mcp.workout_analysis import analyze_workout
 from typing import Any, Dict, List, Optional, Union
 
 _DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
@@ -674,7 +675,8 @@ def _curate_workout_details(workout: dict) -> dict:
         details['segments'] = [_curate_workout_segment(seg) for seg in segments]
         details['segment_count'] = len(segments)
 
-    # Remove None values
+    details.update(analyze_workout(workout)["totals"])
+    # Garmin estimated_distance_meters is independent of step distance totals.
     return {k: v for k, v in details.items() if v is not None}
 
 
@@ -920,6 +922,22 @@ def register_tools(app):
             return json.dumps(curated, indent=2)
         except Exception as e:
             return f"Error retrieving workout: {str(e)}"
+
+    @app.tool()
+    async def validate_workout_structure(workout_id: int, expected_distance_m: Optional[float] = None) -> str:
+        """Lint a stored workout without modifying it. Returns JSON issues and step totals.
+
+        expected_distance_m optionally checks the intended distance. Duration is
+        unknown for open steps or distance steps without a pace target. Garmin's
+        estimated_distance_meters is an independent estimate, not a step sum.
+        """
+        try:
+            workout = garmin_client.get_workout_by_id(workout_id)
+            if not workout:
+                return json.dumps({"valid": False, "error": "Workout not found"})
+            return json.dumps(analyze_workout(workout, expected_distance_m), indent=2)
+        except Exception as e:
+            return json.dumps({"valid": False, "error": str(e)})
 
     @app.tool()
     async def download_workout(workout_id: int) -> str:

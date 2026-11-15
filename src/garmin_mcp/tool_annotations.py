@@ -95,6 +95,7 @@ LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir"})
 # registered tool list and fails when upstream adds a tool.
 READ_ONLY_TOOLS = frozenset(
     {
+        "validate_workout_structure",
         "count_activities",
         "get_acclimation",
         "get_activities",
