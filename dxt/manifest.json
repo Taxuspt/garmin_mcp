@@ -112,6 +112,10 @@
       "description": "Create a strength workout and upload it to Garmin Connect."
     },
     {
+      "name": "create_swim_workout",
+      "description": "Create a pool workout using typed SwimmingWorkout validation."
+    },
+    {
       "name": "create_walk_run_workout",
       "description": "Create a walk/run interval workout and upload it to Garmin Connect."
     },
@@ -694,6 +698,10 @@
     {
       "name": "upsert_and_log",
       "description": "Find-or-create a custom food then log it in one step"
+    },
+    {
+      "name": "validate_workout_structure",
+      "description": "Lint a stored workout without modifying it. Returns JSON issues and step totals."
     }
   ],
   "compatibility": {
