@@ -1224,3 +1224,24 @@ If you are working from a local checkout or fork:
 ```bash
 uv tool install --python 3.12 --force C:\Users\aresd\Desktop\programacion\garmin_mcp
 ```
+
+
+### Prebuilt container images
+
+The container publish workflow builds `linux/amd64` and `linux/arm64` images on
+pushes to `main`, using the repository-scoped `GITHUB_TOKEN`. Images are published
+to `ghcr.io/<owner>/<repository>` with `latest` and `sha-<short-commit>` tags and
+OCI source/revision labels. No personal access token is needed by the workflow.
+Repository owners may need to configure package visibility/access before others
+can pull the image.
+
+For a fixed deployment, use the published image digest:
+
+```text
+ghcr.io/<owner>/<repository>@sha256:<published-index-digest>
+```
+
+Pull-request builds validate both architectures without publishing and have only
+read access. Production Python dependencies are installed from `uv.lock` with
+`uv sync --locked --no-dev --no-editable`; a stale lockfile fails the build.
+Base image and uv tags retain their existing update behavior.
