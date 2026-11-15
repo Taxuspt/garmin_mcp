@@ -1224,3 +1224,28 @@ If you are working from a local checkout or fork:
 ```bash
 uv tool install --python 3.12 --force C:\Users\aresd\Desktop\programacion\garmin_mcp
 ```
+
+
+### Pool swimming workouts
+
+Read `workout://templates/swim-pool` for a 1000 m workout in a 25 m pool,
+including warmup, drill rounds, repeated main intervals, timed rests and cooldown.
+`workout://reference/structure` documents stroke/equipment IDs, distance units and
+open (`lap.button`) rests. Set `poolLength` and `poolLengthUnit` on the workout;
+Garmin discards segment-level pool length.
+
+`create_swim_workout` accepts a name, DTO steps, pool length in meters and an
+optional **absolute** `css_seconds_per_100m` pace. For example, 120 means 2:00/100 m
+and serializes as a `pace.zone` speed of 0.833333 m/s, not a device-relative CSS
+offset. The typed library model's default swim sport ID is overridden explicitly.
+
+Before scheduling, fetch the workout and call `validate_workout_structure` with
+`expected_distance_m`. Distance/rest totals expand nested repeat groups and remain
+separate from Garmin's estimated distance. Open steps and distance steps without
+pace targets prevent a complete duration estimate. Trailing rests are warnings,
+not automatic failures. The tool does not infer intended distance from the name.
+
+Pool fields were reported verified by the contributor in Garmin Connect. This
+port has mocked MCP and unit coverage; an attempted new live round-trip returned
+connector errors, so device receipt and the new wrapper's live round-trip are
+not claimed as verified.

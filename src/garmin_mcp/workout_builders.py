@@ -572,6 +572,26 @@ def register_tools(app):
     """Register all high-level workout builder tools with the MCP server app"""
 
     @app.tool()
+    async def create_swim_workout(name: str, steps: List[Dict[str, Any]], pool_length_m: float = 25,
+                                  css_seconds_per_100m: Optional[float] = None) -> str:
+        """Create a pool workout using typed SwimmingWorkout validation.
+
+        steps are ExecutableStepDTO / RepeatGroupDTO objects, as in
+        workout://templates/swim-pool. Orders are assigned automatically.
+        CSS is an absolute seconds/100 m pace (120 = 2:00/100 m), applied
+        to distance steps as pace.zone speeds; it is not a device CSS offset.
+        Creates immediately when called; no confirm argument is required.
+        """
+        try:
+            from garmin_mcp.swimming import build_swim_json
+            payload = build_swim_json(name, steps, pool_length_m, css_seconds_per_100m)
+            result = garmin_client.upload_workout(payload)
+            return json.dumps({"status": "success", "workout_id": result.get("workoutId"),
+                               "name": result.get("workoutName")})
+        except Exception as e:
+            return f"Error creating swim workout: {e}"
+
+    @app.tool()
     async def create_walk_run_workout(
         name: str,
         run_seconds: int,

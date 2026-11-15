@@ -24,6 +24,7 @@ ADDITIVE_TOOLS = frozenset(
         "create_run_interval_workout",
         "create_run_workout",
         "create_strength_workout",
+        "create_swim_workout",
         "create_walk_run_workout",
         "create_z2_walk_workout",
         "log_custom_food",
@@ -95,6 +96,7 @@ LOCAL_ONLY_TOOLS = frozenset({"set_fit_download_dir"})
 # registered tool list and fails when upstream adds a tool.
 READ_ONLY_TOOLS = frozenset(
     {
+        "validate_workout_structure",
         "count_activities",
         "get_acclimation",
         "get_activities",

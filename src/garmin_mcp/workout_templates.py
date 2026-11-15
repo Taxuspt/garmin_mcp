@@ -318,8 +318,29 @@ WORKOUT_STRUCTURE_REFERENCE = {
 }
 
 
+WORKOUT_STRUCTURE_REFERENCE["swimming_fields"] = {
+    "sportType": {"sportTypeId": 4, "sportTypeKey": "swimming"},
+    "poolLength": "Set on workout only; segment-level values are discarded by Garmin.",
+    "poolLengthUnit": {"unitId": 1, "unitKey": "meter", "factor": 100},
+    "distance": "endCondition ID 3 / distance; endConditionValue in meters; preferredEndConditionUnit uses the meter object above.",
+    "lap_rest": {"endCondition": {"conditionTypeId": 1, "conditionTypeKey": "lap.button"}, "endConditionValue": None},
+    "strokeType": {"0": None, "2": "backstroke", "3": "breaststroke", "5": "fly", "6": "free"},
+    "stroke_shape": "{strokeTypeId, strokeTypeKey, displayOrder}; displayOrder equals ID; omitted means choice (0).",
+    "equipmentType": {"0": "none", "1": "fins", "2": "kickboard", "3": "paddles", "4": "pull_buoy", "5": "snorkel"},
+    "equipment_shape": "{equipmentTypeId, displayOrder}, optional equipmentTypeKey; omitted means none (0).",
+    "css": "create_swim_workout accepts absolute seconds/100 m; 120 becomes pace.zone ID 6 at 0.833333 m/s.",
+    "estimates": "Garmin estimated_distance_meters may include rest assumptions; total_distance_m sums distance steps only."
+}
+
+
 def register_resources(app):
     """Register workout template resources with the MCP server app"""
+
+    @app.resource("workout://templates/swim-pool")
+    async def get_swim_pool_template() -> str:
+        """1000 m pool workout with drills, repetitions, strokes and rests."""
+        from garmin_mcp.swimming import pool_template
+        return json.dumps(pool_template(), indent=2)
 
     @app.resource("workout://templates/simple-run")
     async def get_simple_run_template() -> str:
