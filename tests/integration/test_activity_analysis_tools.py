@@ -2187,3 +2187,134 @@ async def test_get_activity_fit_data_without_weigh_ins_omits_w_per_kg(
     data = json.loads(result[0][0].text)
     assert "rider_weight_kg" not in data
     assert "avg_w_per_kg" not in data["session"]
+
+
+async def _fit_data_with_weigh_ins(app, client, messages, weigh_ins):
+    client.download_activity.return_value = b"\x00" * 20
+    client.get_body_composition.return_value = {"dateWeightList": weigh_ins}
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.return_value = _mock_fitfile(messages)
+        result = await app.call_tool("get_activity_fit_data", {"activity_id": ACTIVITY_ID})
+    return json.loads(result[0][0].text)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_weigh_in_uses_local_date_west_of_utc(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """A 19:30 ride at UTC-6 is on 05-09 locally though its UTC start is 05-10:
+    the next morning's weigh-in must not be used."""
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "start_time": datetime.datetime(2026, 5, 10, 1, 30),
+        "avg_power": 200,
+    })
+    activity_msg = _make_mock_fit_message("activity", {
+        "timestamp": datetime.datetime(2026, 5, 10, 3, 30),
+        "local_timestamp": datetime.datetime(2026, 5, 9, 21, 30),
+    })
+    data = await _fit_data_with_weigh_ins(
+        app_with_activity_analysis, mock_garmin_client, [session_msg, activity_msg],
+        [
+            {"calendarDate": "2026-05-08", "weight": 70000},
+            {"calendarDate": "2026-05-10", "weight": 80000},
+        ],
+    )
+    mock_garmin_client.get_body_composition.assert_called_once_with("2026-02-08", "2026-05-09")
+    assert data["session"]["start_date_local"] == "2026-05-09"
+    assert data["rider_weight_date"] == "2026-05-08"
+    assert data["rider_weight_kg"] == 70.0
+    assert data["session"]["avg_w_per_kg"] == round(200 / 70.0, 2)
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_weigh_in_uses_local_date_east_of_utc(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """A 07:00 ride at UTC+9 starts on the previous UTC day: that morning's
+    local weigh-in still counts."""
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "start_time": datetime.datetime(2026, 5, 9, 22, 0),
+        "avg_power": 200,
+    })
+    activity_msg = _make_mock_fit_message("activity", {
+        "timestamp": datetime.datetime(2026, 5, 10, 1, 0),
+        "local_timestamp": datetime.datetime(2026, 5, 10, 10, 0),
+    })
+    data = await _fit_data_with_weigh_ins(
+        app_with_activity_analysis, mock_garmin_client, [session_msg, activity_msg],
+        [
+            {"calendarDate": "2026-05-01", "weight": 72000},
+            {"calendarDate": "2026-05-10", "weight": 70000},
+        ],
+    )
+    assert data["session"]["start_date_local"] == "2026-05-10"
+    assert data["rider_weight_date"] == "2026-05-10"
+    assert data["rider_weight_kg"] == 70.0
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_weigh_in_falls_back_to_activity_local_start(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """Without a FIT activity message, the summary's startTimeLocal gives the date."""
+    mock_garmin_client.get_activity.return_value = {
+        "summaryDTO": {"startTimeLocal": "2026-05-09T19:30:00.0"}
+    }
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "start_time": datetime.datetime(2026, 5, 10, 1, 30),
+        "avg_power": 200,
+    })
+    data = await _fit_data_with_weigh_ins(
+        app_with_activity_analysis, mock_garmin_client, [session_msg],
+        [
+            {"calendarDate": "2026-05-08", "weight": 70000},
+            {"calendarDate": "2026-05-10", "weight": 80000},
+        ],
+    )
+    mock_garmin_client.get_activity.assert_called_once_with(ACTIVITY_ID)
+    assert "start_date_local" not in data["session"]
+    assert data["rider_weight_date"] == "2026-05-08"
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_ignores_implausible_utc_offset(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """An out-of-range offset (bad watch clock) is ignored, not applied."""
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "start_time": datetime.datetime(2026, 5, 10, 1, 30),
+        "avg_power": 200,
+    })
+    activity_msg = _make_mock_fit_message("activity", {
+        "timestamp": datetime.datetime(2026, 5, 10, 3, 30),
+        "local_timestamp": datetime.datetime(2026, 5, 11, 3, 30),
+    })
+    data = await _fit_data_with_weigh_ins(
+        app_with_activity_analysis, mock_garmin_client, [session_msg, activity_msg],
+        [{"calendarDate": "2026-05-10", "weight": 80000}],
+    )
+    assert "start_date_local" not in data["session"]
+    assert data["rider_weight_date"] == "2026-05-10"
+
+
+@pytest.mark.asyncio
+async def test_get_activity_fit_data_same_day_weigh_ins_use_latest_not_heaviest(
+    app_with_activity_analysis, mock_garmin_client
+):
+    session_msg = _make_mock_fit_message("session", {
+        "sport": "cycling",
+        "start_time": "2024-03-02 14:00:00",
+        "avg_power": 210,
+    })
+    data = await _fit_data_with_weigh_ins(
+        app_with_activity_analysis, mock_garmin_client, [session_msg],
+        [
+            {"calendarDate": "2024-03-02", "date": 1000, "weight": 72000},
+            {"calendarDate": "2024-03-02", "date": 2000, "weight": 70000},
+        ],
+    )
+    assert data["rider_weight_kg"] == 70.0
