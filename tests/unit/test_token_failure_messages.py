@@ -8,6 +8,7 @@ saved to a different directory than the server reads.
 from unittest.mock import patch
 
 import pytest
+import requests
 from garminconnect import GarminConnectAuthenticationError, GarminConnectConnectionError
 
 import garmin_mcp
@@ -114,3 +115,82 @@ def test_interactive_fallback_explains_before_password_login(monkeypatch, tmp_pa
     assert result is None
     assert f"No token directory at '{token_dir}'" in err
     assert "Logging in with your Garmin Connect credentials" in err
+
+
+def _real_library_login_error(token_dir, request_error):
+    """Run garminconnect's real token login with every API request raising `request_error`.
+
+    garminconnect 0.3.2 wraps the failed profile fetch in
+    GarminConnectAuthenticationError("Failed to retrieve social profile") from
+    the underlying error, which is the shape init_api actually sees.
+    """
+    import garminconnect
+    from garminconnect.client import Client
+
+    def failing_request(self, method, path, **kwargs):
+        raise request_error
+
+    with patch.object(Client, "_run_request", failing_request), patch("garminconnect.time.sleep"):
+        with pytest.raises(GarminConnectAuthenticationError) as excinfo:
+            garminconnect.Garmin().login(str(token_dir))
+    return excinfo.value
+
+
+@pytest.mark.parametrize(
+    "request_error",
+    [
+        requests.exceptions.ConnectionError(
+            "Max retries exceeded with url: /userprofile-service/socialProfile (NameResolutionError)"
+        ),
+        requests.exceptions.ReadTimeout("Read timed out. (read timeout=15)"),
+        GarminConnectConnectionError("API Error 503 - Service Unavailable"),
+    ],
+    ids=["dns-failure", "timeout", "garmin-503"],
+)
+def test_offline_token_login_is_not_blamed_on_tokens(
+    non_interactive, monkeypatch, tmp_path, capsys, request_error
+):
+    token_dir = tmp_path / "tokens"
+    _write_tokens(token_dir)
+    error = _real_library_login_error(token_dir, request_error)
+    assert str(error) == "Failed to retrieve social profile"
+
+    result = _init_api_with_failure(monkeypatch, token_dir, error)
+
+    err = capsys.readouterr().err
+    assert result is None
+    assert "Could not reach Garmin Connect" in err
+    assert "rejected them" not in err
+
+
+def test_rejected_profile_fetch_still_reports_rejected_tokens(
+    non_interactive, monkeypatch, tmp_path, capsys
+):
+    """A 401 in the cause chain is a real rejection, not an outage."""
+    token_dir = tmp_path / "tokens"
+    _write_tokens(token_dir)
+    error = _real_library_login_error(
+        token_dir, GarminConnectConnectionError("API Error 401 - Unauthorized")
+    )
+
+    result = _init_api_with_failure(monkeypatch, token_dir, error)
+
+    err = capsys.readouterr().err
+    assert result is None
+    assert "Garmin rejected them" in err
+    assert "Could not reach Garmin Connect" not in err
+
+
+def test_cyclic_cause_chain_does_not_hang(tmp_path):
+    from garmin_mcp import token_utils
+
+    token_dir = tmp_path / "tokens"
+    _write_tokens(token_dir)
+    outer = GarminConnectAuthenticationError("Failed to retrieve social profile")
+    inner = GarminConnectAuthenticationError("still failing")
+    outer.__cause__ = inner
+    inner.__cause__ = outer
+
+    message = token_utils.describe_token_failure(str(token_dir), outer)
+
+    assert "Garmin rejected them" in message

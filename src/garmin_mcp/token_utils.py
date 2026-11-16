@@ -5,11 +5,14 @@ import os
 from pathlib import Path
 from typing import Tuple
 
+import requests
 from garminconnect import (
     Garmin,
     GarminConnectConnectionError,
     GarminConnectTooManyRequestsError,
 )
+
+from garmin_mcp.write_errors import _upstream
 
 # The one file garminconnect reads from the token directory.
 TOKEN_FILE_NAME = "garmin_tokens.json"
@@ -283,6 +286,40 @@ def _looks_like_rejection(message: str) -> bool:
     return any(marker in lowered for marker in ("401", "403", "unauthorized", "forbidden"))
 
 
+_NETWORK_ERRORS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    TimeoutError,
+)
+
+
+def _unreachable_cause(error: BaseException):
+    """Return the link in ``error``'s cause chain showing Garmin was unreachable.
+
+    garminconnect wraps a failed profile fetch in
+    GarminConnectAuthenticationError("Failed to retrieve social profile") from
+    the real error, so a DNS failure or a Garmin 5xx only shows up in
+    ``__cause__``. Returns None if no link is a network/5xx failure, or if any
+    link looks like a 401/403 rejection.
+    """
+    unreachable = None
+    seen = set()
+    link = error
+    while link is not None and id(link) not in seen:
+        seen.add(id(link))
+        status, _ = _upstream(link)
+        if status in (401, 403) or _looks_like_rejection(str(link)):
+            return None
+        network_error = isinstance(link, _NETWORK_ERRORS)
+        server_error = isinstance(link, GarminConnectConnectionError) and (
+            status is None or status >= 500
+        )
+        if unreachable is None and (network_error or server_error):
+            unreachable = link
+        link = link.__cause__ or link.__context__
+    return unreachable
+
+
 def describe_token_failure(token_path: str, error: BaseException) -> str:
     """Explain why a login from saved tokens failed, with the resolved path.
 
@@ -321,6 +358,14 @@ def describe_token_failure(token_path: str, error: BaseException) -> str:
         )
     if isinstance(error, GarminConnectConnectionError) and not _looks_like_rejection(detail):
         return f"Could not reach Garmin Connect to check the tokens in {where}: {detail}"
+    cause = _unreachable_cause(error)
+    if cause is not None:
+        cause_text = str(cause).strip()
+        cause_detail = cause_text.splitlines()[0][:200] if cause_text else cause.__class__.__name__
+        return (
+            f"Could not reach Garmin Connect to check the tokens in {where}: "
+            f"{detail} ({cause_detail})"
+        )
     return (
         f"Tokens in {where} loaded but Garmin rejected them (expired, revoked, or "
         f"for the other region): {detail}. Run garmin-mcp-auth --force-reauth."
