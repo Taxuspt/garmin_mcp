@@ -130,6 +130,68 @@ async def test_upload_backfills_explicit_null_repeat_count(app_with_workouts, mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["upload_workout", "upload_workouts", "schedule_workouts"])
+@pytest.mark.parametrize("end_condition", ["omit", None, {}])
+async def test_upload_adds_iterations_end_condition_to_repeat_group(
+    app_with_workouts, mock_garmin_client, tool_name, end_condition
+):
+    """A repeat group with only numberOfIterations gets the iterations endCondition."""
+    group = {
+        "type": "RepeatGroupDTO", "stepOrder": 1, "numberOfIterations": 5,
+        "workoutSteps": [_timed_interval_step({
+            "workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"
+        })],
+    }
+    if end_condition != "omit":
+        group["endCondition"] = end_condition
+    payload = _running_workout_with_steps([group])
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 123}
+    mock_garmin_client.client.post.return_value = Mock(status_code=200)
+    arguments = {
+        "upload_workout": {"workout_data": payload},
+        "upload_workouts": {"workouts": [payload]},
+        "schedule_workouts": {"schedules": [{
+            "calendar_date": "2026-10-20", "workout_data": payload
+        }]},
+    }[tool_name]
+
+    result = await app_with_workouts.call_tool(tool_name, arguments)
+
+    data = json.loads(result[0][0].text)
+    assert data.get("status", data.get("results", [{}])[0].get("status")) == "success"
+    sent = mock_garmin_client.upload_workout.call_args.args[0]
+    sent_group = sent["workoutSegments"][0]["workoutSteps"][0]
+    assert sent_group["endCondition"] == {
+        "conditionTypeId": 7, "conditionTypeKey": "iterations"
+    }
+    assert sent_group["endConditionValue"] == 5
+    assert sent_group["numberOfIterations"] == 5
+
+
+@pytest.mark.asyncio
+async def test_upload_keeps_explicit_repeat_group_end_condition_value(
+    app_with_workouts, mock_garmin_client
+):
+    """An existing endConditionValue on an iterations group is not overwritten."""
+    group = {
+        "type": "RepeatGroupDTO", "numberOfIterations": 3,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 3, "workoutSteps": [],
+    }
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 123}
+
+    result = await app_with_workouts.call_tool(
+        "upload_workout", {"workout_data": _running_workout_with_steps([group])}
+    )
+
+    assert json.loads(result[0][0].text)["status"] == "success"
+    sent_group = mock_garmin_client.upload_workout.call_args.args[0][
+        "workoutSegments"][0]["workoutSteps"][0]
+    assert sent_group["endConditionValue"] == 3
+    assert sent_group["numberOfIterations"] == 3
+
+
+@pytest.mark.asyncio
 async def test_upload_normalizes_string_condition_and_target_ids(app_with_workouts, mock_garmin_client):
     step = _timed_interval_step({
         "workoutTargetTypeId": "1", "workoutTargetTypeKey": "no.target"
@@ -3166,6 +3228,34 @@ def test_fix_repeat_group_backfills_number_of_iterations_from_end_condition_valu
     }
     _fix_repeat_group_step(step)
     assert step["numberOfIterations"] == 4
+
+
+def test_fix_repeat_group_adds_missing_end_condition_in_nested_group():
+    """A nested repeat group without endCondition also gets the iterations one."""
+    inner = {"type": "RepeatGroupDTO", "numberOfIterations": 2, "workoutSteps": []}
+    outer = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 3,
+        "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+        "endConditionValue": 3,
+        "workoutSteps": [inner],
+    }
+    _fix_repeat_group_step(outer)
+    assert inner["endCondition"] == {"conditionTypeId": 7, "conditionTypeKey": "iterations"}
+    assert inner["endConditionValue"] == 2
+
+
+def test_fix_repeat_group_leaves_non_iterations_end_condition_alone():
+    """A repeat group with another explicit condition is left for validation."""
+    step = {
+        "type": "RepeatGroupDTO",
+        "numberOfIterations": 2,
+        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+        "workoutSteps": [],
+    }
+    _fix_repeat_group_step(step)
+    assert step["endCondition"] == {"conditionTypeId": 2, "conditionTypeKey": "time"}
+    assert "endConditionValue" not in step
 
 
 def test_fix_repeat_group_does_not_modify_non_repeat_steps():

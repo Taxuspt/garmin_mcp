@@ -219,9 +219,12 @@ def _fix_repeat_group_step(step: dict) -> None:
     (observed: "heart.rate") and drops numberOfIterations entirely.
 
     This function:
+    - Adds the "iterations" endCondition (conditionTypeId 7) when the group has
+      no endCondition, or one with neither conditionTypeKey nor conditionTypeId.
     - Adds conditionTypeId: 7 ("iterations") when conditionTypeKey is "iterations"
       but conditionTypeId is absent.
-    - Backfills numberOfIterations from endConditionValue when the former is missing.
+    - Backfills numberOfIterations from endConditionValue when the former is missing,
+      and endConditionValue from numberOfIterations for an iterations group.
     - Recurses into nested workoutSteps so nested repeat groups are also fixed.
     """
     if step.get('type') != 'RepeatGroupDTO':
@@ -230,7 +233,14 @@ def _fix_repeat_group_step(step: dict) -> None:
         return
 
     end_condition = step.get('endCondition')
-    if isinstance(end_condition, dict):
+    if end_condition is None or (
+        isinstance(end_condition, dict)
+        and end_condition.get('conditionTypeKey') is None
+        and end_condition.get('conditionTypeId') is None
+    ):
+        end_condition = {'conditionTypeId': 7, 'conditionTypeKey': 'iterations'}
+        step['endCondition'] = end_condition
+    elif isinstance(end_condition, dict):
         if (
             end_condition.get('conditionTypeKey') == 'iterations'
             and 'conditionTypeId' not in end_condition
@@ -241,6 +251,14 @@ def _fix_repeat_group_step(step: dict) -> None:
         value = step.get('endConditionValue')
         if value is not None:
             step['numberOfIterations'] = int(value)
+
+    if (
+        step.get('endConditionValue') is None
+        and step.get('numberOfIterations') is not None
+        and isinstance(end_condition, dict)
+        and end_condition.get('conditionTypeKey') == 'iterations'
+    ):
+        step['endConditionValue'] = step['numberOfIterations']
 
     for nested in step.get('workoutSteps', []):
         _fix_repeat_group_step(nested)
