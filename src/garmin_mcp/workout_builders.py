@@ -84,6 +84,55 @@ def _hr_target(
     return ({"zoneNumber": zone}, f"Z{zone}")
 
 
+def _timed_phase_step(step_type_id: int, step_type_key: str, label: str, minutes: int) -> dict:
+    """A no-target timed warmup or cooldown step."""
+    return {
+        "type": "ExecutableStepDTO",
+        "stepType": {"stepTypeId": step_type_id, "stepTypeKey": step_type_key},
+        "description": f"{label} {minutes} min",
+        "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
+        "endConditionValue": float(minutes * 60),
+        "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
+    }
+
+
+def _number_steps(steps: List[dict], start: int = 1) -> int:
+    """Assign stepOrder depth-first across steps and nested repeat groups.
+
+    Garmin numbers a workout with one counter: a repeat group takes its own
+    order and its children continue from there. Returns the next free order.
+    """
+    order = start
+    for step in steps:
+        step["stepOrder"] = order
+        order += 1
+        if "workoutSteps" in step:
+            order = _number_steps(step["workoutSteps"], order)
+    return order
+
+
+def _framed_steps(warmup_min: int, main_steps: List[dict], cooldown_min: int) -> List[dict]:
+    """Wrap main steps in warmup/cooldown, omitting a phase whose minutes are 0."""
+    steps: List[dict] = []
+    if warmup_min > 0:
+        steps.append(_timed_phase_step(1, "warmup", "Warmup", warmup_min))
+    steps.extend(main_steps)
+    if cooldown_min > 0:
+        steps.append(_timed_phase_step(2, "cooldown", "Cooldown", cooldown_min))
+    _number_steps(steps)
+    return steps
+
+
+def _framed_description(warmup_min: int, main: str, cooldown_min: int) -> str:
+    parts = []
+    if warmup_min > 0:
+        parts.append(f"{warmup_min}m warmup")
+    parts.append(main)
+    if cooldown_min > 0:
+        parts.append(f"{cooldown_min}m cooldown")
+    return " + ".join(parts)
+
+
 def build_run_json(
     name: str,
     run_seconds: int,
@@ -107,26 +156,16 @@ def build_run_json(
     )
     return {
         "workoutName": name,
-        "description": (
-            f"{warmup_min}m warmup + {run_display} run {hr_desc} + {cooldown_min}m cooldown"
+        "description": _framed_description(
+            warmup_min, f"{run_display} run {hr_desc}", cooldown_min
         ),
         "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
         "workoutSegments": [{
             "segmentOrder": 1,
             "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
-            "workoutSteps": [
+            "workoutSteps": _framed_steps(warmup_min, [
                 {
                     "type": "ExecutableStepDTO",
-                    "stepOrder": 1,
-                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
-                    "description": f"Warmup {warmup_min} min",
-                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                    "endConditionValue": float(warmup_min * 60),
-                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
-                },
-                {
-                    "type": "ExecutableStepDTO",
-                    "stepOrder": 2,
                     "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                     "description": f"Run {run_seconds}s {hr_desc}",
                     "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -134,16 +173,7 @@ def build_run_json(
                     "targetType": {"workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone"},
                     **hr_target_fields,
                 },
-                {
-                    "type": "ExecutableStepDTO",
-                    "stepOrder": 3,
-                    "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
-                    "description": f"Cooldown {cooldown_min} min",
-                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                    "endConditionValue": float(cooldown_min * 60),
-                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
-                },
-            ],
+            ], cooldown_min),
         }],
     }
 
@@ -196,14 +226,13 @@ def build_run_interval_json(
         else f"{recovery_seconds}s"
     )
 
-    # Steps inside the repeat group. The group itself occupies one step order
-    # and its children continue numbering from there, so a mis-numbered child
-    # is the usual cause of a workout that uploads cleanly but renders
-    # scrambled on the watch.
+    # Steps inside the repeat group. _framed_steps numbers the group and its
+    # children with one depth-first counter; a mis-numbered child is the
+    # usual cause of a workout that uploads cleanly but renders scrambled on
+    # the watch.
     repeat_children = [
         {
             "type": "ExecutableStepDTO",
-            "stepOrder": 3,
             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
             "description": f"Rep {rep_seconds}s {hr_desc}",
             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -219,7 +248,6 @@ def build_run_interval_json(
     if recovery_seconds > 0:
         recovery_step = {
             "type": "ExecutableStepDTO",
-            "stepOrder": 4,
             "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
             "description": f"Jog {recovery_seconds}s",
             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -238,7 +266,6 @@ def build_run_interval_json(
             recovery_step["description"] = f"Jog {recovery_seconds}s {rec_desc}"
         repeat_children.append(recovery_step)
 
-    cooldown_order = 3 + len(repeat_children)
     interval_description = f"{repeats}x({rep_display} {hr_desc}"
     if recovery_seconds > 0:
         interval_description += f" / {rec_display} jog"
@@ -246,33 +273,17 @@ def build_run_interval_json(
 
     return {
         "workoutName": name,
-        "description": (
-            f"{warmup_min}m warmup + {interval_description} + {cooldown_min}m cooldown"
+        "description": _framed_description(
+            warmup_min, interval_description, cooldown_min
         ),
         "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
         "workoutSegments": [
             {
                 "segmentOrder": 1,
                 "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
-                "workoutSteps": [
-                    {
-                        "type": "ExecutableStepDTO",
-                        "stepOrder": 1,
-                        "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
-                        "description": f"Warmup {warmup_min} min",
-                        "endCondition": {
-                            "conditionTypeId": 2,
-                            "conditionTypeKey": "time",
-                        },
-                        "endConditionValue": float(warmup_min * 60),
-                        "targetType": {
-                            "workoutTargetTypeId": 1,
-                            "workoutTargetTypeKey": "no.target",
-                        },
-                    },
+                "workoutSteps": _framed_steps(warmup_min, [
                     {
                         "type": "RepeatGroupDTO",
-                        "stepOrder": 2,
                         "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
                         "numberOfIterations": repeats,
                         "smartRepeat": False,
@@ -283,22 +294,7 @@ def build_run_interval_json(
                         "endConditionValue": float(repeats),
                         "workoutSteps": repeat_children,
                     },
-                    {
-                        "type": "ExecutableStepDTO",
-                        "stepOrder": cooldown_order,
-                        "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
-                        "description": f"Cooldown {cooldown_min} min",
-                        "endCondition": {
-                            "conditionTypeId": 2,
-                            "conditionTypeKey": "time",
-                        },
-                        "endConditionValue": float(cooldown_min * 60),
-                        "targetType": {
-                            "workoutTargetTypeId": 1,
-                            "workoutTargetTypeKey": "no.target",
-                        },
-                    },
-                ],
+                ], cooldown_min),
             }
         ],
     }
@@ -318,9 +314,11 @@ def build_walk_run_json(
     Parameters match create_walk_run_workout exactly.
 
     stepOrder is one depth-first counter over the whole workout, the way
-    Garmin Connect numbers its own workouts: the repeat group takes 2, its
-    children continue at 3 and 4, and the cooldown is 5. Restarting at 1
-    inside the group uploads cleanly but leaves duplicate step orders. The
+    Garmin Connect numbers its own workouts: with a warmup the repeat group
+    takes 2, its children continue at 3 and 4, and the cooldown is 5. A
+    warmup or cooldown of 0 minutes is omitted and the counter closes up.
+    Restarting at 1 inside the group uploads cleanly but leaves duplicate
+    step orders. The
     group also carries the explicit repeat stepType and iterations
     endCondition, as build_run_interval_json does.
     """
@@ -329,27 +327,18 @@ def build_walk_run_json(
     zone = _zone_number(hr_zone)
     return {
         "workoutName": name,
-        "description": (
-            f"{warmup_min}m warmup + {repeats}x({run_seconds}s run / {walk_seconds}s walk) Z{zone} + "
-            f"{cooldown_min}m cooldown"
+        "description": _framed_description(
+            warmup_min,
+            f"{repeats}x({run_seconds}s run / {walk_seconds}s walk) Z{zone}",
+            cooldown_min,
         ),
         "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
         "workoutSegments": [{
             "segmentOrder": 1,
             "sportType": {"sportTypeId": 1, "sportTypeKey": "running"},
-            "workoutSteps": [
-                {
-                    "type": "ExecutableStepDTO",
-                    "stepOrder": 1,
-                    "stepType": {"stepTypeId": 1, "stepTypeKey": "warmup"},
-                    "description": f"Warmup {warmup_min} min",
-                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                    "endConditionValue": float(warmup_min * 60),
-                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
-                },
+            "workoutSteps": _framed_steps(warmup_min, [
                 {
                     "type": "RepeatGroupDTO",
-                    "stepOrder": 2,
                     "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
                     "numberOfIterations": repeats,
                     "smartRepeat": False,
@@ -358,7 +347,6 @@ def build_walk_run_json(
                     "workoutSteps": [
                         {
                             "type": "ExecutableStepDTO",
-                            "stepOrder": 3,
                             "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
                             "description": f"Run {run_seconds}s Z{zone}",
                             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -368,7 +356,6 @@ def build_walk_run_json(
                         },
                         {
                             "type": "ExecutableStepDTO",
-                            "stepOrder": 4,
                             "stepType": {"stepTypeId": 4, "stepTypeKey": "recovery"},
                             "description": f"Walk {walk_seconds}s Z{zone}",
                             "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
@@ -378,16 +365,7 @@ def build_walk_run_json(
                         },
                     ],
                 },
-                {
-                    "type": "ExecutableStepDTO",
-                    "stepOrder": 5,
-                    "stepType": {"stepTypeId": 2, "stepTypeKey": "cooldown"},
-                    "description": f"Cooldown {cooldown_min} min",
-                    "endCondition": {"conditionTypeId": 2, "conditionTypeKey": "time"},
-                    "endConditionValue": float(cooldown_min * 60),
-                    "targetType": {"workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target"},
-                },
-            ],
+            ], cooldown_min),
         }],
     }
 
