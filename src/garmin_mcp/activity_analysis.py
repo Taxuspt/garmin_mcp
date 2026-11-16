@@ -1108,18 +1108,40 @@ def _get_rider_weight_kg(activity_date_str: str) -> Optional[Tuple[float, str]]:
         )
         weight_list = (data or {}).get("dateWeightList") or []
         readings = [
-            (entry.get("calendarDate"), entry.get("weight"))
+            (entry.get("calendarDate"), entry.get("date"), entry.get("weight"))
             for entry in weight_list
             if isinstance(entry, dict)
         ]
         readings = [
-            (day, weight_g) for day, weight_g in readings
+            (day, measured_ms, weight_g) for day, measured_ms, weight_g in readings
             if day and weight_g and day <= activity_date_str
         ]
         if not readings:
             return None
-        day, weight_g = max(readings)
+        # Latest day wins; same-day weigh-ins go by measurement time (epoch ms),
+        # not by weight.
+        day, _, weight_g = max(
+            readings,
+            key=lambda r: (
+                r[0], r[1] if isinstance(r[1], (int, float)) else float("-inf")
+            ),
+        )
         return round(weight_g / 1000.0, 2), day
+    except Exception:
+        pass
+    return None
+
+
+def _activity_local_date(activity_id) -> Optional[str]:
+    """Local start date (YYYY-MM-DD) from the activity summary, or None."""
+    if garmin_client is None:
+        return None
+    try:
+        activity = garmin_client.get_activity(activity_id)
+        summary = activity.get("summaryDTO") if isinstance(activity, dict) else None
+        start_local = summary.get("startTimeLocal") if isinstance(summary, dict) else None
+        if isinstance(start_local, str):
+            return datetime.date.fromisoformat(start_local[:10]).isoformat()
     except Exception:
         pass
     return None
@@ -1283,6 +1305,33 @@ def _compute_hrv_metrics(rr_intervals_s: List[float]) -> Optional[Dict]:
     }
 
 
+_FIT_EPOCH = datetime.datetime(1989, 12, 31)
+# Real-world UTC offsets span UTC-12:00 .. UTC+14:00.
+_MIN_UTC_OFFSET_MIN = -12 * 60
+_MAX_UTC_OFFSET_MIN = 14 * 60
+
+
+def _fit_utc_offset(timestamp, local_timestamp) -> Optional[datetime.timedelta]:
+    """Watch UTC offset from a FIT ``activity`` message, or None.
+
+    ``timestamp`` is UTC; ``local_timestamp`` is the same instant on the
+    watch's local clock (a naive datetime, or raw seconds since the FIT epoch).
+    """
+    utc = _parse_fit_timestamp(timestamp)
+    if isinstance(local_timestamp, (int, float)) and not isinstance(local_timestamp, bool):
+        local = _FIT_EPOCH + datetime.timedelta(seconds=local_timestamp)
+    elif isinstance(local_timestamp, datetime.datetime):
+        local = local_timestamp.replace(tzinfo=None)
+    else:
+        local = _parse_fit_timestamp(local_timestamp)
+    if utc is None or local is None:
+        return None
+    minutes = round((local - utc).total_seconds() / 60)
+    if not _MIN_UTC_OFFSET_MIN <= minutes <= _MAX_UTC_OFFSET_MIN:
+        return None
+    return datetime.timedelta(minutes=minutes)
+
+
 def _curate_session(message) -> Dict[str, Any]:
     """Curate one FIT ``session`` message into the tool's session summary."""
     session = {
@@ -1379,6 +1428,8 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
     # Requires "Log HRV" enabled on the watch AND a chest strap paired.
     rr_pairs: List[tuple] = []  # (record_timestamp, rr_seconds)
     last_record_ts = None
+    # Watch UTC offset, from the FIT 'activity' message
+    utc_offset: Optional[datetime.timedelta] = None
 
     # Track last values for context at shift time
     last_cadence: Optional[float] = None
@@ -1392,6 +1443,17 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
         # ------------------------------------------------------------------
         if msg_type == "session":
             sessions.append(_curate_session(message))
+
+        # ------------------------------------------------------------------
+        # Activity summary: UTC timestamp + local timestamp give the offset
+        # ------------------------------------------------------------------
+        elif msg_type == "activity":
+            offset = _fit_utc_offset(
+                _get_field(message, "timestamp"),
+                _get_field(message, "local_timestamp"),
+            )
+            if offset is not None:
+                utc_offset = offset
 
         # ------------------------------------------------------------------
         # Lap data
@@ -1589,6 +1651,11 @@ def _parse_fit(fit_bytes: bytes, include_records: bool) -> dict:
             )
     else:
         session = sessions[0] if sessions else {}
+
+    # FIT start_time is UTC; the ride's local calendar day can differ.
+    session_start = _parse_fit_timestamp(session.get("start_time"))
+    if utc_offset is not None and session_start is not None:
+        session["start_date_local"] = (session_start + utc_offset).date().isoformat()
 
     # Devices that don't write the record grade field: derive it from
     # altitude + distance so climbs, grade bins and shift terrain still work.
@@ -1925,10 +1992,15 @@ def register_tools(app):
 
             parsed["activity_id"] = activity_id
 
-            # W/kg: latest weigh-in on or before the activity date
+            # W/kg: latest weigh-in on or before the ride's local date.
+            # Weigh-in calendarDates are local, FIT start_time is UTC.
             session = parsed.get("session") or {}
-            start_time_str = session.get("start_time", "")
-            activity_date = start_time_str[:10] if start_time_str else None
+            activity_date = session.get("start_date_local") or _activity_local_date(
+                activity_id
+            )
+            if not activity_date:
+                start_time_str = session.get("start_time", "")
+                activity_date = start_time_str[:10] if start_time_str else None
             if activity_date:
                 weight = _get_rider_weight_kg(activity_date)
                 if weight:
