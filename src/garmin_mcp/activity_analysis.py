@@ -545,6 +545,10 @@ def _parse_fit_messages(
 # Download directory config (for download_activity_file / set_fit_download_dir)
 # ---------------------------------------------------------------------------
 
+# Garmin parentTypeId for parent activity types, so a parent filter keeps
+# subtypes whose typeKey lacks the parent name (e.g. virtual_run -> running).
+_PARENT_TYPE_IDS = {"running": 1, "cycling": 2}
+
 _DEFAULT_FIT_CONFIG = "~/.garminconnect_fit_config.json"
 
 
@@ -1993,20 +1997,25 @@ def register_tools(app):
             if not activities:
                 return "No activities found."
 
-            # Keep a local sport guard too. Cycling's parent type includes
-            # virtual_ride, cyclocross, and e-bike types without either substring.
-            cycling_activities = [
-                a for a in activities
-                if requested_type in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                or requested_type == str((a.get("activityType") or {}).get("parentTypeId", ""))
-                or (
-                    requested_type == "cycling"
-                    and (
-                        str((a.get("activityType") or {}).get("parentTypeId", "")) == "2"
-                        or "biking" in str((a.get("activityType") or {}).get("typeKey", "")).lower()
-                    )
+            # Filter by sport type. A parent type also matches its subtypes via
+            # parentTypeId (virtual_run, ultra_run -> running; virtual_ride,
+            # road_biking -> cycling) even when the subtype's typeKey does not
+            # contain the parent's name. "cycling" also matches the *_biking typeKeys;
+            # other types must not pull in bike power.
+            parent_type_id = _PARENT_TYPE_IDS.get(requested_type)
+
+            def _matches(a):
+                a_type = a.get("activityType") or {}
+                type_key = str(a_type.get("typeKey", "")).lower()
+                parent_id = str(a_type.get("parentTypeId", ""))
+                return (
+                    requested_type in type_key
+                    or requested_type == parent_id
+                    or (parent_type_id is not None and parent_id == str(parent_type_id))
+                    or (requested_type == "cycling" and "biking" in type_key)
                 )
-            ]
+
+            cycling_activities = [a for a in activities if _matches(a)]
 
             if not cycling_activities:
                 return f"No {activity_type} activities found in the last {num_activities} activities."
