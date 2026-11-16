@@ -15,6 +15,28 @@ from garminconnect import (
 TOKEN_FILE_NAME = "garmin_tokens.json"
 
 
+def read_secret_env(name: str) -> str | None:
+    """Return $NAME, or the contents of the file named by $NAME_FILE.
+
+    Raises ValueError when both are set, or when the file cannot be read
+    (missing, mistyped or unreadable secret mounts), so callers can report
+    a clean message instead of an OSError traceback.
+    """
+    value = os.environ.get(name)
+    file_path = os.environ.get(f"{name}_FILE")
+    if value and file_path:
+        raise ValueError(f"Must only provide one of {name} and {name}_FILE, got both")
+    if file_path:
+        try:
+            with open(file_path, "r") as fh:
+                return fh.read().rstrip()
+        except OSError as exc:
+            raise ValueError(
+                f"Cannot read {name}_FILE '{file_path}': {exc.strerror or exc}"
+            ) from exc
+    return value
+
+
 def resolve_token_path(path: str) -> str:
     """Resolve environment variables and the user-home marker in a token path.
 

@@ -22,6 +22,7 @@ from garmin_mcp.token_utils import (
     validate_tokens,
     get_token_info,
     resolve_token_path,
+    read_secret_env,
     secure_token_dir as _secure_token_dir,
 )
 
@@ -41,28 +42,9 @@ def get_credentials() -> tuple[str, str]:
     Raises:
         ValueError: If credentials cannot be obtained
     """
-    # Try environment variables first
-    email = os.environ.get("GARMIN_EMAIL")
-    email_file = os.environ.get("GARMIN_EMAIL_FILE")
-
-    if email and email_file:
-        raise ValueError(
-            "Must only provide one of GARMIN_EMAIL and GARMIN_EMAIL_FILE, got both"
-        )
-    elif email_file:
-        with open(email_file, "r") as f:
-            email = f.read().rstrip()
-
-    password = os.environ.get("GARMIN_PASSWORD")
-    password_file = os.environ.get("GARMIN_PASSWORD_FILE")
-
-    if password and password_file:
-        raise ValueError(
-            "Must only provide one of GARMIN_PASSWORD and GARMIN_PASSWORD_FILE, got both"
-        )
-    elif password_file:
-        with open(password_file, "r") as f:
-            password = f.read().rstrip()
+    # Try environment variables first (VAR or VAR_FILE, never both)
+    email = read_secret_env("GARMIN_EMAIL")
+    password = read_secret_env("GARMIN_PASSWORD")
 
     # Prompt for missing credentials
     if not email:

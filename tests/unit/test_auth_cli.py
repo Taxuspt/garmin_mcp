@@ -109,9 +109,38 @@ class TestGetCredentials:
             with pytest.raises(ValueError, match="Password is required"):
                 get_credentials()
 
+    @pytest.mark.parametrize("name", ["GARMIN_EMAIL", "GARMIN_PASSWORD"])
+    def test_unreadable_secret_file_raises_value_error(self, name, tmp_path, monkeypatch):
+        """A missing *_FILE path is reported as a ValueError naming the variable and path."""
+        for var in ("GARMIN_EMAIL", "GARMIN_EMAIL_FILE", "GARMIN_PASSWORD", "GARMIN_PASSWORD_FILE"):
+            monkeypatch.delenv(var, raising=False)
+        other = "GARMIN_PASSWORD" if name == "GARMIN_EMAIL" else "GARMIN_EMAIL"
+        monkeypatch.setenv(other, "x")
+        missing = tmp_path / "missing_secret"
+        monkeypatch.setenv(f"{name}_FILE", str(missing))
+
+        with pytest.raises(ValueError, match=f"Cannot read {name}_FILE") as exc_info:
+            get_credentials()
+        assert str(missing) in str(exc_info.value)
+
 
 class TestAuthenticate:
     """Tests for authenticate function."""
+
+    def test_missing_email_file_reports_error(self, tmp_path, monkeypatch, capsys):
+        """A missing GARMIN_EMAIL_FILE prints an error and returns False instead of crashing."""
+        monkeypatch.delenv("GARMIN_EMAIL", raising=False)
+        monkeypatch.delenv("GARMIN_PASSWORD_FILE", raising=False)
+        missing = tmp_path / "nonexistent_email"
+        monkeypatch.setenv("GARMIN_EMAIL_FILE", str(missing))
+        monkeypatch.setenv("GARMIN_PASSWORD", "x")
+
+        result = authenticate(str(tmp_path / "tokens"), str(tmp_path / "b64"), force_reauth=True)
+
+        assert result is False
+        err = capsys.readouterr().err
+        assert "Error: Cannot read GARMIN_EMAIL_FILE" in err
+        assert str(missing) in err
 
     @patch("garmin_mcp.auth_cli.token_exists")
     @patch("garmin_mcp.auth_cli.validate_tokens")
