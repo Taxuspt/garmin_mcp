@@ -1188,6 +1188,55 @@ async def test_power_duration_curve_requests_matching_activities_before_limiting
         params={"start": "0", "limit": "2", "activityType": "cycling"},
     )
 
+@pytest.mark.parametrize(
+    "type_key,parent_id,requested",
+    [
+        ("virtual_run", 1, "running"),
+        ("ultra_run", 1, "running"),
+        ("obstacle_run", 1, "running"),
+        ("virtual_ride", 2, "cycling"),
+    ],
+)
+async def test_power_duration_curve_keeps_subtypes_by_parent_type_id(
+    app_with_activity_analysis, mock_garmin_client, type_key, parent_id, requested
+):
+    """Subtypes whose typeKey lacks the parent name still match via parentTypeId."""
+    mock_garmin_client.get_activities.return_value = [
+        {"activityId": 1, "startTimeLocal": "2024-06-01 08:00:00",
+         "activityType": {"typeKey": type_key, "parentTypeId": parent_id}},
+    ]
+    mock_garmin_client.download_activity.return_value = b"fit"
+
+    with patch("garmin_mcp.activity_analysis.fitparse") as mock_fp:
+        mock_fp.FitFile.side_effect = lambda _: _mock_power_fitfile(250)
+        result = await app_with_activity_analysis.call_tool(
+            "get_power_duration_curve", {"activity_type": requested}
+        )
+
+    text = result[0][0].text
+    assert "No " not in text, text
+    data = json.loads(text)
+    assert data["activities_analyzed"] == 1
+    assert data["season_bests"]["5s"]["watts"] == 250
+
+
+@pytest.mark.asyncio
+async def test_power_duration_curve_running_excludes_other_parent_ids(
+    app_with_activity_analysis, mock_garmin_client
+):
+    """A running request must not pull in a ride whose parentTypeId is 2."""
+    mock_garmin_client.get_activities.return_value = [
+        {"activityId": 2, "startTimeLocal": "2024-06-02 08:00:00",
+         "activityType": {"typeKey": "virtual_ride", "parentTypeId": 2}},
+    ]
+
+    result = await app_with_activity_analysis.call_tool(
+        "get_power_duration_curve", {"activity_type": "running"}
+    )
+
+    assert "No running activities found" in result[0][0].text
+    mock_garmin_client.download_activity.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Climb detection + VAM (unit tests)
