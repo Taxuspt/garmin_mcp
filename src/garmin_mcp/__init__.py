@@ -72,21 +72,8 @@ def _normalize_optional_user_config(value: str | None, key: str) -> str | None:
 #   GARMIN_PASSWORD / GARMIN_PASSWORD_FILE - one of the two, never both
 #   GARMINTOKENS / GARMINTOKENS_BASE64     - token locations (see token_utils)
 #   GARMIN_IS_CN                           - true/1/yes for garmin.cn
-def _read_secret_env(name: str) -> str | None:
-    """Return $NAME, or the contents of the file named by $NAME_FILE."""
-    value = os.environ.get(name)
-    file_path = os.environ.get(f"{name}_FILE")
-    if value and file_path:
-        raise ValueError(f"Must only provide one of {name} and {name}_FILE, got both")
-    if file_path:
-        try:
-            with open(file_path, "r") as fh:
-                return fh.read().rstrip()
-        except OSError as exc:
-            raise ValueError(
-                f"Cannot read {name}_FILE '{file_path}': {exc.strerror or exc}"
-            ) from exc
-    return value
+# Shared with garmin-mcp-auth, which reads the same variables.
+_read_secret_env = token_utils.read_secret_env
 
 
 def load_credentials() -> tuple[str | None, str | None]:
