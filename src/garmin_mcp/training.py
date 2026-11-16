@@ -1247,6 +1247,9 @@ def register_tools(app):
         TSB and TSB form thresholds do not apply. Use `acwr`/`acwr_status` (and the optimal chronic
         load range) to judge whether load is building steadily or spiking.
 
+        Days on which the device produced no new training-status record are omitted rather than
+        filled with the previous day's values.
+
         Recommended range: 4-8 weeks. Maximum: 90 days.
         Empty days are skipped; a failed daily request returns an error.
 
@@ -1290,6 +1293,14 @@ def register_tools(app):
                     status_data, reporting_id, reporting_name, is_primary_tracker = (
                         _select_training_device(latest_data, devices)
                     )
+                    # mostRecentTrainingStatus is the latest record as of
+                    # date_str. When the device did not sync or recompute that
+                    # day, the record carries an earlier calendarDate; skip it
+                    # instead of relabelling yesterday's values as today's.
+                    record_date = status_data.get("calendarDate")
+                    if isinstance(record_date, str) and record_date[:10] != date_str:
+                        current += datetime.timedelta(days=1)
+                        continue
                     atl_dto = status_data.get("acuteTrainingLoadDTO") or {}
                     most_recent_vo2 = data.get("mostRecentVO2Max") or {}
                     vo2_data = most_recent_vo2.get("generic") or {}

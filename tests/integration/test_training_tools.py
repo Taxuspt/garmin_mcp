@@ -400,6 +400,91 @@ async def test_get_training_load_trend_reports_primary_tracker_loads(
     mock_garmin_client.get_training_readiness.assert_not_called()
 
 
+def _dated_status(calendar_date, acute, chronic):
+    return {
+        "mostRecentTrainingStatus": {
+            "latestTrainingStatusData": {
+                "100": {
+                    "deviceId": 100,
+                    "calendarDate": calendar_date,
+                    "trainingStatusFeedbackPhrase": "PRODUCTIVE_1",
+                    "acuteTrainingLoadDTO": {
+                        "dailyTrainingLoadAcute": acute,
+                        "dailyTrainingLoadChronic": chronic,
+                    },
+                }
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_trend_skips_stale_status_records(
+    app_with_training, mock_garmin_client
+):
+    """A carried-over mostRecent record must not be relabelled as later days."""
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "primaryDevice": True},
+    ]
+    mock_garmin_client.get_training_status.return_value = _dated_status(
+        "2024-01-10", 500, 400
+    )
+
+    result = await app_with_training.call_tool(
+        "get_training_load_trend",
+        {"start_date": "2024-01-10", "end_date": "2024-01-13"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["days_with_data"] == 1
+    assert [e["date"] for e in data["trend"]] == ["2024-01-10"]
+    assert data["trend"][0]["atl"] == 500
+    assert data["trend"][0]["ctl"] == 400
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_trend_keeps_days_with_own_records(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "primaryDevice": True},
+    ]
+    mock_garmin_client.get_training_status.side_effect = lambda d: _dated_status(
+        f"{d}T00:00:00.0", 500 + int(d[-2:]), 400
+    )
+
+    result = await app_with_training.call_tool(
+        "get_training_load_trend",
+        {"start_date": "2024-01-10", "end_date": "2024-01-12"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["days_with_data"] == 3
+    assert [e["date"] for e in data["trend"]] == [
+        "2024-01-10", "2024-01-11", "2024-01-12"
+    ]
+    assert [e["atl"] for e in data["trend"]] == [510, 511, 512]
+
+
+@pytest.mark.asyncio
+async def test_get_training_load_trend_all_stale_reports_no_data(
+    app_with_training, mock_garmin_client
+):
+    mock_garmin_client.get_devices.return_value = [
+        {"deviceId": 100, "primaryDevice": True},
+    ]
+    mock_garmin_client.get_training_status.return_value = _dated_status(
+        "2024-01-05", 500, 400
+    )
+
+    result = await app_with_training.call_tool(
+        "get_training_load_trend",
+        {"start_date": "2024-01-10", "end_date": "2024-01-12"},
+    )
+
+    assert "No training load data found" in result[0][0].text
+
+
 @pytest.mark.asyncio
 async def test_get_training_load_trend_description_uses_garmin_load_scale(
     app_with_training,
