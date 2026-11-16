@@ -79,6 +79,82 @@ async def test_builders_reject_invalid_counts_and_durations_before_upload(
     mock_garmin_client.upload_workout.assert_not_called()
 
 
+def _flatten_steps(steps):
+    """Steps in depth-first order, repeat groups before their children."""
+    flat = []
+    for step in steps:
+        flat.append(step)
+        flat.extend(_flatten_steps(step.get("workoutSteps", [])))
+    return flat
+
+
+_FRAMED_BUILDER_ARGS = [
+    ("create_run_workout", {"run_seconds": 1800}),
+    ("create_run_interval_workout", {"repeats": 3, "rep_seconds": 60, "recovery_seconds": 60}),
+    ("create_walk_run_workout", {"run_seconds": 60, "walk_seconds": 60, "repeats": 3}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name,arguments", _FRAMED_BUILDER_ARGS)
+@pytest.mark.parametrize("warmup_min,cooldown_min", [(0, 0), (0, 8), (10, 0)])
+async def test_zero_warmup_or_cooldown_omits_that_step(
+    app_with_builders, mock_garmin_client, tool_name, arguments, warmup_min, cooldown_min
+):
+    mock_garmin_client.upload_workout.return_value = {"workoutId": 1}
+    await app_with_builders.call_tool(tool_name, {
+        "name": "Easy", "warmup_min": warmup_min, "cooldown_min": cooldown_min, **arguments,
+    })
+
+    payload = mock_garmin_client.upload_workout.call_args[0][0]
+    top = payload["workoutSegments"][0]["workoutSteps"]
+    flat = _flatten_steps(top)
+    keys = [s["stepType"]["stepTypeKey"] for s in top]
+
+    assert not [s for s in flat if s.get("endConditionValue") == 0.0]
+    assert ("warmup" in keys) == (warmup_min > 0)
+    assert ("cooldown" in keys) == (cooldown_min > 0)
+    if warmup_min:
+        assert keys[0] == "warmup"
+        assert top[0]["endConditionValue"] == float(warmup_min * 60)
+    if cooldown_min:
+        assert keys[-1] == "cooldown"
+        assert top[-1]["endConditionValue"] == float(cooldown_min * 60)
+    assert [s["stepOrder"] for s in flat] == list(range(1, len(flat) + 1))
+    assert ("warmup" in payload["description"]) == (warmup_min > 0)
+    assert ("cooldown" in payload["description"]) == (cooldown_min > 0)
+
+
+def test_build_run_json_no_warmup_numbers_run_first():
+    workout = workout_builders.build_run_json("x", 600, 0, 0)
+    steps = workout["workoutSegments"][0]["workoutSteps"]
+
+    assert len(steps) == 1
+    assert steps[0]["stepType"]["stepTypeKey"] == "interval"
+    assert steps[0]["stepOrder"] == 1
+    assert workout["description"] == "10m run Z3"
+
+
+def test_build_walk_run_json_no_warmup_renumbers_group_and_children():
+    workout = workout_builders.build_walk_run_json("x", 60, 60, 3, 0, 5)
+    steps = workout["workoutSegments"][0]["workoutSteps"]
+
+    assert [s["stepType"]["stepTypeKey"] for s in steps] == ["repeat", "cooldown"]
+    assert steps[0]["stepOrder"] == 1
+    assert [c["stepOrder"] for c in steps[0]["workoutSteps"]] == [2, 3]
+    assert steps[1]["stepOrder"] == 4
+    assert workout["description"] == "3x(60s run / 60s walk) Z3 + 5m cooldown"
+
+
+def test_build_run_interval_json_keeps_default_numbering_with_warmup():
+    workout = workout_builders.build_run_interval_json("x", 4, 60, 0, 12, 8)
+    steps = workout["workoutSegments"][0]["workoutSteps"]
+
+    assert [s["stepOrder"] for s in _flatten_steps(steps)] == [1, 2, 3, 4]
+    assert steps[-1]["stepType"]["stepTypeKey"] == "cooldown"
+    assert workout["description"] == "12m warmup + 4x(1m Z4) + 8m cooldown"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bounds", [
     {"recovery_hr_min": 120}, {"recovery_hr_max": 140},
