@@ -1333,7 +1333,7 @@ async def test_get_morning_training_readiness_tool(app_with_health_wellness, moc
 async def test_get_morning_training_readiness_recovery_reached_zero(
     app_with_health_wellness, mock_garmin_client
 ):
-    """A drained clock still reads 0 h: Garmin leaves a minute or two behind."""
+    """A drained clock still reads 0 h."""
     mock_garmin_client.get_morning_training_readiness.return_value = {
         **MOCK_MORNING_TRAINING_READINESS,
         "recoveryTime": 1,

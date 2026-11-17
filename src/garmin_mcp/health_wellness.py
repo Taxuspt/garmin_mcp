@@ -25,13 +25,7 @@ def _as_snapshot_list(payload: Any) -> List[Dict[str, Any]]:
 
 
 def _recovery_state(remaining_hours: Optional[float], phrase: Any) -> str:
-    """Map remaining hours / Garmin change phrase to a coarse state.
-
-    The remaining hours decide the state whenever they are known; the change
-    phrase is only a fallback for snapshots that carry no usable value. Garmin
-    can leave ``REACHED_ZERO`` on a snapshot that has just been assigned a new
-    recovery time, so the phrase alone is not evidence of a drained clock.
-    """
+    """Derive the recovery state from the remaining hours, falling back to the change phrase."""
     if remaining_hours is None:
         return "recovered" if phrase == "REACHED_ZERO" else "unknown"
     if remaining_hours <= 0:
@@ -46,13 +40,8 @@ def _recovery_state(remaining_hours: Optional[float], phrase: Any) -> str:
 def _hours_from_recovery_minutes(minutes: Any, phrase: Any = None) -> Optional[float]:
     """Convert Garmin recovery minutes to hours.
 
-    ``recoveryTime`` is the live countdown that the watch and Garmin Connect
-    display, so it is the source of truth. ``recoveryTimeChangePhrase`` is not:
-    after a workout assigns new recovery time Garmin can still report the
-    ``REACHED_ZERO`` from the drained state that preceded it (#491), which made
-    every post-workout snapshot read as 0 h. The phrase is therefore only used
-    when the snapshot has no usable number at all. A drained clock leaves a
-    minute or two behind, and that rounds to 0.0 h on its own.
+    ``recoveryTime`` is the live countdown; ``recoveryTimeChangePhrase`` can be
+    stale after a workout, so it is only a fallback when no value is present.
     """
     if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
         return 0.0 if phrase == "REACHED_ZERO" else None

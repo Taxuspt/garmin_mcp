@@ -12,11 +12,9 @@ from garmin_mcp.health_wellness import (
 
 def test_hours_from_recovery_minutes_and_reached_zero():
     assert _hours_from_recovery_minutes(1728) == 28.8
-    # A drained clock leaves a minute or two on Garmin's counter, which rounds
-    # to 0.0 h on its own -- the phrase is not needed to force that.
+    # 1 min already rounds to 0.0 h, so the phrase is not needed here.
     assert _hours_from_recovery_minutes(1, "REACHED_ZERO") == 0.0
-    # Regression for #491: Garmin keeps the stale phrase after it assigns new
-    # recovery time, so a real value must win over "REACHED_ZERO".
+    # Regression for #491: a real value must win over a stale phrase.
     assert _hours_from_recovery_minutes(1222, "REACHED_ZERO") == 20.4
     assert _hours_from_recovery_minutes(None) is None
     assert _hours_from_recovery_minutes(True) is None
