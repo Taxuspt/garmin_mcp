@@ -25,11 +25,11 @@ def _as_snapshot_list(payload: Any) -> List[Dict[str, Any]]:
 
 
 def _recovery_state(remaining_hours: Optional[float], phrase: Any) -> str:
-    """Map remaining hours / Garmin change phrase to a coarse state."""
-    if phrase == "REACHED_ZERO" or remaining_hours == 0:
-        return "recovered"
+    """Derive the recovery state from the remaining hours, falling back to the change phrase."""
     if remaining_hours is None:
-        return "unknown"
+        return "recovered" if phrase == "REACHED_ZERO" else "unknown"
+    if remaining_hours <= 0:
+        return "recovered"
     if remaining_hours <= 6:
         return "nearly_recovered"
     if remaining_hours <= 24:
@@ -40,13 +40,11 @@ def _recovery_state(remaining_hours: Optional[float], phrase: Any) -> str:
 def _hours_from_recovery_minutes(minutes: Any, phrase: Any = None) -> Optional[float]:
     """Convert Garmin recovery minutes to hours.
 
-    When ``recoveryTimeChangePhrase`` is ``REACHED_ZERO``, Garmin keeps the last
-    assigned minute value even though the clock has drained to zero.
+    ``recoveryTime`` is the live countdown; ``recoveryTimeChangePhrase`` can be
+    stale after a workout, so it is only a fallback when no value is present.
     """
-    if phrase == "REACHED_ZERO":
-        return 0.0
     if isinstance(minutes, bool) or not isinstance(minutes, (int, float)):
-        return None
+        return 0.0 if phrase == "REACHED_ZERO" else None
     if minutes < 0:
         return None
     return round(float(minutes) / 60.0, 1)

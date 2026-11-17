@@ -1333,11 +1333,10 @@ async def test_get_morning_training_readiness_tool(app_with_health_wellness, moc
 async def test_get_morning_training_readiness_recovery_reached_zero(
     app_with_health_wellness, mock_garmin_client
 ):
-    """REACHED_ZERO means the recovery clock has drained even though Garmin
-    keeps the last assigned minutes in recoveryTime."""
+    """A drained clock still reads 0 h."""
     mock_garmin_client.get_morning_training_readiness.return_value = {
         **MOCK_MORNING_TRAINING_READINESS,
-        "recoveryTime": 106,
+        "recoveryTime": 1,
         "recoveryTimeChangePhrase": "REACHED_ZERO",
     }
 
@@ -1348,6 +1347,28 @@ async def test_get_morning_training_readiness_recovery_reached_zero(
 
     data = json.loads(result[0][0].text)
     assert data["recovery_time_hours"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_morning_training_readiness_keeps_value_behind_stale_reached_zero(
+    app_with_health_wellness, mock_garmin_client
+):
+    """#491: a post-workout snapshot keeps REACHED_ZERO from before the reset."""
+    mock_garmin_client.get_morning_training_readiness.return_value = {
+        **MOCK_MORNING_TRAINING_READINESS,
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "recoveryTime": 1222,
+        "recoveryTimeFactorPercent": 67,
+        "recoveryTimeChangePhrase": "REACHED_ZERO",
+    }
+
+    result = await app_with_health_wellness.call_tool(
+        "get_morning_training_readiness",
+        {"date": "2024-01-15"}
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["recovery_time_hours"] == 20.4
 
 
 # Error handling tests
@@ -1531,6 +1552,35 @@ async def test_get_recovery_time_remaining_from_readiness(
     assert data["state"] == "recovering"
     assert data["source"] == "training_readiness"
     mock_garmin_client.get_training_readiness.assert_called_once_with("2026-09-12")
+
+
+@pytest.mark.asyncio
+async def test_get_recovery_time_remaining_ignores_stale_reached_zero_phrase(
+    app_with_health_wellness, mock_garmin_client
+):
+    """#491: the watch showed ~20 h after a swim while the MCP reported 0.0."""
+    mock_garmin_client.get_training_readiness.return_value = [
+        {
+            "calendarDate": "2026-10-31",
+            "timestampLocal": "2026-10-31T17:35:03",
+            "inputContext": "AFTER_POST_EXERCISE_RESET",
+            "recoveryTime": 1222,
+            "recoveryTimeFactorPercent": 67,
+            "recoveryTimeChangePhrase": "REACHED_ZERO",
+            "score": 61,
+            "level": "MODERATE",
+        }
+    ]
+
+    result = await app_with_health_wellness.call_tool(
+        "get_recovery_time_remaining",
+        {"date": "2026-10-31"},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["remaining_hours"] == 20.4
+    assert data["state"] == "recovering"
+    assert data["change_phrase"] == "REACHED_ZERO"
 
 
 @pytest.mark.asyncio
