@@ -12,9 +12,19 @@ from garmin_mcp.health_wellness import (
 
 def test_hours_from_recovery_minutes_and_reached_zero():
     assert _hours_from_recovery_minutes(1728) == 28.8
-    assert _hours_from_recovery_minutes(106, "REACHED_ZERO") == 0.0
+    # A drained clock leaves a minute or two on Garmin's counter, which rounds
+    # to 0.0 h on its own -- the phrase is not needed to force that.
+    assert _hours_from_recovery_minutes(1, "REACHED_ZERO") == 0.0
+    # Regression for #491: Garmin keeps the stale phrase after it assigns new
+    # recovery time, so a real value must win over "REACHED_ZERO".
+    assert _hours_from_recovery_minutes(1222, "REACHED_ZERO") == 20.4
     assert _hours_from_recovery_minutes(None) is None
     assert _hours_from_recovery_minutes(True) is None
+
+
+def test_hours_from_recovery_minutes_uses_phrase_only_without_value():
+    assert _hours_from_recovery_minutes(None, "REACHED_ZERO") == 0.0
+    assert _hours_from_recovery_minutes(None, "NO_CHANGE_SLEEP") is None
 
 
 def test_recovery_state_bands():
@@ -22,7 +32,63 @@ def test_recovery_state_bands():
     assert _recovery_state(3, None) == "nearly_recovered"
     assert _recovery_state(12, None) == "recovering"
     assert _recovery_state(36, None) == "not_recovered"
-    assert _recovery_state(12, "REACHED_ZERO") == "recovered"
+    assert _recovery_state(None, "REACHED_ZERO") == "recovered"
+    assert _recovery_state(None, None) == "unknown"
+    # A live countdown decides the state even when the phrase still says zero.
+    assert _recovery_state(12, "REACHED_ZERO") == "recovering"
+
+
+# Snapshots taken on 2026-10-31, trimmed to the fields the curation reads.
+POST_EXERCISE_RESET_SNAPSHOTS = [
+    {
+        "calendarDate": "2026-10-31",
+        "timestampLocal": "2026-10-31T00:03:21",
+        "inputContext": "UPDATE_REALTIME_VARIABLES",
+        "recoveryTime": 464,
+        "recoveryTimeFactorPercent": 87,
+        "recoveryTimeChangePhrase": None,
+    },
+    {
+        "calendarDate": "2026-10-31",
+        "timestampLocal": "2026-10-31T08:26:51",
+        "inputContext": "AFTER_WAKEUP_RESET",
+        "recoveryTime": 1,
+        "recoveryTimeFactorPercent": 99,
+        "recoveryTimeChangePhrase": "NO_CHANGE_SLEEP",
+    },
+    {
+        "calendarDate": "2026-10-31",
+        "timestampLocal": "2026-10-31T11:58:14",
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "recoveryTime": 1,
+        "recoveryTimeFactorPercent": 99,
+        "recoveryTimeChangePhrase": "REACHED_ZERO",
+    },
+    {
+        "calendarDate": "2026-10-31",
+        "timestampLocal": "2026-10-31T17:35:03",
+        "inputContext": "AFTER_POST_EXERCISE_RESET",
+        "recoveryTime": 1222,
+        "recoveryTimeFactorPercent": 67,
+        "recoveryTimeChangePhrase": "REACHED_ZERO",
+    },
+]
+
+
+def test_recovery_from_readiness_ignores_stale_reached_zero_after_workout():
+    """#491: the 17:35 snapshot assigned 1222 min but kept the drained phrase."""
+    curated = _recovery_from_readiness(POST_EXERCISE_RESET_SNAPSHOTS, "training_readiness")
+    assert curated["remaining_hours"] == 20.4
+    assert curated["remaining_hours_at_snapshot"] == 20.4
+    assert curated["state"] == "recovering"
+    assert curated["change_phrase"] == "REACHED_ZERO"
+    assert curated["as_of"] == "2026-10-31T17:35:03"
+
+
+def test_recovery_from_readiness_reports_drained_clock_as_recovered():
+    drained = _recovery_from_readiness(POST_EXERCISE_RESET_SNAPSHOTS[2], "training_readiness")
+    assert drained["remaining_hours"] == 0.0
+    assert drained["state"] == "recovered"
 
 
 def test_recovery_from_readiness_uses_latest_snapshot():
