@@ -9,7 +9,7 @@ updates:
       github-actions:
         patterns: [ "*" ]
     commit-message:
-      prefix: ci
+      prefix: "chore(deps)"
 
   # Bumps the pinned uv image in the Dockerfile. The Python base image comes in
   # through a build arg, which Dependabot leaves alone.
@@ -18,4 +18,4 @@ updates:
     schedule:
       interval: weekly
     commit-message:
-      prefix: build
+      prefix: "chore(deps)"
