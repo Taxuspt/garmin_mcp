@@ -1,5 +1,9 @@
 services:
   garmin-mcp:
+    # Pulls the prebuilt release image; if it can't be pulled, Compose builds
+    # it from this checkout instead. Update with `docker compose pull`, or
+    # build from source with `docker compose build`.
+    image: ghcr.io/taxuspt/garmin_mcp:latest
     build:
       context: .
       dockerfile: Dockerfile
