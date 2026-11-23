@@ -1,0 +1,13 @@
+apiVersion: v2
+name: garmin-mcp
+description: MCP server for Garmin Connect data, served over HTTP for in-cluster use
+type: application
+version: 0.1.0
+# Tracks the upstream application; bump alongside the image tag you ship.
+appVersion: "1.0.0"
+keywords:
+  - mcp
+  - garmin
+home: https://github.com/Taxuspt/garmin_mcp
+sources:
+  - https://github.com/Taxuspt/garmin_mcp
