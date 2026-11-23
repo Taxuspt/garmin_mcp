@@ -30,6 +30,8 @@ fullnameOverride: ""
 #
 #   C. existingSecret. A Secret you manage (sealed-secrets, external-secrets…).
 #      It must contain GARMIN_EMAIL/GARMIN_PASSWORD, or GARMINTOKENS (token JSON).
+#      Every key is loaded into the container env, so add GARMIN_MCP_HTTP_TOKEN
+#      to it to enable bearer auth (transport.httpToken is rejected here).
 garmin:
   # --- option A: tokens ---
   tokens:
@@ -50,6 +52,19 @@ transport:
   mode: streamable-http # streamable-http | sse
   host: "0.0.0.0"
   port: 8000
+  # Shared secret for bearer auth: when set, /mcp, /sse and /messages/ require
+  # `Authorization: Bearer <token>` (401 otherwise); /healthz and /readyz stay
+  # open for probes. Stored in the chart Secret as GARMIN_MCP_HTTP_TOKEN, never
+  # as a plain env value. Keep real tokens out of committed values files (pass
+  # with --set or an untracked `-f` file). With garmin.existingSecret, put the
+  # GARMIN_MCP_HTTP_TOKEN key in that Secret instead; setting both fails.
+  # Generate one with: openssl rand -hex 32
+  httpToken: ""
+  # Run streamable-http without MCP sessions (GARMIN_MCP_STATELESS_HTTP=true).
+  # Avoids "404 Session not found" on the first call after 30 min idle, which
+  # some clients (e.g. claude.ai connectors) report as a failed tool call. No
+  # tool relies on session state. streamable-http only; rejected with sse.
+  stateless: false
 
 # --- Token persistence ------------------------------------------------------
 # Garmin's DI refresh token ROTATES on every refresh, so the live token must be
@@ -76,8 +91,9 @@ service:
   type: ClusterIP
   port: 8000
 
-# Auth is expected to be handled in front of the chart (e.g. Authelia). The app
-# serves /mcp with no auth of its own.
+# The app's only built-in auth is the optional bearer token (transport.httpToken).
+# Without it, auth must be enforced in front of the chart (e.g. Authelia
+# forwardAuth, as below).
 ingress:
   enabled: false
   className: nginx
@@ -96,17 +112,26 @@ ingress:
   #   hosts:
   #     - garmin-mcp.example.com
 
-# Startup/readiness/liveness probes hit /healthz. Only meaningful for HTTP
-# transports; skipped automatically when transport.mode is "stdio". The startup
-# probe polls every startupPeriodSeconds and flips the pod Ready the moment the
-# app is serving (listening + logged into Garmin).
+# Startup and liveness probes hit /healthz, which answers 200 as soon as the
+# HTTP server is up (Garmin login runs in a background thread and does not block
+# it). Readiness hits readinessPath. Probes are unauthenticated even with
+# transport.httpToken set. The startup probe polls every startupPeriodSeconds
+# and hands over to readiness/liveness on its first 200.
 probes:
   enabled: true
-  # Poll interval while the app is starting; the pod goes Ready on the first 200.
+  # Poll interval while the app is starting.
   startupPeriodSeconds: 10
   # Max startup attempts before the pod is declared failed (~startupPeriodSeconds
-  # * this seconds). Covers Python import + the blocking Garmin login on boot.
+  # * this seconds). Covers Python import + binding the HTTP server.
   startupFailureThreshold: 3
+  # /readyz returns 200 only once Garmin login succeeded (503 while pending or
+  # after a failure), so no traffic reaches the pod before tool calls can work.
+  # A pod whose login failed stays NotReady but is NOT restarted (liveness is
+  # /healthz); fix the tokens and restart it. Set /healthz for scale-to-zero
+  # setups (e.g. KEDA HTTP add-on) where the pod must go Ready immediately and
+  # the first tool call waits on the login instead. /readyz needs an image that
+  # serves it; set /healthz when pinning an older image.tag without it.
+  readinessPath: /readyz
 
 resources:
   requests:
@@ -116,7 +141,10 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-# Extra environment variables passed verbatim to the container.
+# Extra environment variables passed verbatim to the container, e.g.
+# GARMIN_TOOL_PROFILE (built-in tool subset), GARMIN_DISABLED_TOOLS or
+# GARMIN_MCP_CALL_TIMEOUT (per-call Garmin timeout, default 90s, 0 disables).
+# Do not put secrets here; use transport.httpToken or garmin.existingSecret.
 extraEnv: []
 # - name: GARMIN_DISABLED_TOOLS
 #   value: "upload_workout,delete_workout"

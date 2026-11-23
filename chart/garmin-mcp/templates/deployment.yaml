@@ -4,6 +4,12 @@
 {{- if and (include "garmin-mcp.tokenMode" .) (not .Values.persistence.enabled) -}}
 {{- fail "garmin.tokens.* requires persistence.enabled=true: without a volume the token JSON would be passed inline via $GARMINTOKENS (logged at startup) and rotated refresh tokens would be lost on restart" -}}
 {{- end -}}
+{{- if and (default "" .Values.transport.httpToken | toString | trim) .Values.garmin.existingSecret -}}
+{{- fail "transport.httpToken cannot be combined with garmin.existingSecret (the chart Secret is not rendered); add a GARMIN_MCP_HTTP_TOKEN key to that Secret instead" -}}
+{{- end -}}
+{{- if and .Values.transport.stateless (ne .Values.transport.mode "streamable-http") -}}
+{{- fail "transport.stateless=true only applies to transport.mode=streamable-http (the server ignores it for sse)" -}}
+{{- end -}}
 {{- $http := ne .Values.transport.mode "stdio" -}}
 {{- /* PVC-backed token store (directory mode) whenever persistence is on. It is
        seeded once from the Secret by the init container below, then the app
@@ -17,8 +23,9 @@ metadata:
   labels:
     {{- include "garmin-mcp.labels" . | nindent 4 }}
 spec:
-  # Keep at 1: the Garmin session/tokens are per-pod and FastMCP HTTP sessions
-  # are stateful. Scaling >1 needs stateless HTTP plus shared token storage.
+  # Keep at 1: the token PVC is RWO and per-pod, and the refresh token rotates,
+  # so replicas would race on it. transport.stateless removes the HTTP session
+  # affinity but not that; scaling >1 would also need shared token storage.
   replicas: {{ .Values.replicaCount }}
   strategy:
     # Single RWO volume: avoid two pods mounting it during rollouts.
@@ -100,6 +107,10 @@ spec:
               value: {{ .Values.transport.host | quote }}
             - name: GARMIN_MCP_PORT
               value: {{ .Values.transport.port | quote }}
+            {{- if .Values.transport.stateless }}
+            - name: GARMIN_MCP_STATELESS_HTTP
+              value: "true"
+            {{- end }}
             {{- end }}
             {{- if .Values.garmin.isCn }}
             - name: GARMIN_IS_CN
@@ -120,10 +131,11 @@ spec:
             - name: http
               containerPort: {{ .Values.transport.port }}
           {{- if .Values.probes.enabled }}
-          # startupProbe polls every startupPeriodSeconds and gates
-          # readiness/liveness until it passes, so the pod goes Ready the instant
-          # the app is listening + logged in — no fixed readiness delay to sit
-          # through. Lower the interval where fast cold starts matter.
+          # startupProbe polls /healthz every startupPeriodSeconds and gates
+          # readiness/liveness until it passes, i.e. as soon as the HTTP server
+          # is listening (Garmin login runs in the background). Readiness then
+          # follows probes.readinessPath: /readyz waits for login, /healthz is
+          # Ready immediately. Lower the interval where fast cold starts matter.
           startupProbe:
             httpGet:
               path: /healthz
@@ -132,7 +144,7 @@ spec:
             failureThreshold: {{ .Values.probes.startupFailureThreshold }}
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: {{ .Values.probes.readinessPath | default "/readyz" }}
               port: http
             periodSeconds: 10
           livenessProbe:

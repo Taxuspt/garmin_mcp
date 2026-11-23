@@ -1,19 +1,36 @@
+{{- $token := default "" .Values.transport.httpToken | toString | trim -}}
+{{- $mcpPath := ternary "/sse" "/mcp" (eq .Values.transport.mode "sse") -}}
 {{ include "garmin-mcp.fullname" . }} is deployed (transport: {{ .Values.transport.mode }}).
 
 {{- if ne .Values.transport.mode "stdio" }}
 
 MCP endpoint (in-cluster):
-  http://{{ include "garmin-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/mcp
+  http://{{ include "garmin-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}{{ $mcpPath }}
 
 Port-forward to test locally:
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "garmin-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
-  curl http://localhost:{{ .Values.service.port }}/healthz
+  curl http://localhost:{{ .Values.service.port }}/healthz   # up (no auth)
+  curl http://localhost:{{ .Values.service.port }}/readyz    # Garmin login done (no auth)
+{{- if $token }}
+
+Bearer auth is enabled: MCP requests need the token from the Secret.
+  TOKEN=$(kubectl -n {{ .Release.Namespace }} get secret {{ include "garmin-mcp.secretName" . }} -o jsonpath='{.data.GARMIN_MCP_HTTP_TOKEN}' | base64 -d)
+  curl -i -H "Authorization: Bearer $TOKEN" http://localhost:{{ .Values.service.port }}{{ $mcpPath }}
+{{- else if not .Values.garmin.existingSecret }}
+
+No bearer token is set (transport.httpToken): anyone who can reach the Service
+gets full access to the Garmin account. Set one, or enforce auth in front.
+{{- end }}
 
 {{- if .Values.ingress.enabled }}
 
 External URL:
   http://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
-  (auth is expected to be enforced by your ingress / Authelia, not the app)
+{{- if $token }}
+  (clients must send the bearer token; you may also add ingress auth)
+{{- else if .Values.garmin.existingSecret }}
+  (unless GARMIN_MCP_HTTP_TOKEN is in that Secret, enforce auth in front, e.g. Authelia)
+{{- end }}
 {{- end }}
 {{- end }}
 
@@ -22,6 +39,8 @@ External URL:
 Using existing credentials Secret: {{ .Values.garmin.existingSecret }}
   It must contain either GARMINTOKENS (contents of garmin_tokens.json; works
   with MFA) or GARMIN_EMAIL + GARMIN_PASSWORD (MFA-free accounts only).
+  Add a GARMIN_MCP_HTTP_TOKEN key to require `Authorization: Bearer <token>`
+  on the MCP endpoints (every key is loaded into the container env).
 {{- end }}
 
 Reminder: if your Garmin account uses MFA, the first login cannot run inside a

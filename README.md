@@ -644,7 +644,7 @@ common self-hosted case.
 
 ### Running in Kubernetes (Helm)
 
-A Helm chart lives in [`chart/garmin-mcp`](chart/garmin-mcp). It renders a Deployment (single replica, `streamable-http`, `/healthz` probes), a Service, a PVC for token persistence, and an optional Ingress. All configuration is driven from `values.yaml`.
+A Helm chart lives in [`chart/garmin-mcp`](chart/garmin-mcp). It renders a Deployment (single replica, `streamable-http`, `/healthz` startup/liveness and `/readyz` readiness probes), a Service, a PVC for token persistence, and an optional Ingress. All configuration is driven from `values.yaml`.
 
 Minimal install (recommended, works with MFA): authenticate once locally with `garmin-mcp-auth`, then hand the chart the resulting token file. No email or password reaches the cluster.
 
@@ -687,16 +687,21 @@ Key values:
 | --- | --- | --- |
 | `garmin.tokens.json` / `garmin.tokens.base64` | `""` | Pre-generated tokens from `garmin-mcp-auth` (contents of `garmin_tokens.json` / `.garminconnect_base64`); recommended, MFA-friendly |
 | `garmin.email` / `garmin.password` | `""` | Credentials; the chart creates a Secret from them (MFA-free accounts only) |
-| `garmin.existingSecret` | `""` | Use a Secret you manage instead; key `GARMINTOKENS` (token JSON) or `GARMIN_EMAIL` + `GARMIN_PASSWORD` |
+| `garmin.existingSecret` | `""` | Use a Secret you manage instead; key `GARMINTOKENS` (token JSON) or `GARMIN_EMAIL` + `GARMIN_PASSWORD`, plus optional `GARMIN_MCP_HTTP_TOKEN` (every key is loaded into the container env) |
 | `garmin.isCn` | `false` | Use Garmin Connect China |
 | `transport.mode` | `streamable-http` | `streamable-http` \| `sse` (`stdio` is rejected: nothing can attach to a pod's stdin) |
+| `transport.httpToken` | `""` | Bearer token stored in the chart Secret as `GARMIN_MCP_HTTP_TOKEN`; see [Protecting the HTTP endpoint](#protecting-the-http-endpoint). With `garmin.existingSecret`, add that key to your Secret instead |
+| `transport.stateless` | `false` | Sets `GARMIN_MCP_STATELESS_HTTP=true` (no MCP sessions, no `404 Session not found` after idle); `streamable-http` only |
+| `probes.readinessPath` | `/readyz` | Readiness probe path. `/readyz` waits for Garmin login; use `/healthz` for scale-to-zero (e.g. KEDA) so the pod goes Ready at once and the first tool call waits on login |
 | `persistence.enabled` | `true` | PVC for Garmin OAuth tokens at `~/.garminconnect`; required in token mode |
 | `ingress.enabled` | `false` | Ingress fronting `ingress.path` (`/mcp`; use `/` for `sse`), auth delegated to e.g. Authelia |
+| `extraEnv` | `[]` | Extra container env, e.g. `GARMIN_TOOL_PROFILE`, `GARMIN_DISABLED_TOOLS`, `GARMIN_MCP_CALL_TIMEOUT` |
 
 Notes:
 
-- Keep `replicaCount: 1`. The Garmin session and tokens are per-pod and FastMCP HTTP sessions are stateful; scaling beyond one would require stateless HTTP plus shared token storage.
-- The app serves `/mcp` with **no auth** — auth is expected to be enforced in front of it (the Ingress example wires up Authelia `forwardAuth`).
+- Keep `replicaCount: 1`. `transport.stateless` removes the HTTP session affinity, but the token PVC is per-pod (`ReadWriteOnce`) and Garmin rotates the refresh token on every refresh, so replicas would still need shared token storage.
+- Without a token, the MCP endpoint is open to anything that can reach the Service or Ingress. Either set `transport.httpToken` (or a `GARMIN_MCP_HTTP_TOKEN` key in `garmin.existingSecret`) so clients must send `Authorization: Bearer <token>`, or enforce auth in front of it (the Ingress example wires up Authelia `forwardAuth`). See [Protecting the HTTP endpoint](#protecting-the-http-endpoint). The probes (`/healthz`, `/readyz`) are always unauthenticated.
+- With the default `/readyz` readiness probe, a pod whose Garmin login failed stays NotReady but is not restarted (liveness uses `/healthz`); fix the tokens and restart it.
 - If your Garmin account requires **MFA**, the first login cannot complete inside a pod (MFA prompts need an interactive terminal). Pre-authenticate once with `garmin-mcp-auth` and pass the result via `--set-file garmin.tokens.json=...` (or the `GARMINTOKENS` key of `garmin.existingSecret`); an init container seeds the PVC from it on first boot. With MFA-free password login, the pod authenticates on first start and reuses the persisted tokens afterward.
 - The seed is applied **once**: later boots keep the token the app rotated on the PVC. To replace an expired token, upgrade with the new `garmin.tokens.json`, then delete `garmin_tokens.json` from the volume (`kubectl exec ... -- rm ~/.garminconnect/garmin_tokens.json`) and restart the pod.
 
