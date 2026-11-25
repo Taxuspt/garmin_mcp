@@ -118,6 +118,86 @@ def _update_activity_summary(activity_id: int, fields: Dict[str, Any]) -> Any:
     return _put_activity_update(activity_id, {"summaryDTO": fields})
 
 
+def _positive_number(value: Any) -> Optional[float]:
+    """Return a finite positive float, otherwise None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0 or number == float("inf") or number != number:
+        return None
+    return number
+
+
+def _pool_swim_state(activity_id: int) -> Dict[str, Any]:
+    """Read the fields needed to safely change a pool swim's length count."""
+    activity = garmin_client.get_activity(activity_id) or {}
+    summary = activity.get("summaryDTO") or {}
+    activity_type = (activity.get("activityTypeDTO") or {}).get("typeKey")
+    if activity_type not in {"lap_swimming", "pool_swimming"}:
+        raise ValueError(
+            f"activity {activity_id} is {activity_type or 'an unknown type'}, not a pool swim"
+        )
+
+    splits = garmin_client.get_activity_splits(activity_id) or {}
+    laps = splits.get("lapDTOs") or []
+    split_lengths = sum(
+        int(lap.get("numberOfActiveLengths") or 0)
+        for lap in laps
+        if isinstance(lap, dict)
+    )
+    nested_lengths = sum(
+        len(lap.get("lengthDTOs") or [])
+        for lap in laps
+        if isinstance(lap, dict)
+    )
+
+    summary_lengths = summary.get("numberOfActiveLengths")
+    try:
+        summary_lengths = int(summary_lengths) if summary_lengths is not None else 0
+    except (TypeError, ValueError):
+        summary_lengths = 0
+    current_lengths = summary_lengths or split_lengths or nested_lengths
+    if current_lengths <= 0:
+        raise ValueError(f"activity {activity_id} has no active pool lengths")
+
+    distance = _positive_number(summary.get("distance"))
+    if distance is None:
+        lap_distances = [
+            sanitize_lap_distance(lap.get("distance"))
+            for lap in laps
+            if isinstance(lap, dict)
+        ]
+        valid_distances = [
+            value for value in (_positive_number(v) for v in lap_distances)
+            if value is not None
+        ]
+        distance = sum(valid_distances) or None
+    if distance is None:
+        raise ValueError(f"activity {activity_id} has no usable swim distance")
+
+    pool_length_meters = distance / current_lengths
+    if not 1 <= pool_length_meters <= 150:
+        raise ValueError(
+            f"activity {activity_id} implies an invalid pool length of "
+            f"{pool_length_meters:.3f} m"
+        )
+
+    return {
+        "activity_id": activity_id,
+        "name": activity.get("activityName"),
+        "type": activity_type,
+        "current_active_lengths": current_lengths,
+        "summary_active_lengths": summary_lengths or None,
+        "split_active_lengths": split_lengths or None,
+        "nested_length_records": nested_lengths or None,
+        "current_distance_meters": distance,
+        "effective_pool_length_meters": pool_length_meters,
+        "pool_length": summary.get("poolLength"),
+        "pool_length_unit": (summary.get("unitOfPoolLength") or {}).get("unitKey"),
+    }
+
+
 def _build_exercise_sets(sets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Convert friendly set dicts into Garmin's exerciseSets wire format.
 
@@ -374,6 +454,11 @@ def register_tools(app):
                 "distance_meters": summary.get('distance'),
                 "avg_speed_mps": summary.get('averageSpeed'),
                 "max_speed_mps": summary.get('maxSpeed'),
+
+                # Pool swimming
+                "pool_length": summary.get('poolLength'),
+                "pool_length_unit": (summary.get('unitOfPoolLength') or {}).get('unitKey'),
+                "active_length_count": summary.get('numberOfActiveLengths'),
 
                 # Heart rate
                 "avg_hr_bpm": summary.get('averageHR'),
@@ -661,6 +746,100 @@ def register_tools(app):
             )
         except Exception as e:
             return f"Error updating activity feel: {str(e)}"
+
+    @app.tool()
+    async def set_pool_swim_length_count(
+        activity_id: Union[int, str],
+        active_lengths: int,
+        confirm: bool = False,
+    ) -> str:
+        """Correct the active length count and derived distance of a pool swim.
+
+        Garmin Connect calculates pool-swim distance as pool length multiplied
+        by the number of active lengths. This tool preserves the activity's
+        effective pool length and changes the summary's numberOfActiveLengths
+        and distance together. For example, changing a 1,025 m swim in a 25 m
+        pool from 41 to 40 lengths produces 1,000 m.
+
+        The first call should omit confirm (or pass false) to preview the exact
+        change. Pass confirm=true only after reviewing that preview. This edits
+        Garmin Connect's stored activity summary; it does not rewrite the
+        original FIT file or delete an individual FIT length record.
+
+        Args:
+            activity_id: ID of the pool-swimming activity to update
+            active_lengths: Correct total number of active pool lengths
+            confirm: Must be true to apply the change; false returns a preview
+        """
+        tracker = WriteTracker(
+            "set_pool_swim_length_count", "Error updating pool swim length count"
+        )
+        try:
+            activity_id = int(activity_id)
+            active_lengths = int(active_lengths)
+            if active_lengths <= 0:
+                return "active_lengths must be a positive whole number"
+
+            state = _pool_swim_state(activity_id)
+            old_lengths = state["current_active_lengths"]
+            pool_length_meters = state["effective_pool_length_meters"]
+            corrected_distance = round(pool_length_meters * active_lengths, 3)
+            preview = {
+                **{k: v for k, v in state.items() if v is not None},
+                "requested_active_lengths": active_lengths,
+                "corrected_distance_meters": corrected_distance,
+                "lengths_delta": active_lengths - old_lengths,
+            }
+
+            if active_lengths == old_lengths:
+                return json.dumps(
+                    {
+                        "success": True,
+                        "changed": False,
+                        **preview,
+                        "message": "Pool swim already has the requested length count",
+                    },
+                    indent=2,
+                )
+
+            if not confirm:
+                return json.dumps(
+                    {
+                        "confirmation_required": True,
+                        **preview,
+                        "message": (
+                            "Review the proposed length count and distance, then call "
+                            "again with confirm=true to apply it"
+                        ),
+                    },
+                    indent=2,
+                )
+
+            tracker.sending()
+            _update_activity_summary(
+                activity_id,
+                {
+                    "numberOfActiveLengths": active_lengths,
+                    "distance": corrected_distance,
+                },
+            )
+            tracker.committed()
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "changed": True,
+                    **preview,
+                    "message": "Pool swim length count and distance successfully updated",
+                    "note": (
+                        "Garmin Connect summary updated; the original uploaded FIT file "
+                        "is unchanged"
+                    ),
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return tracker.error(e)
 
     @app.tool()
     async def get_activity_splits(activity_id: Union[int, str]) -> str:

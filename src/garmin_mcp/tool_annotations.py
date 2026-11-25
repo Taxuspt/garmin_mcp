@@ -66,6 +66,7 @@ DESTRUCTIVE_TOOLS = frozenset(
         "set_activity_feel",
         "set_activity_name",
         "set_activity_type",
+        "set_pool_swim_length_count",
         "set_heart_rate_zones",
         "set_nutrition_daily_settings",
         "set_perceived_effort",
@@ -80,7 +81,12 @@ DESTRUCTIVE_TOOLS = frozenset(
 # arguments. Batch scheduling can also upload an inline workout, so it is
 # intentionally excluded even though its existing-workout path is guarded.
 IDEMPOTENT_TOOLS = frozenset(
-    {"reschedule_workout", "schedule_week", "schedule_workout"}
+    {
+        "reschedule_workout",
+        "schedule_week",
+        "schedule_workout",
+        "set_pool_swim_length_count",
+    }
 )
 
 

@@ -406,6 +406,137 @@ async def test_set_activity_feel_rejects_invalid_value(
     assert result[0][0].text == "feel must be one of 0, 25, 50, 75, 100"
 
 
+def _mock_pool_swim(mock_garmin_client, lengths=41, distance=1025.0):
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 25195865154,
+        "activityName": "Pool Swim",
+        "activityTypeDTO": {"typeKey": "lap_swimming"},
+        "summaryDTO": {
+            "distance": distance,
+            "numberOfActiveLengths": lengths,
+            "poolLength": 25.0,
+            "unitOfPoolLength": {"unitKey": "meter"},
+        },
+    }
+    mock_garmin_client.get_activity_splits.return_value = {
+        "activityId": 25195865154,
+        "lapDTOs": [
+            {
+                "lapIndex": 1,
+                "distance": distance,
+                "numberOfActiveLengths": lengths,
+                "lengthDTOs": [{"lengthIndex": i + 1} for i in range(lengths)],
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_set_pool_swim_length_count_previews_without_writing(
+    app_with_activity_management, mock_garmin_client
+):
+    _mock_pool_swim(mock_garmin_client)
+
+    result = await app_with_activity_management.call_tool(
+        "set_pool_swim_length_count",
+        {"activity_id": 25195865154, "active_lengths": 40},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["confirmation_required"] is True
+    assert data["current_active_lengths"] == 41
+    assert data["requested_active_lengths"] == 40
+    assert data["effective_pool_length_meters"] == 25.0
+    assert data["corrected_distance_meters"] == 1000.0
+    assert data["lengths_delta"] == -1
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_pool_swim_length_count_updates_count_and_distance(
+    app_with_activity_management, mock_garmin_client
+):
+    _mock_pool_swim(mock_garmin_client)
+    mock_garmin_client.garmin_connect_activity = "/activity-service/activity"
+    mock_garmin_client.client.put.return_value = {}
+
+    result = await app_with_activity_management.call_tool(
+        "set_pool_swim_length_count",
+        {"activity_id": 25195865154, "active_lengths": 40, "confirm": True},
+    )
+
+    mock_garmin_client.client.put.assert_called_once_with(
+        "connectapi",
+        "/activity-service/activity/25195865154",
+        json={
+            "activityId": 25195865154,
+            "summaryDTO": {"numberOfActiveLengths": 40, "distance": 1000.0},
+        },
+        api=True,
+    )
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["changed"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_pool_swim_length_count_infers_count_from_splits(
+    app_with_activity_management, mock_garmin_client
+):
+    _mock_pool_swim(mock_garmin_client)
+    del mock_garmin_client.get_activity.return_value["summaryDTO"]["numberOfActiveLengths"]
+
+    result = await app_with_activity_management.call_tool(
+        "set_pool_swim_length_count",
+        {"activity_id": 25195865154, "active_lengths": 40},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["current_active_lengths"] == 41
+    assert data["split_active_lengths"] == 41
+    assert data["corrected_distance_meters"] == 1000.0
+
+
+@pytest.mark.asyncio
+async def test_set_pool_swim_length_count_rejects_non_pool_activity(
+    app_with_activity_management, mock_garmin_client
+):
+    mock_garmin_client.get_activity.return_value = {
+        "activityId": 1,
+        "activityTypeDTO": {"typeKey": "open_water_swimming"},
+        "summaryDTO": {"distance": 1000.0},
+    }
+
+    result = await app_with_activity_management.call_tool(
+        "set_pool_swim_length_count",
+        {"activity_id": 1, "active_lengths": 40, "confirm": True},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["status"] == "error"
+    assert data["write_committed"] is False
+    assert "not a pool swim" in data["message"]
+    mock_garmin_client.get_activity_splits.assert_not_called()
+    mock_garmin_client.client.put.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_pool_swim_length_count_is_noop_at_requested_count(
+    app_with_activity_management, mock_garmin_client
+):
+    _mock_pool_swim(mock_garmin_client, lengths=40, distance=1000.0)
+
+    result = await app_with_activity_management.call_tool(
+        "set_pool_swim_length_count",
+        {"activity_id": 25195865154, "active_lengths": 40, "confirm": True},
+    )
+
+    data = json.loads(result[0][0].text)
+    assert data["success"] is True
+    assert data["changed"] is False
+    mock_garmin_client.client.put.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_get_activity_splits_tool(app_with_activity_management, mock_garmin_client):
     """Test get_activity_splits tool returns activity splits"""
