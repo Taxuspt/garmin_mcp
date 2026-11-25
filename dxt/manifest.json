@@ -669,7 +669,7 @@
     },
     {
       "name": "set_pool_swim_length_count",
-      "description": "Correct the active length count and derived distance of a pool swim."
+      "description": "Set the active length count and derived distance of a pool swim."
     },
     {
       "name": "unschedule_workout",

@@ -66,15 +66,17 @@ Two tools let you download a raw activity file to disk:
 
 **First-run behavior:** if no directory is configured, `download_activity_file` returns `status: "needs_setup"`. The assistant will ask where you want to save files (suggesting the current directory as default), call `set_fit_download_dir` to persist your choice, and then retry the download automatically.
 
-### Pool-Swim Length Corrections
+### Set Pool-Swim Length Count
 
-`set_pool_swim_length_count(activity_id, active_lengths, confirm=false)` corrects a
-pool swim by changing its active-length count and derived distance together. It preserves
-the effective pool length already stored by Garmin, so a 1,025 m activity with 41 lengths
-in a 25 m pool becomes 1,000 m when changed to 40 lengths.
+`set_pool_swim_length_count(activity_id, active_lengths, confirm=false)` sets a pool
+swim's active-length count and derived distance together. It preserves the effective pool
+length already stored by Garmin.
+
+One use case is fixing an incorrect watch-detected lap count: a 1,025 m activity with 41
+lengths in a 25 m pool becomes 1,000 m when the count is set to 40 lengths.
 
 The first call returns a preview and does not write. Repeat it with `confirm: true` after
-checking the current count, target count, pool length, and corrected distance. The tool
+checking the current count, target count, pool length, and target distance. The tool
 updates Garmin Connect's activity summary through its private web API; the originally
 uploaded FIT file and its individual length records remain unchanged.
 

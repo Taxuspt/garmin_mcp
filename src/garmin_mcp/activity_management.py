@@ -753,13 +753,14 @@ def register_tools(app):
         active_lengths: int,
         confirm: bool = False,
     ) -> str:
-        """Correct the active length count and derived distance of a pool swim.
+        """Set the active length count and derived distance of a pool swim.
 
         Garmin Connect calculates pool-swim distance as pool length multiplied
         by the number of active lengths. This tool preserves the activity's
-        effective pool length and changes the summary's numberOfActiveLengths
-        and distance together. For example, changing a 1,025 m swim in a 25 m
-        pool from 41 to 40 lengths produces 1,000 m.
+        effective pool length and sets the summary's numberOfActiveLengths and
+        distance together. One use case is fixing a watch-detected extra length:
+        setting a 1,025 m swim in a 25 m pool from 41 to 40 lengths produces
+        1,000 m.
 
         The first call should omit confirm (or pass false) to preview the exact
         change. Pass confirm=true only after reviewing that preview. This edits
@@ -768,7 +769,7 @@ def register_tools(app):
 
         Args:
             activity_id: ID of the pool-swimming activity to update
-            active_lengths: Correct total number of active pool lengths
+            active_lengths: Total number of active pool lengths to set
             confirm: Must be true to apply the change; false returns a preview
         """
         tracker = WriteTracker(
@@ -783,11 +784,11 @@ def register_tools(app):
             state = _pool_swim_state(activity_id)
             old_lengths = state["current_active_lengths"]
             pool_length_meters = state["effective_pool_length_meters"]
-            corrected_distance = round(pool_length_meters * active_lengths, 3)
+            target_distance = round(pool_length_meters * active_lengths, 3)
             preview = {
                 **{k: v for k, v in state.items() if v is not None},
                 "requested_active_lengths": active_lengths,
-                "corrected_distance_meters": corrected_distance,
+                "target_distance_meters": target_distance,
                 "lengths_delta": active_lengths - old_lengths,
             }
 
@@ -820,7 +821,7 @@ def register_tools(app):
                 activity_id,
                 {
                     "numberOfActiveLengths": active_lengths,
-                    "distance": corrected_distance,
+                    "distance": target_distance,
                 },
             )
             tracker.committed()
@@ -830,7 +831,7 @@ def register_tools(app):
                     "success": True,
                     "changed": True,
                     **preview,
-                    "message": "Pool swim length count and distance successfully updated",
+                    "message": "Pool swim length count and distance successfully set",
                     "note": (
                         "Garmin Connect summary updated; the original uploaded FIT file "
                         "is unchanged"

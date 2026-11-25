@@ -447,7 +447,7 @@ async def test_set_pool_swim_length_count_previews_without_writing(
     assert data["current_active_lengths"] == 41
     assert data["requested_active_lengths"] == 40
     assert data["effective_pool_length_meters"] == 25.0
-    assert data["corrected_distance_meters"] == 1000.0
+    assert data["target_distance_meters"] == 1000.0
     assert data["lengths_delta"] == -1
     mock_garmin_client.client.put.assert_not_called()
 
@@ -494,7 +494,7 @@ async def test_set_pool_swim_length_count_infers_count_from_splits(
     data = json.loads(result[0][0].text)
     assert data["current_active_lengths"] == 41
     assert data["split_active_lengths"] == 41
-    assert data["corrected_distance_meters"] == 1000.0
+    assert data["target_distance_meters"] == 1000.0
 
 
 @pytest.mark.asyncio
