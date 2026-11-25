@@ -668,6 +668,10 @@
       "description": "Set the perceived effort (RPE) for an activity."
     },
     {
+      "name": "set_pool_swim_length_count",
+      "description": "Set the active length count and derived distance of a pool swim."
+    },
+    {
       "name": "unschedule_workout",
       "description": "Remove a scheduled workout from the Garmin Connect calendar"
     },

@@ -10,7 +10,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 - List recent activities with pagination support
 - Get detailed activity information
-- Edit activities: name, type, description/notes, event type, perceived effort (RPE), feel, and strength exercise sets
+- Edit activities: name, type, description/notes, event type, perceived effort (RPE), feel, pool-swim length count, and strength exercise sets
 - Access health metrics (steps, heart rate, sleep, stress, respiration)
 - View body composition data
 - Track training status and readiness
@@ -27,7 +27,7 @@ Garmin's API is accessed via the awesome [python-garminconnect](https://github.c
 
 This MCP server implements **110+ tools** covering ~90% of the [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) library (v0.3.2):
 
-- ✅ Activity Management (21 tools) - includes write tools for type, description, event type, perceived effort, feel, and exercise sets
+- ✅ Activity Management (22 tools) - includes write tools for type, description, event type, perceived effort, feel, pool-swim length count, and exercise sets
 - ✅ Health & Wellness (34 tools) - includes custom lightweight summary tools
 - ✅ Training & Performance (13 tools) - includes CTL/ATL/TSB, HRV, VO2 max, and respiration trends
 - ✅ Workouts (8 tools)
@@ -65,6 +65,28 @@ Two tools let you download a raw activity file to disk:
 3. Persisted config set via `set_fit_download_dir`.
 
 **First-run behavior:** if no directory is configured, `download_activity_file` returns `status: "needs_setup"`. The assistant will ask where you want to save files (suggesting the current directory as default), call `set_fit_download_dir` to persist your choice, and then retry the download automatically.
+
+### Set Pool-Swim Length Count
+
+`set_pool_swim_length_count(activity_id, active_lengths, confirm=false)` sets a pool
+swim's active-length count and derived distance together. It preserves the effective pool
+length already stored by Garmin.
+
+One use case is fixing an incorrect watch-detected lap count: a 1,025 m activity with 41
+lengths in a 25 m pool becomes 1,000 m when the count is set to 40 lengths.
+
+The first call returns a preview and does not write. Repeat it with `confirm: true` after
+checking the current count, target count, pool length, and target distance. The tool
+updates Garmin Connect's activity summary through its private web API; the originally
+uploaded FIT file and its individual length records remain unchanged.
+
+```json
+{
+  "activity_id": 25195865154,
+  "active_lengths": 40,
+  "confirm": true
+}
+```
 
 ### Strength Exercise Sets
 
